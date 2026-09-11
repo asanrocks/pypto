@@ -435,6 +435,9 @@ class TestAutoDeriveTaskDependencies:
         assert [edge.name_hint for edge in _compiler_edges(mutate_call)] == ["_producer_tid"]
         assert _arg_directions(mutate_call) == [ir.ArgDirection.OutputExisting]
 
+    # The subprocess cold start (extension import + pass pipeline) can
+    # outlast the gate's 10s per-test limit under a fully loaded xdist run.
+    @pytest.mark.timeout(60)
     def test_debug_logs_auto_no_dep_candidate_buckets(self):
         result = _run_auto_deps_debug_subprocess(
             """
@@ -1314,6 +1317,8 @@ class TestAutoDeriveTaskDependencies:
         edges = _compiler_edges(consume_call)
         assert edges == []
 
+    # Same subprocess cold-start budget as the bucket test above.
+    @pytest.mark.timeout(60)
     def test_debug_bucket_prefers_inactive_dynamic_fallback_reason(self):
         result = _run_auto_deps_debug_subprocess(
             """

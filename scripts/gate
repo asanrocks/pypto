@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# Keep the gate orchestration deliberately small. Each tool owns its diagnostics;
+# this script only configures the frontend, records one complete run, and
+# propagates failures.
+
+log_file="${PYPTO_GATE_LOG:-run-log}"
+: > "$log_file"
+
+log_message() {
+    printf '%s\n' "$*" | tee -a "$log_file"
+}
+
+run_logged() {
+    "$@" 2>&1 | tee -a "$log_file"
+    local -a pipeline_status=("${PIPESTATUS[@]}")
+    return "${pipeline_status[0]}"
+}
+
+if ! uv run python -m pytest --version >/dev/null 2>&1; then
+    echo "ERROR: pytest not found. Run: uv sync --extra dev" >&2
+    exit 1
+fi
+
+pytest_args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --)
+            shift
+            pytest_args+=("$@")
+            break
+            ;;
+        *)
+            pytest_args+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [ "${#pytest_args[@]}" -eq 0 ]; then
+    pytest_args=(tests/ut/)
+fi
+
+log_message "=== Gate (v0: pytest) ==="
+
+export OPENBLAS_NUM_THREADS=1
+
+pytest_options=(-n auto --maxprocesses 64 --timeout=10 --tb=short -rA --color=no)
+
+status=0
+run_logged uv run python -m pytest "${pytest_args[@]}" "${pytest_options[@]}" || status=1
+
+if [ "$status" -ne 0 ]; then
+    log_message "FAIL: checks failed; complete output is in $log_file" >&2
+    exit "$status"
+fi
+
+log_message "PASS: checks completed; complete output is in $log_file"
