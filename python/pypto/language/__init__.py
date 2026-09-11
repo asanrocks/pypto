@@ -247,6 +247,7 @@ from .parser.decorator import (
     program_parser,
 )
 from .parser.text_parser import loads, loads_program, parse, parse_program
+from .tracer.decorators.expand import expand
 from .typing import (
     RUNTIME,
     Array,
@@ -334,6 +335,7 @@ __all__ = [
     "Out",
     "RUNTIME",
     "dynamic",
+    "expand",
     "const",
     "range",
     "parallel",
