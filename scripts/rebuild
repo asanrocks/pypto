@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Clean rebuild of the C++ extension.
+# Usage:
+#   scripts/rebuild          # clean rebuild
+#   scripts/rebuild --quick  # skip clean, just rebuild (for header-only changes)
+
+build_dir="build"
+
+if [[ "${1:-}" == "--quick" ]]; then
+    echo "=== Quick rebuild (no clean) ==="
+    cmake --build "$build_dir" --parallel
+    uv pip install -e .
+    echo "=== Done ==="
+    exit 0
+fi
+
+echo "=== Clean rebuild ==="
+rm -rf "$build_dir"
+uv pip install -e .
+echo "=== Done ==="
