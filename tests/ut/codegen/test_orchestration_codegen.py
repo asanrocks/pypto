@@ -811,7 +811,7 @@ class TestOrchestration:
         assert "params_t0.add_inout(ext_inout_t)" in code
 
         # Each tuple result is the in-place arg it writes, so it remaps to that
-        # arg (no per-output ``const Tensor&`` alias is minted). The consumer
+        # arg (no per-output ``const Tensor&`` alias is created). The consumer
         # ``combine`` reads ta/tb/tc — each result mapped to its OWN arg, NOT
         # shifted onto inout_t (issue #1573).
         ia = code.index("params_t1.add_input(ext_ta)")
@@ -906,14 +906,14 @@ class TestOrchestration:
         decl = code.index("const Tensor& buf = ")
         assert decl < manual_open, code
         # The after-scope consumer reads ``buf`` directly — no const-ref alias
-        # is minted for the producer's SSA output.
+        # is created for the producer's SSA output.
         assert "add_input(buf)" in code[manual_close:], code
         assert "const Tensor& buf__" not in code, code
 
     def test_manual_scope_tensor_created_before_read_after(self):
         """Regression for #1697: a tensor created BEFORE a ``pl.manual_scope``,
         written by a submit inside it, and read by a task after it. The output
-        previously minted ``const Tensor& buf__ssa_v1 = buf;`` at the deep block
+        previously created ``const Tensor& buf__ssa_v1 = buf;`` at the deep block
         indent; the after-scope ``add_input(buf__ssa_v1)`` then named an
         out-of-scope identifier and the orchestration ``.cpp`` failed to compile.
         The output is now remapped to read ``buf`` directly."""
@@ -942,7 +942,7 @@ class TestOrchestration:
             indent; the after-scope ``pl.reshape`` reader then named the
             out-of-scope ``score__ssa_v1``.
           * True — the loop yields a freshly created tensor each iteration
-            (``is_rebind``), so codegen mints a mutable carry ``Tensor acc_rv =
+            (``is_rebind``), so codegen creates a mutable carry ``Tensor acc_rv =
             acc;`` *inside* the block AND a chained ``acc__ssa_v1 = acc_rv;``
             post-loop copy. The after-scope kernel read named the out-of-scope
             chain. The carry decl is now hoisted out and the copy collapses.
@@ -983,9 +983,11 @@ class TestOrchestration:
             ) -> pl.Tensor[[N, M], pl.FP32]:
                 score: pl.Tensor[[N, M], pl.FP32] = pl.create_tensor([N, M], dtype=pl.FP32)
                 with pl.manual_scope():
-                    for col, (score_iter,) in pl.range(0, M, W, init_values=(score,)):
+                    (score_iter,) = pl.intrin.carry(score)
+                    for col in pl.range(0, M, W):
                         score_next: pl.Tensor[[N, M], pl.FP32] = self.produce(x, col, score_iter)
-                        (score_rv,) = pl.yield_(score_next)
+                        pl.intrin.yield_(score_next)
+                    (score_rv,) = pl.intrin.leak()
                     score = score_rv
                 # After-scope read via a method receiver (pl.reshape) — the shape
                 # an ``add_*``-only scope check would miss.
@@ -1002,12 +1004,14 @@ class TestOrchestration:
             ) -> pl.Tensor[[N, M], pl.FP32]:
                 acc: pl.Tensor[[N, M], pl.FP32] = pl.create_tensor([N, M], dtype=pl.FP32)
                 with pl.manual_scope():
-                    for col, (acc_iter,) in pl.range(0, M, W, init_values=(acc,)):
+                    (acc_iter,) = pl.intrin.carry(acc)
+                    for col in pl.range(0, M, W):
                         # A fresh per-iteration tensor makes the yield value not
                         # alias the carry -> a true rebind -> mutable carry decl.
                         fresh: pl.Tensor[[N, M], pl.FP32] = pl.create_tensor([N, M], dtype=pl.FP32)
                         fresh2: pl.Tensor[[N, M], pl.FP32] = self.produce(x, col, fresh)
-                        (acc_rv,) = pl.yield_(fresh2)
+                        pl.intrin.yield_(fresh2)
+                    (acc_rv,) = pl.intrin.leak()
                     acc = acc_rv
                 out = self.consume(acc, out)
                 return out
@@ -1046,7 +1050,7 @@ class TestOrchestration:
         """Regression for #1713: a *fresh-rebind* loop carry inside a
         ``pl.manual_scope`` (the loop yields a freshly created tensor each
         iteration, so OptimizeOrchTensors Pattern-5 externalizes the windowed
-        write) read by a kernel after the scope. Codegen minted a mutable carry
+        write) read by a kernel after the scope. Codegen created a mutable carry
         ``Tensor acc_rv = acc;`` inside the block plus a chained
         ``Tensor acc__ssa_v1 = acc_rv;`` post-loop copy; the after-scope
         ``add_input`` named the out-of-scope chain.
@@ -1114,10 +1118,12 @@ class TestOrchestration:
                 out: pl.Out[pl.Tensor[[N, M], pl.FP32]],
             ) -> pl.Tensor[[N, M], pl.FP32]:
                 acc: pl.Tensor[[N, M], pl.FP32] = pl.create_tensor([N, M], dtype=pl.FP32)
-                for col, (acc_iter,) in pl.range(0, M, W, init_values=(acc,)):
+                (acc_iter,) = pl.intrin.carry(acc)
+                for col in pl.range(0, M, W):
                     fresh: pl.Tensor[[N, M], pl.FP32] = pl.create_tensor([N, M], dtype=pl.FP32)
                     fresh2: pl.Tensor[[N, M], pl.FP32] = self.produce(x, col, acc_iter, fresh)
-                    (acc_rv,) = pl.yield_(fresh2)
+                    pl.intrin.yield_(fresh2)
+                (acc_rv,) = pl.intrin.leak()
                 out = self.consume(acc_rv, out)
                 return out
 
@@ -1155,12 +1161,14 @@ class TestOrchestration:
                 base: pl.Scalar[pl.INDEX],
                 score: pl.Out[pl.Tensor[[N, M], pl.FP32]],
             ) -> pl.Tensor[[N, M], pl.FP32]:
+                (score_iter,) = pl.intrin.carry(score)
                 # Internal loop writes a contiguous sub-window [base, base+4W) of
                 # `score`, so the callee is windowable at the orchestration site.
-                for c, (score_iter,) in pl.range(base, base + 4 * W, W, init_values=(score,)):
+                for c in pl.range(base, base + 4 * W, W):
                     tile: pl.Tile[[N, W], pl.FP32] = pl.load(x, [0, c], [N, W])
                     score_next: pl.Tensor[[N, M], pl.FP32] = pl.store(tile, [0, c], score_iter)
-                    (score_rv,) = pl.yield_(score_next)
+                    pl.intrin.yield_(score_next)
+                (score_rv,) = pl.intrin.leak()
                 return score_rv
 
             @pl.function(type=pl.FunctionType.AIV)
@@ -1258,12 +1266,14 @@ class TestOrchestration:
             ) -> pl.Tensor[[N, M], pl.FP32]:
                 acc: pl.Tensor[[N, M], pl.FP32] = pl.create_tensor([N, M], dtype=pl.FP32)
                 with pl.manual_scope():
-                    for col, (acc_iter,) in pl.range(0, M, W, init_values=(acc,)):
+                    (acc_iter,) = pl.intrin.carry(acc)
+                    for col in pl.range(0, M, W):
                         fresh: pl.Tensor[[N, M], pl.FP32] = pl.create_tensor([N, M], dtype=pl.FP32)
                         snap: pl.Tensor[[N, M], pl.FP32] = acc_iter  # in-loop copy of the carry
                         acc_next: pl.Tensor[[N, M], pl.FP32] = self.produce(x, col, fresh)
                         side = self.snapshot_use(snap, side)  # read snap before the yield rebind
-                        (acc_rv,) = pl.yield_(acc_next)
+                        pl.intrin.yield_(acc_next)
+                    (acc_rv,) = pl.intrin.leak()
                     acc = acc_rv
                 out = self.consume(acc, out)
                 return out
@@ -1571,7 +1581,7 @@ class TestOrchestration:
                 a: pl.Tensor[[64, 128], pl.FP32],
                 b: pl.Tensor[[64, 128], pl.FP32],
                 result: pl.Out[pl.Tensor[[64, 128], pl.FP32]],
-            ) -> pl.Tensor[[64, 128], pl.FP32]:
+            ) -> pl.Tensor[[16, 16], pl.FP32]:
                 d0: pl.Scalar[pl.INT64] = pl.tensor.dim(a, 0)  # noqa: F841
                 result_out = self.kernel_add(a, b, result)
                 return result_out

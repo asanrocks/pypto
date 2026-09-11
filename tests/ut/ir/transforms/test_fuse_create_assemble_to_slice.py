@@ -44,16 +44,16 @@ def _collect_tensor_ops_in_orch(program):
     """Collect sorted tensor op names from Orchestration functions."""
 
     class OpCollector(ir_core.IRVisitor):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
-            self.ops = []
+            self.ops: list[str] = []
 
-        def visit_assign_stmt(self, stmt):
-            if hasattr(stmt.value, "op") and stmt.value.op.name.startswith("tensor."):
-                self.ops.append(stmt.value.op.name)
-            super().visit_assign_stmt(stmt)
+        def visit_assign_stmt(self, op: ir_core.AssignStmt) -> None:
+            if isinstance(op.value, ir_core.Call) and op.value.op.name.startswith("tensor."):
+                self.ops.append(op.value.op.name)
+            super().visit_assign_stmt(op)
 
-    all_ops = []
+    all_ops: list[str] = []
     for func in program.functions.values():
         if func.func_type == ir_core.FunctionType.Orchestration:
             collector = OpCollector()
@@ -143,7 +143,7 @@ class TestFuseCreateAssembleToSlice:
                 x: pl.Tensor[[4, 8], pl.FP32],
                 out: pl.Out[pl.Tensor[[4, 8], pl.FP32]],
             ) -> pl.Tensor[[4, 8], pl.FP32]:
-                zero: pl.Scalar[pl.INDEX] = 0
+                zero: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 row: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
                 row = self.fill_row(x, zero, row)
                 out = pl.assemble(out, row, [0, 0])
@@ -169,7 +169,7 @@ class TestFuseCreateAssembleToSlice:
                 x: pl.Tensor[[4, 8], pl.FP32],
                 out: pl.Out[pl.Tensor[[4, 8], pl.FP32]],
             ) -> pl.Tensor[[4, 8], pl.FP32]:
-                zero: pl.Scalar[pl.INDEX] = 0
+                zero: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 row: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
                 row = self.fill_row(x, zero, row)
                 out = pl.assemble(out, row, [0, 0])
@@ -564,10 +564,12 @@ class TestFuseCreateAssembleToSlice:
             ) -> pl.Tensor[[4, 8], pl.FP32]:
                 initial: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
                 initial = self.fill_row(x, initial)
-                for _i, (carried,) in pl.range(0, 0, 1, init_values=(initial,)):
+                (carried,) = pl.intrin.carry(initial)
+                for _i in pl.range(0, 0, 1):
                     fresh: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
                     fresh = self.fill_row(x, fresh)
-                    (carried_rv,) = pl.yield_(fresh)
+                    pl.intrin.yield_(fresh)
+                (carried_rv,) = pl.intrin.leak()
                 out = pl.assemble(out, carried_rv, [0, 0])
                 return out
 
@@ -587,9 +589,11 @@ class TestFuseCreateAssembleToSlice:
                 out: pl.Out[pl.Tensor[[4, 8], pl.FP32]],
             ) -> pl.Tensor[[4, 8], pl.FP32]:
                 initial: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
-                for _i, (carried,) in pl.range(0, trip_count, 1, init_values=(initial,)):
+                (carried,) = pl.intrin.carry(initial)
+                for _i in pl.range(0, trip_count, 1):
                     fresh: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
-                    (carried_rv,) = pl.yield_(fresh)
+                    pl.intrin.yield_(fresh)
+                (carried_rv,) = pl.intrin.leak()
                 out = pl.assemble(out, carried_rv, [0, 0])
                 return out
 
@@ -609,10 +613,11 @@ class TestFuseCreateAssembleToSlice:
                 out: pl.Out[pl.Tensor[[4, 8], pl.FP32]],
             ) -> pl.Tensor[[4, 8], pl.FP32]:
                 initial: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
-                for (carried,) in pl.while_(init_values=(initial,)):
-                    pl.cond(keep_going)
+                (carried,) = pl.intrin.carry(initial)
+                while keep_going:
                     fresh: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
-                    (carried_rv,) = pl.yield_(fresh)
+                    pl.intrin.yield_(fresh)
+                (carried_rv,) = pl.intrin.leak()
                 out = pl.assemble(out, carried_rv, [0, 0])
                 return out
 
@@ -717,7 +722,7 @@ class TestFuseCreateAssembleToSlice:
                 x: pl.Tensor[[4, 8], pl.FP32],
                 out: pl.Out[pl.Tensor[[4, 8], pl.FP32]],
             ) -> pl.Tensor[[4, 8], pl.FP32]:
-                i: pl.Scalar[pl.INDEX] = 0
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 while i < 4:
                     row: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
                     row = self.fill_row(x, i, row)
@@ -744,7 +749,7 @@ class TestFuseCreateAssembleToSlice:
                 x: pl.Tensor[[4, 8], pl.FP32],
                 out: pl.Out[pl.Tensor[[4, 8], pl.FP32]],
             ) -> pl.Tensor[[4, 8], pl.FP32]:
-                i: pl.Scalar[pl.INDEX] = 0
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 while i < 4:
                     row: pl.Tensor[[1, 8], pl.FP32] = pl.slice(out, [1, 8], [i, 0])
                     row = self.fill_row(x, i, row)

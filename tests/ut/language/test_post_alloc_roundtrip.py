@@ -79,11 +79,12 @@ class TestSoftmaxRescaleDSL:
                 if idx == 0:
                     oi_out: pl.Tile[[16, 128], pl.FP32] = oi_tmp_t
                     li_out: pl.Tile[[16, 1], pl.FP32] = cur_li_t
-                    li_phi, oi_phi = pl.yield_(li_out, oi_out)
+                    pl.intrin.yield_(li_out, oi_out)
                 else:
                     li_new: pl.Tile[[16, 1], pl.FP32] = pl.tile.add(li_t, cur_li_t)
                     oi_new: pl.Tile[[16, 128], pl.FP32] = pl.tile.add(oi_t, oi_tmp_t)
-                    li_phi, oi_phi = pl.yield_(li_new, oi_new)
+                    pl.intrin.yield_(li_new, oi_new)
+                (li_phi, oi_phi) = pl.intrin.leak()
                 r0: pl.Tensor[[16, 1], pl.FP32] = pl.tile.store(li_phi, [0, 0], ret0_out)
                 r1: pl.Tensor[[16, 128], pl.FP32] = pl.tile.store(oi_phi, [0, 0], ret1_out)
                 return r0, r1

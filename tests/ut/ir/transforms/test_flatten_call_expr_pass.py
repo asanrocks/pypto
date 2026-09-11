@@ -361,28 +361,30 @@ class TestFlattenCallInWhileCondition:
 
         @pl.program
         class Before:
-            @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.InCore)
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                n: pl.Scalar[pl.INT64] = 0
-                for cnt, x_iter in pl.while_(init_values=(n, x_0)):
-                    pl.cond(pl.tile.get_block_idx() < 10)
+                n: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                (cnt, x_iter) = pl.intrin.carry(n, x_0)
+                while pl.tile.get_block_idx() < 10:
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                     c2: pl.Scalar[pl.INT64] = cnt + 1
-                    cnt, x_iter = pl.yield_(c2, y)
+                    pl.intrin.yield_(c2, y)
+                (cnt, x_iter) = pl.intrin.leak()
                 return x_iter
 
         @pl.program
         class Expected:
-            @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.InCore)
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                n: pl.Scalar[pl.INT64] = 0
+                n: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 # get_block_idx() hoisted to a sibling before the while loop.
                 t__tmp_v0: pl.Scalar[pl.INDEX] = pl.tile.get_block_idx()
-                for cnt, x_iter in pl.while_(init_values=(n, x_0)):
-                    pl.cond(t__tmp_v0 < 10)
+                (cnt, x_iter) = pl.intrin.carry(n, x_0)
+                while t__tmp_v0 < 10:
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                     c2: pl.Scalar[pl.INT64] = cnt + 1
-                    cnt, x_iter = pl.yield_(c2, y)
+                    pl.intrin.yield_(c2, y)
+                (cnt, x_iter) = pl.intrin.leak()
                 return x_iter
 
         After = passes.flatten_call_expr()(Before)
@@ -1142,17 +1144,21 @@ class TestFlattenCallInYield:
         class Before:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                for _i, (acc,) in pl.range(1, 4, init_values=(x,)):
-                    total: pl.Tensor[[64], pl.FP32] = pl.yield_(pl.add(acc, x))
+                (acc,) = pl.intrin.carry(x)
+                for _i in pl.range(1, 4):
+                    pl.intrin.yield_(pl.add(acc, x))
+                (total,) = pl.intrin.leak()
                 return total
 
         @pl.program
         class Expected:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                for _i, (acc,) in pl.range(1, 4, init_values=(x,)):
+                (acc,) = pl.intrin.carry(x)
+                for _i in pl.range(1, 4):
                     t__tmp_v0: pl.Tensor[[64], pl.FP32] = pl.add(acc, x)
-                    total: pl.Tensor[[64], pl.FP32] = pl.yield_(t__tmp_v0)
+                    pl.intrin.yield_(t__tmp_v0)
+                (total,) = pl.intrin.leak()
                 return total
 
         After = passes.flatten_call_expr()(Before)
@@ -1165,18 +1171,22 @@ class TestFlattenCallInYield:
         class Before:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                for _i, (acc,) in pl.range(1, 4, init_values=(x,)):
-                    total: pl.Tensor[[64], pl.FP32] = pl.yield_(pl.mul(pl.add(acc, x), 2.0))
+                (acc,) = pl.intrin.carry(x)
+                for _i in pl.range(1, 4):
+                    pl.intrin.yield_(pl.mul(pl.add(acc, x), 2.0))
+                (total,) = pl.intrin.leak()
                 return total
 
         @pl.program
         class Expected:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                for _i, (acc,) in pl.range(1, 4, init_values=(x,)):
+                (acc,) = pl.intrin.carry(x)
+                for _i in pl.range(1, 4):
                     t__tmp_v0: pl.Tensor[[64], pl.FP32] = pl.add(acc, x)
                     t__tmp_v1: pl.Tensor[[64], pl.FP32] = pl.mul(t__tmp_v0, 2.0)
-                    total: pl.Tensor[[64], pl.FP32] = pl.yield_(t__tmp_v1)
+                    pl.intrin.yield_(t__tmp_v1)
+                (total,) = pl.intrin.leak()
                 return total
 
         After = passes.flatten_call_expr()(Before)
@@ -1192,9 +1202,10 @@ class TestFlattenCallInYield:
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT32]
             ) -> pl.Tensor[[64], pl.FP32]:
                 if flag > 0:
-                    out: pl.Tensor[[64], pl.FP32] = pl.yield_(pl.add(x, 1.0))
+                    pl.intrin.yield_(pl.add(x, 1.0))
                 else:
-                    out: pl.Tensor[[64], pl.FP32] = pl.yield_(pl.mul(x, 2.0))
+                    pl.intrin.yield_(pl.mul(x, 2.0))
+                (out,) = pl.intrin.leak()
                 return out
 
         @pl.program
@@ -1205,10 +1216,11 @@ class TestFlattenCallInYield:
             ) -> pl.Tensor[[64], pl.FP32]:
                 if flag > 0:
                     t__tmp_v0: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
-                    out: pl.Tensor[[64], pl.FP32] = pl.yield_(t__tmp_v0)
+                    pl.intrin.yield_(t__tmp_v0)
                 else:
                     t__tmp_v1: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
-                    out: pl.Tensor[[64], pl.FP32] = pl.yield_(t__tmp_v1)
+                    pl.intrin.yield_(t__tmp_v1)
+                (out,) = pl.intrin.leak()
                 return out
 
         After = passes.flatten_call_expr()(Before)

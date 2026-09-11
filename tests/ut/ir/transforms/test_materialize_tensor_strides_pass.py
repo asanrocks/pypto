@@ -594,8 +594,10 @@ def test_iter_arg_type_and_init_materialized():
             self,
             init: pl.Tensor[[4, 8], pl.FP32, pl.TensorView(stride=[], layout=pl.TensorLayout.DN)],
         ) -> pl.Tensor[[4, 8], pl.FP32, pl.TensorView(stride=[], layout=pl.TensorLayout.DN)]:
-            for _i, (acc,) in pl.range(0, 4, init_values=(init,)):
-                r = pl.yield_(acc)
+            (acc,) = pl.intrin.carry(init)
+            for _i in pl.range(0, 4):
+                pl.intrin.yield_(acc)
+            (r,) = pl.intrin.leak()
             return r
 
     @pl.program
@@ -605,8 +607,10 @@ def test_iter_arg_type_and_init_materialized():
             self,
             init: pl.Tensor[[4, 8], pl.FP32, pl.TensorView(stride=[1, 4], layout=pl.TensorLayout.DN)],
         ) -> pl.Tensor[[4, 8], pl.FP32, pl.TensorView(stride=[1, 4], layout=pl.TensorLayout.DN)]:
-            for _i, (acc,) in pl.range(0, 4, init_values=(init,)):
-                r = pl.yield_(acc)
+            (acc,) = pl.intrin.carry(init)
+            for _i in pl.range(0, 4):
+                pl.intrin.yield_(acc)
+            (r,) = pl.intrin.leak()
             return r
 
     ir.assert_structural_equal(_materialize(Before), Expected)

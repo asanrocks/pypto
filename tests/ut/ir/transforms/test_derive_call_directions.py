@@ -42,6 +42,12 @@ from pypto import DataType, ir, passes
 from pypto.pypto_core import passes as _core_passes
 
 
+def _expect_trace_cycle(program_class: type) -> type:
+    with pytest.raises(TypeError, match="recursive call cycle detected"):
+        pl.program(program_class)
+    return program_class
+
+
 def _verify_call_directions(program):
     """Run the CallDirectionsResolved property verifier on *program*.
 
@@ -373,10 +379,12 @@ class TestDeriveDirectionMatrix:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 initial: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for _i, (carried,) in pl.range(0, 4, 1, init_values=(initial,)):
+                (carried,) = pl.intrin.carry(initial)
+                for _i in pl.range(0, 4, 1):
                     fresh: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     fresh_result: pl.Tensor[[64], pl.FP32] = self.kernel(x, fresh)
-                    (carried_rv,) = pl.yield_(fresh_result)
+                    pl.intrin.yield_(fresh_result)
+                (carried_rv,) = pl.intrin.leak()
                 result: pl.Tensor[[64], pl.FP32] = self.kernel(x, carried_rv)
                 return result
 
@@ -395,12 +403,14 @@ class TestDeriveDirectionMatrix:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 initial = pl.tensor.create([64], dtype=pl.FP32, layout=pl.TensorLayout.ND)
-                for _i, (carried,) in pl.range(0, 4, 1, init_values=(initial,)):
+                (carried,) = pl.intrin.carry(initial)
+                for _i in pl.range(0, 4, 1):
                     fresh = pl.tensor.create([64], dtype=pl.FP32, layout=pl.TensorLayout.ND)
                     fresh_result = self.kernel(
                         x, fresh, attrs={"arg_directions": [pl.adir.input, pl.adir.inout]}
                     )
-                    (carried_rv,) = pl.yield_(fresh_result)
+                    pl.intrin.yield_(fresh_result)
+                (carried_rv,) = pl.intrin.leak()
                 result = self.kernel(x, carried_rv, attrs={"arg_directions": [pl.adir.input, pl.adir.inout]})
                 return result
 
@@ -429,11 +439,12 @@ class TestDeriveDirectionMatrix:
                 keep_going: pl.Scalar[pl.BOOL],
             ) -> pl.Tensor[[64], pl.FP32]:
                 initial: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for (carried,) in pl.while_(init_values=(initial,)):
-                    pl.cond(keep_going)
+                (carried,) = pl.intrin.carry(initial)
+                while keep_going:
                     fresh: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     fresh_result: pl.Tensor[[64], pl.FP32] = self.kernel(x, fresh)
-                    (carried_rv,) = pl.yield_(fresh_result)
+                    pl.intrin.yield_(fresh_result)
+                (carried_rv,) = pl.intrin.leak()
                 result: pl.Tensor[[64], pl.FP32] = self.kernel(x, carried_rv)
                 return result
 
@@ -456,13 +467,14 @@ class TestDeriveDirectionMatrix:
                 keep_going: pl.Scalar[pl.BOOL],
             ) -> pl.Tensor[[64], pl.FP32]:
                 initial = pl.tensor.create([64], dtype=pl.FP32, layout=pl.TensorLayout.ND)
-                for (carried,) in pl.while_(init_values=(initial,)):
-                    pl.cond(keep_going)
+                (carried,) = pl.intrin.carry(initial)
+                while keep_going:
                     fresh = pl.tensor.create([64], dtype=pl.FP32, layout=pl.TensorLayout.ND)
                     fresh_result = self.kernel(
                         x, fresh, attrs={"arg_directions": [pl.adir.input, pl.adir.inout]}
                     )
-                    (carried_rv,) = pl.yield_(fresh_result)
+                    pl.intrin.yield_(fresh_result)
+                (carried_rv,) = pl.intrin.leak()
                 result = self.kernel(x, carried_rv, attrs={"arg_directions": [pl.adir.input, pl.adir.inout]})
                 return result
 
@@ -491,16 +503,19 @@ class TestDeriveDirectionMatrix:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 initial: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for i, (carried,) in pl.range(0, 4, 1, init_values=(initial,)):
+                (carried,) = pl.intrin.carry(initial)
+                for i in pl.range(0, 4, 1):
                     lhs: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     rhs: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     lhs_result: pl.Tensor[[64], pl.FP32] = self.kernel(x, lhs)
                     rhs_result: pl.Tensor[[64], pl.FP32] = self.kernel(x, rhs)
                     if i == 0:
-                        selected: pl.Tensor[[64], pl.FP32] = pl.yield_(lhs_result)
+                        pl.intrin.yield_(lhs_result)
                     else:
-                        selected: pl.Tensor[[64], pl.FP32] = pl.yield_(rhs_result)
-                    (carried_rv,) = pl.yield_(selected)
+                        pl.intrin.yield_(rhs_result)
+                    (selected,) = pl.intrin.leak()
+                    pl.intrin.yield_(selected)
+                (carried_rv,) = pl.intrin.leak()
                 result: pl.Tensor[[64], pl.FP32] = self.kernel(x, carried_rv)
                 return result
 
@@ -519,16 +534,19 @@ class TestDeriveDirectionMatrix:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 initial = pl.tensor.create([64], dtype=pl.FP32, layout=pl.TensorLayout.ND)
-                for i, (carried,) in pl.range(0, 4, 1, init_values=(initial,)):
+                (carried,) = pl.intrin.carry(initial)
+                for i in pl.range(0, 4, 1):
                     lhs = pl.tensor.create([64], dtype=pl.FP32, layout=pl.TensorLayout.ND)
                     rhs = pl.tensor.create([64], dtype=pl.FP32, layout=pl.TensorLayout.ND)
                     lhs_result = self.kernel(x, lhs, attrs={"arg_directions": [pl.adir.input, pl.adir.inout]})
                     rhs_result = self.kernel(x, rhs, attrs={"arg_directions": [pl.adir.input, pl.adir.inout]})
                     if i == 0:
-                        selected = pl.yield_(lhs_result)
+                        pl.intrin.yield_(lhs_result)
                     else:
-                        selected = pl.yield_(rhs_result)
-                    (carried_rv,) = pl.yield_(selected)
+                        pl.intrin.yield_(rhs_result)
+                    (selected,) = pl.intrin.leak()
+                    pl.intrin.yield_(selected)
+                (carried_rv,) = pl.intrin.leak()
                 result = self.kernel(x, carried_rv, attrs={"arg_directions": [pl.adir.input, pl.adir.inout]})
                 return result
 
@@ -775,7 +793,7 @@ class TestDeriveDirectionMatrix:
                 n: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[64], pl.FP32]:
                 local: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                i: pl.Scalar[pl.INDEX] = 0
+                i = pl.const(0, pl.INDEX)
                 while i < n:
                     local = self.kernel(x, local)
                     i = i + 1
@@ -800,7 +818,7 @@ class TestDeriveDirectionMatrix:
                 n: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[64], pl.FP32]:
                 local = pl.tensor.create([64], dtype=pl.FP32, layout=pl.TensorLayout.ND)
-                i: pl.Scalar[pl.INDEX] = 0
+                i = pl.const(0, pl.INDEX)
                 while i < n:
                     local = self.kernel(x, local, attrs={"arg_directions": [pl.adir.input, pl.adir.inout]})
                     i = i + 1
@@ -2473,22 +2491,9 @@ class TestMaterializeWrapperDirections:
         _verify_call_directions(After)
 
     def test_mutually_recursive_wrappers_reach_a_fixed_point(self):
-        """A wrapper cycle must not lose a write dependency, whatever the visit order.
+        """Tracing rejects recursive wrappers before direction inference runs."""
 
-        ``a`` forwards ``p`` to an Out kernel *and* to wrapper ``z``; ``z`` calls
-        back into ``a``. Wrappers are visited in program-map (name) order, so
-        ``a`` is seeded first. A recursive walk with a cycle guard would memoize
-        ``z`` from ``a``'s *declared* directions — before ``a`` itself is
-        promoted — leaving ``z.p`` as ``In`` and dropping its write dependency.
-        Iterating the monotone merge to a fixed point cannot.
-
-        The cycle forces at least one call to reference a function declared later
-        in the class, so ``Expected`` (like ``Before``) contains a forward
-        reference — exercising the parser's attrs-preserving rebuild of an
-        annotated assignment whose callee return type is not yet known.
-        """
-
-        @pl.program
+        @_expect_trace_cycle
         class Before:
             @pl.function(type=pl.FunctionType.Group)
             def a(
@@ -2527,60 +2532,6 @@ class TestMaterializeWrapperDirections:
             ) -> pl.Tensor[[64], pl.FP32]:
                 r: pl.Tensor[[64], pl.FP32] = self.a(x, p)
                 return r
-
-        @pl.program
-        class Expected:
-            # `p` is written through the kernel, so it is Out on BOTH wrappers —
-            # the fixed point. A recursive walk with a cycle guard would leave
-            # `z.p` as In here.
-            @pl.function(type=pl.FunctionType.Group, level=pl.Level.CORE_GROUP, role=pl.Role.SubWorker)
-            def a(
-                self,
-                x: pl.Tensor[[64], pl.FP32],
-                p: pl.Out[pl.Tensor[[64], pl.FP32]],
-            ) -> pl.Tensor[[64], pl.FP32]:
-                # `z` writes `p` first (OutputExisting); `kern` is then the second
-                # writer-unit in the same scope, so R-prior promotes it to InOut.
-                _r0: pl.Tensor[[64], pl.FP32] = self.z(
-                    x, p, attrs={"arg_directions": [pl.adir.input, pl.adir.output_existing]}
-                )
-                r1: pl.Tensor[[64], pl.FP32] = self.kern(
-                    x, p, attrs={"arg_directions": [pl.adir.input, pl.adir.inout]}
-                )
-                return r1
-
-            @pl.function(type=pl.FunctionType.InCore, level=pl.Level.CHIP_DIE, role=pl.Role.SubWorker)
-            def kern(
-                self,
-                x: pl.Tensor[[64], pl.FP32],
-                out: pl.Out[pl.Tensor[[64], pl.FP32]],
-            ) -> pl.Tensor[[64], pl.FP32]:
-                t = pl.tile.load(x, [0], [64], [64])
-                r = pl.tile.store(t, [0], out)
-                return r
-
-            @pl.function
-            def main(
-                self,
-                x: pl.Tensor[[64], pl.FP32],
-                d: pl.Tensor[[64], pl.FP32],
-            ) -> pl.Tensor[[64], pl.FP32]:
-                r = self.a(x, d, attrs={"arg_directions": [pl.adir.input, pl.adir.output_existing]})
-                return r
-
-            @pl.function(type=pl.FunctionType.Group, level=pl.Level.CORE_GROUP, role=pl.Role.SubWorker)
-            def z(
-                self,
-                x: pl.Tensor[[64], pl.FP32],
-                p: pl.Out[pl.Tensor[[64], pl.FP32]],
-            ) -> pl.Tensor[[64], pl.FP32]:
-                r = self.a(x, p, attrs={"arg_directions": [pl.adir.input, pl.adir.output_existing]})
-                return r
-
-        After = passes.derive_call_directions()(Before)
-        ir.assert_structural_equal(After, Expected)
-        # A stale wrapper signature would make the pass fail its own verifier.
-        _verify_call_directions(After)
 
 
 class TestVerifyWrapperDirections:

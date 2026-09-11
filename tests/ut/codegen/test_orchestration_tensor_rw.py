@@ -195,10 +195,12 @@ class TestTensorReadWriteOffsetCodegen:
                 x: pl.Tensor[[64], pl.FP32],
                 out: pl.Tensor[[64], pl.FP32],
             ) -> pl.Tensor[[64], pl.FP32]:
-                for i, (out_iter,) in pl.range(0, 64, 16, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for i in pl.range(0, 64, 16):
                     x_tile: pl.Tile[[16], pl.FP32] = pl.load(x, [i], [16])
                     out_next: pl.Tensor[[64], pl.FP32] = pl.store(x_tile, [i], out_iter)
-                    result = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -231,12 +233,14 @@ class TestTensorReadWriteOffsetCodegen:
                 x: pl.Tensor[[64], pl.FP32],
                 acc: pl.Tensor[[64], pl.FP32],
             ) -> pl.Tensor[[64], pl.FP32]:
-                for i, (acc_iter,) in pl.range(0, 64, 16, init_values=(acc,)):
+                (acc_iter,) = pl.intrin.carry(acc)
+                for i in pl.range(0, 64, 16):
                     x_tile: pl.Tile[[16], pl.FP32] = pl.load(x, [i], [16])
                     acc_tile: pl.Tile[[16], pl.FP32] = pl.load(acc_iter, [i], [16])
                     sum_tile: pl.Tile[[16], pl.FP32] = pl.add(x_tile, acc_tile)
                     acc_next: pl.Tensor[[64], pl.FP32] = pl.store(sum_tile, [i], acc_iter)
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -380,9 +384,8 @@ class TestTensorReadWriteOffsetCodegen:
                 wk: pl.Tensor[[512, 512], pl.BF16],
                 wv: pl.Tensor[[512, 512], pl.BF16],
             ) -> tuple[pl.Tensor[[16, 512], pl.FP32], pl.Tensor[[16, 512], pl.FP32]]:
-                for ob, (k_proj_iter, v_proj_iter) in pl.range(
-                    ob_chunk, ob_chunk + 4, init_values=(k_proj, v_proj)
-                ):
+                (k_proj_iter, v_proj_iter) = pl.intrin.carry(k_proj, v_proj)
+                for ob in pl.range(ob_chunk, ob_chunk + 4):
                     kv0: pl.Scalar[pl.INDEX] = ob * 64
                     tile_a: pl.Tile[[16, 128], pl.BF16] = pl.tile.load(
                         normed_tile, [0, 0], [16, 128], [16, 128]
@@ -394,7 +397,8 @@ class TestTensorReadWriteOffsetCodegen:
                     tile_wv: pl.Tile[[128, 64], pl.BF16] = pl.tile.load(wv, [0, kv0], [128, 64], [128, 64])
                     v_acc: pl.Tile[[16, 64], pl.FP32] = pl.tile.matmul(tile_a, tile_wv)
                     v_proj_next: pl.Tensor[[16, 512], pl.FP32] = pl.tile.store(v_acc, [0, kv0], v_proj_iter)
-                    k_proj_rv, v_proj_rv = pl.yield_(k_proj_next, v_proj_next)
+                    pl.intrin.yield_(k_proj_next, v_proj_next)
+                (k_proj_rv, v_proj_rv) = pl.intrin.leak()
                 return k_proj_rv, v_proj_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -406,13 +410,15 @@ class TestTensorReadWriteOffsetCodegen:
                 k_proj: pl.Out[pl.Tensor[[16, 512], pl.FP32]],
                 v_proj: pl.Out[pl.Tensor[[16, 512], pl.FP32]],
             ) -> tuple[pl.Tensor[[16, 512], pl.FP32], pl.Tensor[[16, 512], pl.FP32]]:
-                for ob_chunk, (k_proj_iter, v_proj_iter) in pl.range(0, 8, 4, init_values=(k_proj, v_proj)):
+                (k_proj_iter, v_proj_iter) = pl.intrin.carry(k_proj, v_proj)
+                for ob_chunk in pl.range(0, 8, 4):
                     result: tuple[pl.Tensor[[16, 512], pl.FP32], pl.Tensor[[16, 512], pl.FP32]] = (
                         self.kv_proj(k_proj_iter, v_proj_iter, ob_chunk, normed_tile, wk, wv)
                     )
                     k_proj_next: pl.Tensor[[16, 512], pl.FP32] = result[0]
                     v_proj_next: pl.Tensor[[16, 512], pl.FP32] = result[1]
-                    k_proj_rv, v_proj_rv = pl.yield_(k_proj_next, v_proj_next)
+                    pl.intrin.yield_(k_proj_next, v_proj_next)
+                (k_proj_rv, v_proj_rv) = pl.intrin.leak()
                 return k_proj_rv, v_proj_rv
 
         pm = PassManager.get_strategy(OptimizationStrategy.Default)
@@ -494,12 +500,16 @@ class TestTensorReadWriteOffsetCodegen:
                 probe: pl.Out[pl.Tensor[[N, M], pl.FP32]],
             ) -> pl.Tensor[[N, M], pl.FP32]:
                 score_flat: pl.Tensor[[N, M], pl.FP32] = pl.reshape(score, [N, M])
-                for c0, (score_iter,) in pl.range(0, M, W, init_values=(score_flat,)):
+                (score_iter,) = pl.intrin.carry(score_flat)
+                for c0 in pl.range(0, M, W):
                     score_next: pl.Tensor[[N, M], pl.FP32] = self.produce(x, score_iter, c0)
-                    score_rv = pl.yield_(score_next)
-                for r, (probe_iter,) in pl.range(N, init_values=(probe,)):
+                    pl.intrin.yield_(score_next)
+                (score_rv,) = pl.intrin.leak()
+                (probe_iter,) = pl.intrin.carry(probe)
+                for r in pl.range(N):
                     probe_next: pl.Tensor[[N, M], pl.FP32] = self.consume(score_rv, probe_iter, r)
-                    probe_rv = pl.yield_(probe_next)
+                    pl.intrin.yield_(probe_next)
+                (probe_rv,) = pl.intrin.leak()
                 return probe_rv
 
         transformed = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(
@@ -538,7 +548,9 @@ class TestTensorReadWriteOffsetCodegen:
             ) -> pl.Tensor[[16, 16], pl.FP16]:
                 pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
                 pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
-                received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=1)
+                received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP16, split=1
+                )
                 pl.tfree_to_aiv(received)
                 updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
                 return updated

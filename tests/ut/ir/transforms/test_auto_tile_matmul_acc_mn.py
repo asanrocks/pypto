@@ -192,9 +192,8 @@ class BoxedCapacityBefore:
         acc_init: pl.Tile[[BOX_CAP_M, BOX_CAP_N], pl.INT32, pl.Mem.Acc] = pl.tile.create(
             [BOX_CAP_M, BOX_CAP_N], dtype=pl.INT32, target_memory=pl.Mem.Acc
         )
-        for k0, (acc_iter,) in pl.pipeline(
-            0, BOX_CAP_K_TOTAL, BOX_CAP_K_TILE, init_values=(acc_init,), stage=2
-        ):
+        (acc_iter,) = pl.intrin.carry(acc_init)
+        for k0 in pl.pipeline(0, BOX_CAP_K_TOTAL, BOX_CAP_K_TILE, stage=2):
             at: pl.Tile[[BOX_CAP_M, BOX_CAP_K_TILE], pl.INT8, pl.Mem.Mat] = pl.tile.load(
                 a, [0, k0], [BOX_CAP_M, BOX_CAP_K_TILE], target_memory=pl.Mem.Mat
             )
@@ -203,13 +202,15 @@ class BoxedCapacityBefore:
             )
             if k0 == 0:
                 acc_first: pl.Tile[[BOX_CAP_M, BOX_CAP_N], pl.INT32, pl.Mem.Acc] = pl.tile.matmul(at, bt)
-                acc_phi: pl.Tile[[BOX_CAP_M, BOX_CAP_N], pl.INT32, pl.Mem.Acc] = pl.yield_(acc_first)
+                pl.intrin.yield_(acc_first)
             else:
                 acc_next: pl.Tile[[BOX_CAP_M, BOX_CAP_N], pl.INT32, pl.Mem.Acc] = pl.tile.matmul_acc(
                     acc_iter, at, bt
                 )
-                acc_phi: pl.Tile[[BOX_CAP_M, BOX_CAP_N], pl.INT32, pl.Mem.Acc] = pl.yield_(acc_next)
-            acc: pl.Tile[[BOX_CAP_M, BOX_CAP_N], pl.INT32, pl.Mem.Acc] = pl.yield_(acc_phi)
+                pl.intrin.yield_(acc_next)
+            (acc_phi,) = pl.intrin.leak()
+            pl.intrin.yield_(acc_phi)
+        (acc,) = pl.intrin.leak()
         c = pl.tile.store(acc, [0, 0], c)
         return c
 
@@ -232,9 +233,8 @@ class BoxedCapacityPredicatedBefore:
         acc_init: pl.Tile[[BOX_CAP_M, BOX_CAP_N], pl.INT32, pl.Mem.Acc] = pl.tile.create(
             [BOX_CAP_M, BOX_CAP_N], dtype=pl.INT32, target_memory=pl.Mem.Acc
         )
-        for k0, (acc_iter,) in pl.pipeline(
-            0, BOX_CAP_K_TOTAL, BOX_CAP_K_TILE, init_values=(acc_init,), stage=2
-        ):
+        (acc_iter,) = pl.intrin.carry(acc_init)
+        for k0 in pl.pipeline(0, BOX_CAP_K_TOTAL, BOX_CAP_K_TILE, stage=2):
             at: pl.Tile[[BOX_CAP_M, BOX_CAP_K_TILE], pl.INT8, pl.Mem.Mat] = pl.tile.load(
                 a, [0, k0], [BOX_CAP_M, BOX_CAP_K_TILE], target_memory=pl.Mem.Mat
             )
@@ -244,7 +244,8 @@ class BoxedCapacityPredicatedBefore:
             acc_next: pl.Tile[[BOX_CAP_M, BOX_CAP_N], pl.INT32, pl.Mem.Acc] = pl.tile.matmul_acc(
                 acc_iter, at, bt, k0 == 0
             )
-            acc: pl.Tile[[BOX_CAP_M, BOX_CAP_N], pl.INT32, pl.Mem.Acc] = pl.yield_(acc_next)
+            pl.intrin.yield_(acc_next)
+        (acc,) = pl.intrin.leak()
         c = pl.tile.store(acc, [0, 0], c)
         return c
 
@@ -271,7 +272,8 @@ class OpaquePredicateBefore:
         acc_init: pl.Tile[[WIDE_M, WIDE_N], pl.INT32, pl.Mem.Acc] = pl.tile.create(
             [WIDE_M, WIDE_N], dtype=pl.INT32, target_memory=pl.Mem.Acc
         )
-        for k0, (acc_iter,) in pl.pipeline(0, WIDE_K_TOTAL, WIDE_K_TILE, init_values=(acc_init,), stage=2):
+        (acc_iter,) = pl.intrin.carry(acc_init)
+        for k0 in pl.pipeline(0, WIDE_K_TOTAL, WIDE_K_TILE, stage=2):
             at: pl.Tile[[WIDE_M, WIDE_K_TILE], pl.INT8, pl.Mem.Mat] = pl.tile.load(
                 a, [0, k0], [WIDE_M, WIDE_K_TILE], target_memory=pl.Mem.Mat
             )
@@ -281,7 +283,8 @@ class OpaquePredicateBefore:
             acc_next: pl.Tile[[WIDE_M, WIDE_N], pl.INT32, pl.Mem.Acc] = pl.tile.matmul_acc(
                 acc_iter, at, bt, seed
             )
-            acc: pl.Tile[[WIDE_M, WIDE_N], pl.INT32, pl.Mem.Acc] = pl.yield_(acc_next)
+            pl.intrin.yield_(acc_next)
+        (acc,) = pl.intrin.leak()
         c = pl.tile.store(acc, [0, 0], c)
         return c
 

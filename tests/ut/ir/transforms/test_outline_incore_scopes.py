@@ -386,10 +386,11 @@ class TestOutlineIncoreScopes:
                 with pl.at(level=pl.Level.CORE_GROUP):
                     if cond:
                         y: pl.Tensor[[64], pl.FP32] = pl.add(x, x)
-                        z = pl.yield_(y)  # Unannotated - should infer type
+                        pl.intrin.yield_(y)
                     else:
                         y2: pl.Tensor[[64], pl.FP32] = pl.mul(x, x)
-                        z = pl.yield_(y2)
+                        pl.intrin.yield_(y2)
+                    (z,) = pl.intrin.leak()
                 return z
 
         @pl.program
@@ -400,10 +401,11 @@ class TestOutlineIncoreScopes:
             ) -> pl.Tensor[[64], pl.FP32]:
                 if cond:
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x, x)
-                    z = pl.yield_(y)  # type: ignore[no-redef]
+                    pl.intrin.yield_(y)
                 else:
                     y2: pl.Tensor[[64], pl.FP32] = pl.mul(x, x)
-                    z = pl.yield_(y2)  # type: ignore[no-redef]
+                    pl.intrin.yield_(y2)
+                (z,) = pl.intrin.leak()
                 return z
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -666,7 +668,9 @@ class TestOutlineIncoreScopes:
         """Test outlining scope with multiple store targets as outputs.
 
         Multiple external tensors modified via tile.store should all appear
-        as return values of the outlined function.
+        as return values of the outlined function, in first-store order
+        (the store-target walk is encounter-ordered, so the tuple layout is
+        process-stable, not pointer-hash order).
         """
 
         @pl.program
@@ -786,12 +790,16 @@ class TestOutlineIncoreScopes:
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], y: pl.Tensor[[64], pl.FP32]
             ) -> pl.Tensor[[64], pl.FP32]:
-                for i, (acc,) in pl.range(3, init_values=(x,)):
+                (acc,) = pl.intrin.carry(x)
+                for i in pl.range(3):
                     with pl.at(level=pl.Level.CORE_GROUP):
-                        for j, (inner,) in pl.range(2, init_values=(acc,)):
+                        (inner,) = pl.intrin.carry(acc)
+                        for j in pl.range(2):
                             updated: pl.Tensor[[64], pl.FP32] = pl.add(inner, y)
-                            inner_rv = pl.yield_(updated)
-                    acc_rv = pl.yield_(inner_rv)
+                            pl.intrin.yield_(updated)
+                        (inner_rv,) = pl.intrin.leak()
+                    pl.intrin.yield_(inner_rv)
+                (acc_rv,) = pl.intrin.leak()
                 return acc_rv
 
         @pl.program
@@ -800,18 +808,22 @@ class TestOutlineIncoreScopes:
             def main_incore_0(
                 self, acc: pl.Tensor[[64], pl.FP32], y: pl.Tensor[[64], pl.FP32]
             ) -> pl.Tensor[[64], pl.FP32]:
-                for j, (inner,) in pl.range(2, init_values=(acc,)):
+                (inner,) = pl.intrin.carry(acc)
+                for j in pl.range(2):
                     updated: pl.Tensor[[64], pl.FP32] = pl.add(inner, y)
-                    inner_rv = pl.yield_(updated)
+                    pl.intrin.yield_(updated)
+                (inner_rv,) = pl.intrin.leak()
                 return acc
 
             @pl.function(type=pl.FunctionType.Orchestration)
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], y: pl.Tensor[[64], pl.FP32]
             ) -> pl.Tensor[[64], pl.FP32]:
-                for i, (acc,) in pl.range(3, init_values=(x,)):
+                (acc,) = pl.intrin.carry(x)
+                for i in pl.range(3):
                     inner_rv: pl.Tensor[[64], pl.FP32] = self.main_incore_0(acc, y)
-                    acc_rv = pl.yield_(inner_rv)
+                    pl.intrin.yield_(inner_rv)
+                (acc_rv,) = pl.intrin.leak()
                 return acc_rv
 
         Before = passes.convert_to_ssa()(Before)
@@ -833,10 +845,12 @@ class TestOutlineIncoreScopes:
             def main(
                 self, init: pl.Tensor[[64], pl.FP32], y: pl.Tensor[[64], pl.FP32]
             ) -> pl.Tensor[[64], pl.FP32]:
-                for sb, (acc,) in pl.range(4, init_values=(init,)):
+                (acc,) = pl.intrin.carry(init)
+                for sb in pl.range(4):
                     with pl.at(level=pl.Level.CORE_GROUP):
                         result: pl.Tensor[[64], pl.FP32] = pl.add(acc, y)
-                    acc_rv = pl.yield_(result)
+                    pl.intrin.yield_(result)
+                (acc_rv,) = pl.intrin.leak()
                 return acc_rv
 
         @pl.program
@@ -852,9 +866,11 @@ class TestOutlineIncoreScopes:
             def main(
                 self, init: pl.Tensor[[64], pl.FP32], y: pl.Tensor[[64], pl.FP32]
             ) -> pl.Tensor[[64], pl.FP32]:
-                for sb, (acc,) in pl.range(4, init_values=(init,)):
+                (acc,) = pl.intrin.carry(init)
+                for sb in pl.range(4):
                     result: pl.Tensor[[64], pl.FP32] = self.main_incore_0(acc, y)
-                    acc_rv = pl.yield_(result)
+                    pl.intrin.yield_(result)
+                (acc_rv,) = pl.intrin.leak()
                 return acc_rv
 
         Before = passes.convert_to_ssa()(Before)
@@ -1299,12 +1315,13 @@ class TestOutlineIncoreScopes:
                 y: pl.Tensor[[64], pl.FP32],
                 n: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[64], pl.FP32]:
-                for acc, c in pl.while_(init_values=(x, 0)):
-                    pl.cond(c < n)
+                (acc, c) = pl.intrin.carry(x, pl.const(0, pl.INDEX))
+                while c < n:
                     with pl.at(level=pl.Level.CORE_GROUP):
                         updated: pl.Tensor[[64], pl.FP32] = pl.add(acc, y)
                     c_new: pl.Scalar[pl.INDEX] = c + 1
-                    acc_rv, c_rv = pl.yield_(updated, c_new)
+                    pl.intrin.yield_(updated, c_new)
+                (acc_rv, c_rv) = pl.intrin.leak()
                 return acc_rv
 
         @pl.program
@@ -1323,11 +1340,12 @@ class TestOutlineIncoreScopes:
                 y: pl.Tensor[[64], pl.FP32],
                 n: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[64], pl.FP32]:
-                for acc, c in pl.while_(init_values=(x, 0)):
-                    pl.cond(c < n)
+                (acc, c) = pl.intrin.carry(x, pl.const(0, pl.INDEX))
+                while c < n:
                     updated: pl.Tensor[[64], pl.FP32] = self.main_incore_0(acc, y)
                     c_new: pl.Scalar[pl.INDEX] = c + 1
-                    acc_rv, c_rv = pl.yield_(updated, c_new)
+                    pl.intrin.yield_(updated, c_new)
+                (acc_rv, c_rv) = pl.intrin.leak()
                 return acc_rv
 
         Before = passes.convert_to_ssa()(Before)
@@ -1780,15 +1798,23 @@ class TestOutlineSubmitTaskId:
                 my_rank: pl.Scalar[pl.INT32],
                 epoch: pl.Scalar[pl.INT32],
             ) -> pl.Tensor[[64], pl.FP32]:
-                wait_ret: pl.Tuple[pl.Scalar[pl.TASK_ID]] = pl.submit(
+                # State the launch sites the way tracing collects them: the
+                # submit wrappers bind their staged Tuple once and the names
+                # extract from it — no host-tuple alias in between (the
+                # with-form Before collects to exactly this shape).
+                wait_tid: pl.Scalar[pl.TASK_ID] = pl.submit(
                     self.dispatch_wait, indices, my_rank, signal, epoch
+                )[0]
+                out_2, gather_tid = pl.spmd_submit(
+                    self.dispatch_gather_spmd,
+                    payload,
+                    out,
+                    deps=[wait_tid],
+                    # The with-form Before lifts its host-int core_num as an
+                    # INDEX constant (the IR's int-literal default); state it
+                    # explicitly so the two authoring channels compare equal.
+                    core_num=pl.const(4, pl.INDEX),
                 )
-                wait_tid: pl.Scalar[pl.TASK_ID] = wait_ret[0]
-                gather_ret: pl.Tuple[pl.Tensor[[64], pl.FP32], pl.Scalar[pl.TASK_ID]] = pl.spmd_submit(
-                    self.dispatch_gather_spmd, payload, out, deps=[wait_tid], core_num=4
-                )
-                out_2: pl.Tensor[[64], pl.FP32] = gather_ret[0]
-                gather_tid: pl.Scalar[pl.TASK_ID] = gather_ret[1]
                 return out_2
 
         after = passes.outline_cluster_scopes()(
@@ -3808,8 +3834,10 @@ class TestOutlineScopeInControlFlow:
             ) -> pl.Tensor[[64, 128], pl.FP32]:
                 if flag > 0:
                     scratch = pl.create_tensor([64, 128], pl.FP32)
-                    for _j, (scratch_iter,) in pl.range(1, init_values=(scratch,)):
-                        scratch_rv = pl.yield_(scratch_iter)
+                    (scratch_iter,) = pl.intrin.carry(scratch)
+                    for _j in pl.range(1):
+                        pl.intrin.yield_(scratch_iter)
+                    (scratch_rv,) = pl.intrin.leak()
                     with pl.at(level=pl.Level.CORE_GROUP):
                         t = pl.load(a, [0, 0], [64, 128])
                         pl.store(t, [0, 0], scratch_rv)

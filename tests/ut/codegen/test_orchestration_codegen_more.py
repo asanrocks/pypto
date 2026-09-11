@@ -283,9 +283,10 @@ class TestOrchestrationMore:
             ) -> pl.Tensor[[M_DYN, SPMD_N], pl.FP32]:
                 m = pl.tensor.dim(a, 0)
                 if m > CAP:
-                    m_clamped: pl.Scalar[pl.INDEX] = pl.yield_(CAP)
+                    pl.intrin.yield_(pl.const(CAP, pl.INDEX))
                 else:
-                    m_clamped: pl.Scalar[pl.INDEX] = pl.yield_(m)
+                    pl.intrin.yield_(m)
+                (m_clamped,) = pl.intrin.leak()
                 for ob in pl.spmd(m_clamped // ROW_TILE, name_hint="hc"):
                     m0 = ob * ROW_TILE
                     a_slice = pl.slice(a, [ROW_TILE, K], [m0, 0])
@@ -343,9 +344,10 @@ class TestOrchestrationMore:
             ) -> pl.Tensor[[16, N], pl.FP32]:
                 m = pl.tensor.dim(a, 0)
                 if m > CAP:
-                    m_clamped: pl.Scalar[pl.INDEX] = pl.yield_(CAP)
+                    pl.intrin.yield_(pl.const(CAP, pl.INDEX))
                 else:
-                    m_clamped: pl.Scalar[pl.INDEX] = pl.yield_(m)
+                    pl.intrin.yield_(m)
+                (m_clamped,) = pl.intrin.leak()
                 scratch: pl.Tensor[[M_DYN, N], pl.FP32] = pl.create_tensor([m_clamped, N], dtype=pl.FP32)
                 a_slice = pl.slice(a, [16, N], [0, 0])
                 s_slice = pl.slice(scratch, [16, N], [0, 0])
@@ -821,9 +823,10 @@ class TestOrchestrationMore:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 for i in pl.range(4):
                     if i == 0:
-                        is_first: pl.Scalar[pl.INT64] = pl.yield_(pl.const(1, pl.INT64))
+                        pl.intrin.yield_(pl.const(1, pl.INT64))
                     else:
-                        is_first: pl.Scalar[pl.INT64] = pl.yield_(pl.const(0, pl.INT64))
+                        pl.intrin.yield_(pl.const(0, pl.INT64))
+                    (is_first,) = pl.intrin.leak()
                     result: pl.Tensor[[16, 16], pl.FP32] = pl.create_tensor([16, 16], dtype=pl.FP32)
                     result = self.kernel_process(a, is_first, result)
                 return result
@@ -1183,7 +1186,7 @@ class TestOrchestrationMore:
                 x: pl.Tensor[[4, 8], pl.FP32],
                 out: pl.Out[pl.Tensor[[4, 8], pl.FP32]],
             ) -> pl.Tensor[[4, 8], pl.FP32]:
-                zero: pl.Scalar[pl.INDEX] = 0
+                zero: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 row: pl.Tensor[[1, 8], pl.FP32] = pl.create_tensor([1, 8], dtype=pl.FP32)
                 row = self.fill_row(x, zero, row)
                 out = pl.assemble(out, row, [0, 0])
@@ -1326,7 +1329,7 @@ class TestOrchestrationMore:
         assert "params_t0.add_output(ret0__out)" in code
         assert "params_t1.add_output(ret0__out_1)" in code
         # ``first`` is kernel_add's in-place output buffer ret0__out, so it
-        # remaps to ret0__out (no ``const Tensor& first = ...`` alias is minted);
+        # remaps to ret0__out (no ``const Tensor& first = ...`` alias is created);
         # the second call reads that buffer directly.
         assert "params_t1.add_input(ret0__out)" in code
         assert "const Tensor& first" not in code
@@ -1541,7 +1544,7 @@ class TestOrchestrationMore:
             span,
         )
 
-        stmts = [
+        stmts: list[ir.Stmt] = [
             ir.AssignStmt(t1_var, static_create_call, span),
             ir.AssignStmt(dyn_n, ir.ConstInt(4, INDEX, span), span),
             ir.AssignStmt(t2_var, dyn_create_call, span),

@@ -238,10 +238,12 @@ class MrgSort1DynFP32TensorProgram:
             optimizations=[pl.split(pl.SplitMode.UP_DOWN)],
         ):
             sorted_t = pl.tensor.sort32(src, idx)
-            for i, (acc,) in pl.range(3, init_values=(sorted_t,)):
+            (acc,) = pl.intrin.carry(sorted_t)
+            for i in pl.range(3):
                 block_len = 1 << (6 + i * 2)
-                merged = pl.tensor.mrgsort(acc, block_len=block_len)
-                result = pl.yield_(merged)
+                acc = pl.tensor.mrgsort(acc, block_len=block_len)
+                pl.intrin.yield_(acc)
+            (result,) = pl.intrin.leak()
             # P0101 selects even positions: [val0, idx0, val1, idx1, ...] → values only.
             vals = pl.tensor.gather(result, mask_pattern=pl.tile.MaskPattern.P0101)
             val_output = pl.assemble(val_output, vals, [0, 0])
@@ -271,10 +273,12 @@ class MrgSort1DynFP32TensorValIdxProgram:
             optimizations=[pl.split(pl.SplitMode.UP_DOWN)],
         ):
             sorted_t = pl.tensor.sort32(src, idx)
-            for i, (acc,) in pl.range(3, init_values=(sorted_t,)):
+            (acc,) = pl.intrin.carry(sorted_t)
+            for i in pl.range(3):
                 block_len = 1 << (6 + i * 2)
-                merged = pl.tensor.mrgsort(acc, block_len=block_len)
-                result = pl.yield_(merged)
+                acc = pl.tensor.mrgsort(acc, block_len=block_len)
+                pl.intrin.yield_(acc)
+            (result,) = pl.intrin.leak()
             # P0101 → sorted values (FP32 at even positions).
             vals = pl.tensor.gather(result, mask_pattern=pl.tile.MaskPattern.P0101)
             # P1010 + output_dtype=UINT32 → bit-reinterpret odd-position bits into UINT32.
@@ -309,10 +313,12 @@ class MrgSort1DynFP32TopLevelProgram:
             optimizations=[pl.split(pl.SplitMode.UP_DOWN)],
         ):
             sorted_t = pl.sort32(src, idx)
-            for i, (acc,) in pl.range(3, init_values=(sorted_t,)):
+            (acc,) = pl.intrin.carry(sorted_t)
+            for i in pl.range(3):
                 block_len = 1 << (6 + i * 2)
-                merged = pl.mrgsort(acc, block_len=block_len)
-                result = pl.yield_(merged)
+                acc = pl.mrgsort(acc, block_len=block_len)
+                pl.intrin.yield_(acc)
+            (result,) = pl.intrin.leak()
             # P0101 → sorted values (FP32 at even positions).
             vals = pl.gather(result, mask_pattern=pl.tile.MaskPattern.P0101)
             # P1010 + output_dtype=UINT32 → bit-reinterpret odd-position bits into UINT32.
@@ -344,11 +350,13 @@ class MrgSort1DynFP32Program:
         # Sort each 32-element block descending → [1, 4096] interleaved (val+idx pairs)
         sorted_tile: pl.Tile[[1, 4096], pl.FP32] = pl.tile.sort32(src_tile, idx_tile)
         # Iterative 4-way merge: block_len = 1<<(6+2*i) = 64, 256, 1024
-        # Only tile in init_values → no scalar iter_args → ptoas compatible
-        for i, (tile_iter,) in pl.range(3, init_values=(sorted_tile,)):
+        # Only tile in the carried channel → no scalar iter_args → ptoas compatible
+        (tile_iter,) = pl.intrin.carry(sorted_tile)
+        for i in pl.range(3):
             block_len = 1 << (6 + i * 2)
-            merged: pl.Tile[[1, 4096], pl.FP32] = pl.tile.mrgsort(tile_iter, block_len=block_len)
-            result = pl.yield_(merged)
+            tile_iter = pl.tile.mrgsort(tile_iter, block_len=block_len)
+            pl.intrin.yield_(tile_iter)
+        (result,) = pl.intrin.leak()
         # Extract sorted values (even positions, FP32)
         vals: pl.Tile[[1, 2048], pl.FP32] = pl.tile.gather_mask(
             result, mask_pattern=pl.tile.MaskPattern.P0101

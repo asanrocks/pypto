@@ -213,10 +213,12 @@ class TestLoopCarryAliasing:
                 a: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (o,) in pl.range(4, init_values=(out,)):
+                (o,) = pl.intrin.carry(out)
+                for i in pl.range(4):
                     t = pl.load(a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec)
                     o = pl.store(t, [i * 64, 0], o)
-                    staged = pl.yield_(o)
+                    pl.intrin.yield_(o)
+                (staged,) = pl.intrin.leak()
                 out = staged
                 return out
 
@@ -242,17 +244,21 @@ class TestLoopCarryAliasing:
                 data: pl.InOut[pld.DistributedTensor[[1, sz], pl.FP32]],
                 signal: pl.InOut[pld.DistributedTensor[[2, nr], pl.INT32]],
             ) -> pl.Tensor[[1, sz], pl.FP32]:
-                for col, (data_iter,) in pl.range(0, sz, 8, init_values=(data,)):
+                (data_iter,) = pl.intrin.carry(data)
+                for col in pl.range(0, sz, 8):
                     local = pl.load(inp, [0, col], [8, 8], valid_shape=[1, 8])
                     data_iter = pl.store(local, [0, col], data_iter)
-                    staged_data: pld.DistributedTensor[[1, sz], pl.FP32] = pl.yield_(data_iter)
+                    pl.intrin.yield_(data_iter)
+                (staged_data,) = pl.intrin.leak()
 
                 data = pld.tensor.allreduce(staged_data, signal, op=pld.ReduceOp.Sum, mode="ring")
 
-                for col2, (out_iter,) in pl.range(0, sz, 8, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for col2 in pl.range(0, sz, 8):
                     acc = pl.load(data, [0, col2], [8, 8], valid_shape=[1, 8])
                     out_iter = pl.store(acc, [0, col2], out_iter)
-                    staged_out = pl.yield_(out_iter)
+                    pl.intrin.yield_(out_iter)
+                (staged_out,) = pl.intrin.leak()
                 return staged_out
 
         assert _warnings(Prog) == []

@@ -30,7 +30,7 @@ of which branch executed. Only the runtime valid-shape value differs.
 
 The programs below are written with ``@pl.program`` and explicit
 ``pl.Scalar[...]`` parameters. The final section covers the same pattern
-reached through ``@pl.jit_specializer``, where the specializer must leave the in-DSL
+reached through ``@pl.jit``, where the specializer must leave the in-DSL
 ``if``/``else`` intact for the branch to survive to an ``scf.if``.
 """
 
@@ -110,7 +110,8 @@ class DynValidShapeLoopIfElse:
         block_size: pl.Scalar[pl.INDEX],
         output: pl.Out[pl.Tensor[[128, 64], pl.FP32]],
     ) -> pl.Tensor[[128, 64], pl.FP32]:
-        for i, (out,) in pl.range(n_blocks, init_values=(output,)):
+        (out,) = pl.intrin.carry(output)
+        for i in pl.range(n_blocks):
             if i == n_blocks - 1:
                 vlen: pl.Scalar[pl.INDEX] = last_valid_len
             else:
@@ -121,7 +122,8 @@ class DynValidShapeLoopIfElse:
             s_padded: pl.Tile[[64, 64], pl.FP32] = pl.tile.fillpad(s_tile, pad_value=pl.PadValue.min)
             scaled: pl.Tile[[64, 64], pl.FP32] = pl.mul(s_padded, scale)
             updated: pl.Tensor[[128, 64], pl.FP32] = pl.store(scaled, [i * 64, 0], out)
-            loop_result = pl.yield_(updated)
+            pl.intrin.yield_(updated)
+        (loop_result,) = pl.intrin.leak()
         return loop_result
 
 
@@ -225,7 +227,7 @@ def test_loop_if_else_dyn_valid_shape_has_scf_if(loop_mlir: str):
 
 
 # ---------------------------------------------------------------------------
-# The same patterns reached through @pl.jit_specializer
+# The same patterns reached through @pl.jit
 # ---------------------------------------------------------------------------
 #
 # The JIT specializer rewrites the user's function into the @pl.program form
@@ -237,7 +239,7 @@ def test_loop_if_else_dyn_valid_shape_has_scf_if(loop_mlir: str):
 
 
 def _jit_device_mlir(jit_func, *args) -> str:
-    """Lower a @pl.jit_specializer kernel and run PTO codegen on its device function."""
+    """Lower a @pl.jit kernel and run PTO codegen on its device function."""
     backend.reset_for_testing()
     backend.set_backend_type(BackendType.Ascend910B)
 
@@ -278,7 +280,7 @@ def _dyn_valid_shape_example():
 
 @pytest.fixture(scope="module")
 def jit_if_else_mlir() -> str:
-    """Codegen the @pl.jit_specializer if/else kernel once for all tests in this module."""
+    """Codegen the @pl.jit if/else kernel once for all tests in this module."""
     torch = pytest.importorskip("torch")
     example = _dyn_valid_shape_example()
 
@@ -290,7 +292,7 @@ def jit_if_else_mlir() -> str:
 
 @pytest.fixture(scope="module")
 def jit_loop_mlir() -> str:
-    """Codegen the @pl.jit_specializer loop + if/else kernel once for all tests in this module."""
+    """Codegen the @pl.jit loop + if/else kernel once for all tests in this module."""
     torch = pytest.importorskip("torch")
     example = _dyn_valid_shape_example()
 
@@ -302,7 +304,7 @@ def jit_loop_mlir() -> str:
 
 @pytest.fixture(scope="module")
 def jit_scalar_param_mlir() -> str:
-    """Codegen the @pl.jit_specializer scalar-parameter kernel (the specialized-constant form)."""
+    """Codegen the @pl.jit scalar-parameter kernel (the specialized-constant form)."""
     torch = pytest.importorskip("torch")
     example = _dyn_valid_shape_example()
 

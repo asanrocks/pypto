@@ -65,12 +65,14 @@ class LoopCarriedAdd:
         output: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
     ) -> pl.Tensor[[64, 64], pl.FP32]:
         acc: pl.Tile[[64, 64], pl.FP32] = pl.load(a, [0, 0], [64, 64], target_memory=pl.MemorySpace.Vec)
-        for i, (acc_i,) in pl.range(n, init_values=(acc,)):
+        (acc_i,) = pl.intrin.carry(acc)
+        for i in pl.range(n):
             t: pl.Tile[[64, 64], pl.FP32] = pl.load(
                 a, [i * 64, 0], [64, 64], target_memory=pl.MemorySpace.Vec
             )
             acc_next: pl.Tile[[64, 64], pl.FP32] = pl.add(acc_i, t)
-            r = pl.yield_(acc_next)
+            pl.intrin.yield_(acc_next)
+        (r,) = pl.intrin.leak()
         out: pl.Tensor[[64, 64], pl.FP32] = pl.store(r, [0, 0], output)
         return out
 
@@ -86,11 +88,13 @@ class StationaryMatmulLoop:
         rhs: pl.Tensor[[128, 256], pl.BF16],
         output: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
     ) -> pl.Tensor[[16, 256], pl.FP32]:
-        for n, (acc,) in pl.range(0, 256, 128, init_values=(output,)):
+        (acc,) = pl.intrin.carry(output)
+        for n in pl.range(0, 256, 128):
             rhs_n: pl.Tensor[[128, 128], pl.BF16] = pl.slice(rhs, [128, 128], [0, n])
             c_n: pl.Tensor[[16, 128], pl.FP32] = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
             acc_next: pl.Tensor[[16, 256], pl.FP32] = pl.assemble(acc, c_n, [0, n])
-            result = pl.yield_(acc_next)
+            pl.intrin.yield_(acc_next)
+        (result,) = pl.intrin.leak()
         return result
 
     @pl.function(type=pl.FunctionType.Orchestration)
@@ -115,11 +119,13 @@ class StationaryMatmulPipelinedK:
         rhs: pl.Tensor[[512, 256], pl.BF16],
         output: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
     ) -> pl.Tensor[[16, 256], pl.FP32]:
-        for n, (acc,) in pl.range(0, 256, 128, init_values=(output,)):
+        (acc,) = pl.intrin.carry(output)
+        for n in pl.range(0, 256, 128):
             rhs_n: pl.Tensor[[512, 128], pl.BF16] = pl.slice(rhs, [512, 128], [0, n])
             c_n: pl.Tensor[[16, 128], pl.FP32] = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
             acc_next: pl.Tensor[[16, 256], pl.FP32] = pl.assemble(acc, c_n, [0, n])
-            result = pl.yield_(acc_next)
+            pl.intrin.yield_(acc_next)
+        (result,) = pl.intrin.leak()
         return result
 
     @pl.function(type=pl.FunctionType.Orchestration)

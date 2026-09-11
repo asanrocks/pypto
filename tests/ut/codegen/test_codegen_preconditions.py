@@ -76,9 +76,11 @@ def test_device_kernel_rejects_descending_loop():
             out: pl.Out[pl.Tensor[[n, n], pl.FP32]],
         ) -> pl.Tensor[[n, n], pl.FP32]:
             acc: pl.Tile[[n, n], pl.FP32] = pl.load(x, [0, 0], [n, n])
-            for _i, (acc,) in pl.range(8, 0, -1, init_values=(acc,)):
+            (acc,) = pl.intrin.carry(acc)
+            for _i in pl.range(8, 0, -1):
                 acc = pl.add(acc, acc)
-                acc = pl.yield_(acc)
+                pl.intrin.yield_(acc)
+            (acc,) = pl.intrin.leak()
             return pl.store(acc, [0, 0], out)
 
     backend.reset_for_testing()
@@ -306,9 +308,11 @@ def test_device_kernel_accepts_ascending_loop():
             out: pl.Out[pl.Tensor[[n, n], pl.FP32]],
         ) -> pl.Tensor[[n, n], pl.FP32]:
             acc: pl.Tile[[n, n], pl.FP32] = pl.load(x, [0, 0], [n, n])
-            for _i, (acc,) in pl.range(0, 8, 1, init_values=(acc,)):
+            (acc,) = pl.intrin.carry(acc)
+            for _i in pl.range(0, 8, 1):
                 acc = pl.add(acc, acc)
-                acc = pl.yield_(acc)
+                pl.intrin.yield_(acc)
+            (acc,) = pl.intrin.leak()
             return pl.store(acc, [0, 0], out)
 
     backend.reset_for_testing()

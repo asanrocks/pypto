@@ -103,9 +103,11 @@ def test_trivial_carry_is_not_a_rebind():
             x: pl.Tensor[[N, M], pl.FP32],
             out: pl.Out[pl.Tensor[[N, M], pl.FP32]],
         ) -> pl.Tensor[[N, M], pl.FP32]:
-            for _i, (acc,) in pl.range(0, 4, init_values=(out,)):
+            (acc,) = pl.intrin.carry(out)
+            for _i in pl.range(0, 4):
                 acc2: pl.Tensor[[N, M], pl.FP32] = self.accumulate(x, acc)
-                (out,) = pl.yield_(acc2)
+                pl.intrin.yield_(acc2)
+            (out,) = pl.intrin.leak()
             return out
 
     loops = _for_stmts(_orch_func(_classify(Prog)).body)
@@ -144,10 +146,12 @@ def test_fresh_tensor_yield_is_a_rebind():
             seed: pl.Tensor[[N, M], pl.FP32],
             out: pl.Out[pl.Tensor[[N, M], pl.FP32]],
         ) -> pl.Tensor[[N, M], pl.FP32]:
-            for _i, (acc,) in pl.range(0, 4, init_values=(seed,)):
+            (acc,) = pl.intrin.carry(seed)
+            for _i in pl.range(0, 4):
                 fresh: pl.Tensor[[N, M], pl.FP32] = pl.create_tensor([N, M], dtype=pl.FP32)
                 fresh2: pl.Tensor[[N, M], pl.FP32] = self.produce(x, fresh)
-                (acc_rv,) = pl.yield_(fresh2)
+                pl.intrin.yield_(fresh2)
+            (acc_rv,) = pl.intrin.leak()
             out = self.consume(acc_rv, out)
             return out
 
@@ -322,10 +326,12 @@ def test_no_manual_scope_leaves_task_id_carry_unsized():
             seed: pl.Tensor[[N, M], pl.FP32],
             out: pl.Out[pl.Tensor[[N, M], pl.FP32]],
         ) -> pl.Tensor[[N, M], pl.FP32]:
-            for _i, (acc,) in pl.range(0, 4, init_values=(seed,)):
+            (acc,) = pl.intrin.carry(seed)
+            for _i in pl.range(0, 4):
                 fresh: pl.Tensor[[N, M], pl.FP32] = pl.create_tensor([N, M], dtype=pl.FP32)
                 fresh2: pl.Tensor[[N, M], pl.FP32] = self.kernel(x, fresh)
-                (_acc_rv,) = pl.yield_(fresh2)
+                pl.intrin.yield_(fresh2)
+            (_acc_rv,) = pl.intrin.leak()
             out = self.kernel(x, out)
             return out
 
@@ -357,9 +363,11 @@ def test_pass_is_idempotent():
             x: pl.Tensor[[N, M], pl.FP32],
             out: pl.Out[pl.Tensor[[N, M], pl.FP32]],
         ) -> pl.Tensor[[N, M], pl.FP32]:
-            for _i, (acc,) in pl.range(0, 4, init_values=(out,)):
+            (acc,) = pl.intrin.carry(out)
+            for _i in pl.range(0, 4):
                 acc2: pl.Tensor[[N, M], pl.FP32] = self.accumulate(x, acc)
-                (out,) = pl.yield_(acc2)
+                pl.intrin.yield_(acc2)
+            (out,) = pl.intrin.leak()
             return out
 
     once = _classify(Prog)

@@ -178,13 +178,17 @@ class TestForLoopYieldAdd(PTOTestCase):
                 b: pl.Tensor[[256, 64], pl.FP32],
                 c: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (acc,) in pl.range(4, init_values=(c,)):
+                # Loop-carried channel via the assembly dialect (pl.intrin.carry);
+                # the round-trip ``init_values=`` spelling is parser-owned.
+                (acc,) = pl.intrin.carry(c)
+                for i in pl.range(4):
                     offset_i = i * 64
                     tile_a: pl.Tile[[64, 64], pl.FP32] = pl.load(a, [offset_i, 0], [64, 64])
                     tile_b: pl.Tile[[64, 64], pl.FP32] = pl.load(b, [offset_i, 0], [64, 64])
                     tile_c: pl.Tile[[64, 64], pl.FP32] = pl.add(tile_a, tile_b)
-                    out: pl.Tensor[[256, 64], pl.FP32] = pl.store(tile_c, [offset_i, 0], acc)
-                    result = pl.yield_(out)
+                    acc = pl.store(tile_c, [offset_i, 0], acc)
+                    pl.intrin.yield_(acc)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -235,11 +239,13 @@ class TestForLoopYieldTileAccum(PTOTestCase):
                 c: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
             ) -> pl.Tensor[[64, 64], pl.FP32]:
                 tile_init: pl.Tile[[64, 64], pl.FP32] = pl.load(a, [0, 0], [64, 64])
-                for i, (acc,) in pl.range(1, 4, init_values=(tile_init,)):
+                (acc,) = pl.intrin.carry(tile_init)
+                for i in pl.range(1, 4):
                     offset_i = i * 64
                     tile_a: pl.Tile[[64, 64], pl.FP32] = pl.load(a, [offset_i, 0], [64, 64])
-                    new_acc: pl.Tile[[64, 64], pl.FP32] = pl.add(acc, tile_a)
-                    result = pl.yield_(new_acc)
+                    acc = pl.add(acc, tile_a)
+                    pl.intrin.yield_(acc)
+                (result,) = pl.intrin.leak()
                 out: pl.Tensor[[64, 64], pl.FP32] = pl.store(result, [0, 0], c)
                 return out
 

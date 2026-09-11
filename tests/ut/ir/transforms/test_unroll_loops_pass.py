@@ -171,12 +171,14 @@ class TestNestedLoops:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32], n: pl.Scalar[pl.INT64]) -> pl.Tensor[[64], pl.FP32]:
-                for j, (x_iter,) in pl.range(n, init_values=(x,)):
+                (x_iter,) = pl.intrin.carry(x)
+                for j in pl.range(n):
                     x_0: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, 1.0)
                     x_1: pl.Tensor[[64], pl.FP32] = pl.add(x_0, 1.0)
-                    x_rv = pl.yield_(x_1)
+                    pl.intrin.yield_(x_1)
+                (x_rv,) = pl.intrin.leak()
                 return x_rv
 
         After = _unroll_and_ssa(Before)
@@ -255,9 +257,11 @@ class TestParserValidation:
             class _:
                 @pl.function
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                    for i, (acc,) in pl.unroll(3, init_values=(x,)):
+                    (acc,) = pl.intrin.carry(x)
+                    for i in pl.unroll(3):
                         acc = pl.add(acc, 1.0)
-                        acc = pl.yield_(acc)
+                        pl.intrin.yield_(acc)
+                    (acc,) = pl.intrin.leak()
                     return x
 
 

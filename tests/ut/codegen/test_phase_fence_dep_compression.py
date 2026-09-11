@@ -123,14 +123,16 @@ class TestPhaseFenceDepCompressionCodegen:
             ) -> pl.Tensor[[rows, cols], pl.FP32]:
                 with pl.manual_scope():
                     tids = pl.array.create(branches, pl.TASK_ID)
-                    for phase, (tids_iter,) in pl.range(3, init_values=(tids,)):
+                    (tids_iter,) = pl.intrin.carry(tids)
+                    for phase in pl.range(3):
                         tids_next = pl.array.create(branches, pl.TASK_ID)
                         row: pl.Scalar[pl.INDEX] = phase * tile_r
                         for branch in pl.parallel(branches):
                             col: pl.Scalar[pl.INDEX] = branch * tile_c
                             out, tid = pl.submit(self.kern, x, out, row, col, deps=[tids_iter])
                             tids_next[branch] = tid
-                        tids = pl.yield_(tids_next)
+                        pl.intrin.yield_(tids_next)
+                    (tids,) = pl.intrin.leak()
                 return out
 
         code = _compile_program(Prog)
@@ -151,12 +153,12 @@ class TestPhaseFenceDepCompressionCodegen:
             ) -> pl.Tensor[[rows, cols], pl.FP32]:
                 with pl.manual_scope():
                     tids = pl.array.create(branches, pl.TASK_ID)
-                    for phase, (tids_iter, out_iter) in pl.range(3, init_values=(tids, out)):
+                    (tids_iter, out_iter) = pl.intrin.carry(tids, out)
+                    for phase in pl.range(3):
                         tids_next = pl.array.create(branches, pl.TASK_ID)
                         row: pl.Scalar[pl.INDEX] = phase * tile_r
-                        for branch, (out_branch, tids_next_iter) in pl.parallel(
-                            branches, init_values=(out_iter, tids_next)
-                        ):
+                        (out_branch, tids_next_iter) = pl.intrin.carry(out_iter, tids_next)
+                        for branch in pl.parallel(branches):
                             col: pl.Scalar[pl.INDEX] = branch * tile_c
                             with pl.at(
                                 level=pl.Level.CORE_GROUP, name_hint="phase_tile", deps=[tids_iter]
@@ -167,8 +169,10 @@ class TestPhaseFenceDepCompressionCodegen:
                                 r: pl.Tile[[tile_r, tile_c], pl.FP32] = pl.add(t, t)
                                 out_next = pl.store(r, [row, col], out_branch)
                             tids_next_out = pl.array.update_element(tids_next_iter, branch, tid)
-                            out_branch_out, tids_branch_out = pl.yield_(out_next, tids_next_out)
-                        tids, out = pl.yield_(tids_branch_out, out_branch_out)
+                            pl.intrin.yield_(out_next, tids_next_out)
+                        (out_branch_out, tids_branch_out) = pl.intrin.leak()
+                        pl.intrin.yield_(tids_branch_out, out_branch_out)
+                    (tids, out) = pl.intrin.leak()
                 return out
 
         code = _compile_program(Prog)
@@ -202,8 +206,10 @@ class TestPhaseFenceDepCompressionCodegen:
             ) -> pl.Tensor[[rows, cols], pl.FP32]:
                 with pl.manual_scope():
                     tids = pl.array.create(branches, pl.TASK_ID)
-                    for epoch, (tids_epoch,) in pl.range(2, init_values=(tids,)):
-                        for phase, (tids_iter,) in pl.range(3, init_values=(tids_epoch,)):
+                    (tids_epoch,) = pl.intrin.carry(tids)
+                    for epoch in pl.range(2):
+                        (tids_iter,) = pl.intrin.carry(tids_epoch)
+                        for phase in pl.range(3):
                             tids_next = pl.array.create(branches, pl.TASK_ID)
                             base: pl.Scalar[pl.INDEX] = (epoch * 3 + phase) * branches
                             for branch in pl.parallel(branches):
@@ -211,8 +217,10 @@ class TestPhaseFenceDepCompressionCodegen:
                                 col: pl.Scalar[pl.INDEX] = branch * tile_c
                                 out, tid = pl.submit(self.kern, x, out, row, col, deps=[tids_iter])
                                 tids_next[branch] = tid
-                            tids_phase = pl.yield_(tids_next)
-                        tids = pl.yield_(tids_phase)
+                            pl.intrin.yield_(tids_next)
+                        (tids_phase,) = pl.intrin.leak()
+                        pl.intrin.yield_(tids_phase)
+                    (tids,) = pl.intrin.leak()
                 return out
 
         code = _compile_program(Prog)
@@ -309,13 +317,11 @@ class TestPhaseFenceDepCompressionCodegen:
             def main(self, scratch: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 carried = scratch
                 last_tid = pl.system.task_invalid()
-                for _i, (carried_iter, last_tid_iter) in pl.range(
-                    0,
-                    4,
-                    init_values=(carried, last_tid),  # pyright: ignore[reportArgumentType]
-                ):
+                (carried_iter, last_tid_iter) = pl.intrin.carry(carried, last_tid)
+                for _i in pl.range(0, 4):
                     carried_iter, last_tid_iter = pl.submit(self.fill, carried_iter)
-                    carried, last_tid = pl.yield_(carried_iter, last_tid_iter)
+                    pl.intrin.yield_(carried_iter, last_tid_iter)
+                (carried, last_tid) = pl.intrin.leak()
                 for _j in pl.range(0, 4):
                     carried = self.consume(carried)
                 return carried
@@ -354,13 +360,11 @@ class TestPhaseFenceDepCompressionCodegen:
             ) -> pl.Tensor[[64], pl.FP32]:
                 carried = scratch
                 last_tid = pl.system.task_invalid()
-                for _i, (carried_iter, last_tid_iter) in pl.range(
-                    0,
-                    4,
-                    init_values=(carried, last_tid),  # pyright: ignore[reportArgumentType]
-                ):
+                (carried_iter, last_tid_iter) = pl.intrin.carry(carried, last_tid)
+                for _i in pl.range(0, 4):
                     carried_iter, last_tid_iter = pl.submit(self.fill, carried_iter)
-                    carried, last_tid = pl.yield_(carried_iter, last_tid_iter)
+                    pl.intrin.yield_(carried_iter, last_tid_iter)
+                (carried, last_tid) = pl.intrin.leak()
 
                 gate, _gate_tid = pl.submit(self.fill, gate_scratch)
                 for _j in pl.range(0, 4):
@@ -529,8 +533,8 @@ class TestPhaseFenceDepCompressionCodegen:
                         out, _ = pl.submit(self.kern, x, out, row_cross, col_cross, deps=[tids_a])
 
                     prev = tids_a[0]
-                    row_scalar: pl.Scalar[pl.INDEX] = 21 * tile_r
-                    row_fanin: pl.Scalar[pl.INDEX] = 22 * tile_r
+                    row_scalar = 21 * tile_r
+                    row_fanin = 22 * tile_r
                     out, _ = pl.submit(self.kern, x, out, row_scalar, 0, deps=[prev])
                     out, _ = pl.submit(self.kern, x, out, row_fanin, 0, deps=[tids_b])
                 return out

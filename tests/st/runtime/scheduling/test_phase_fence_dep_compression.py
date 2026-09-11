@@ -170,9 +170,12 @@ def _build_submit_flattened_program(*, epochs: int, layers: int, phases: int):
         ) -> pl.Tensor[[big_m, big_n], pl.FP32]:
             with pl.manual_scope():
                 tids = pl.array.create(branches, pl.TASK_ID)
-                for epoch, (tids_epoch,) in pl.range(epochs, init_values=(tids,)):
-                    for layer, (tids_layer,) in pl.range(layers, init_values=(tids_epoch,)):
-                        for phase, (tids_iter,) in pl.range(phases, init_values=(tids_layer,)):
+                (tids_epoch,) = pl.intrin.carry(tids)
+                for epoch in pl.range(epochs):
+                    (tids_layer,) = pl.intrin.carry(tids_epoch)
+                    for layer in pl.range(layers):
+                        (tids_iter,) = pl.intrin.carry(tids_layer)
+                        for phase in pl.range(phases):
                             stage: pl.Scalar[pl.INDEX] = (epoch * layers + layer) * phases + phase
                             tids_next = pl.array.create(branches, pl.TASK_ID)
                             for branch in pl.parallel(branches):
@@ -181,9 +184,12 @@ def _build_submit_flattened_program(*, epochs: int, layers: int, phases: int):
                                     self.kernel_stripe, data, row, 1.0, out, deps=[tids_iter]
                                 )
                                 tids_next[branch] = tid
-                            tids_phase = pl.yield_(tids_next)
-                        tids_layer_out = pl.yield_(tids_phase)
-                    tids = pl.yield_(tids_layer_out)
+                            pl.intrin.yield_(tids_next)
+                        (tids_phase,) = pl.intrin.leak()
+                        pl.intrin.yield_(tids_phase)
+                    (tids_layer_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(tids_layer_out)
+                (tids,) = pl.intrin.leak()
             return out
 
     return SubmitFlattenedPhaseFence
@@ -206,13 +212,14 @@ def _build_pl_at_flattened_program(*, epochs: int, phases: int):
         ) -> pl.Tensor[[big_m, big_n], pl.FP32]:
             with pl.manual_scope():
                 tids = pl.array.create(branches, pl.TASK_ID)
-                for epoch, (tids_epoch, out_epoch) in pl.range(epochs, init_values=(tids, out)):
-                    for phase, (tids_iter, out_iter) in pl.range(phases, init_values=(tids_epoch, out_epoch)):
+                (tids_epoch, out_epoch) = pl.intrin.carry(tids, out)
+                for epoch in pl.range(epochs):
+                    (tids_iter, out_iter) = pl.intrin.carry(tids_epoch, out_epoch)
+                    for phase in pl.range(phases):
                         stage: pl.Scalar[pl.INDEX] = epoch * phases + phase
                         tids_next = pl.array.create(branches, pl.TASK_ID)
-                        for branch, (out_branch, tids_next_iter) in pl.parallel(
-                            branches, init_values=(out_iter, tids_next)
-                        ):
+                        (out_branch, tids_next_iter) = pl.intrin.carry(out_iter, tids_next)
+                        for branch in pl.parallel(branches):
                             row: pl.Scalar[pl.INDEX] = (stage * branches + branch) * tile_m
                             with pl.at(
                                 level=pl.Level.CORE_GROUP, name_hint="phase_tile", deps=[tids_iter]
@@ -223,9 +230,12 @@ def _build_pl_at_flattened_program(*, epochs: int, phases: int):
                                 result: pl.Tile[[tile_m, big_n], pl.FP32] = pl.add(tile, 1.0)
                                 out_next = pl.store(result, [row, 0], out_branch)
                             tids_next_out = pl.array.update_element(tids_next_iter, branch, tid)
-                            out_branch_out, tids_branch_out = pl.yield_(out_next, tids_next_out)
-                        tids_phase, out_phase = pl.yield_(tids_branch_out, out_branch_out)
-                    tids, out = pl.yield_(tids_phase, out_phase)
+                            pl.intrin.yield_(out_next, tids_next_out)
+                        (out_branch_out, tids_branch_out) = pl.intrin.leak()
+                        pl.intrin.yield_(tids_branch_out, out_branch_out)
+                    (tids_phase, out_phase) = pl.intrin.leak()
+                    pl.intrin.yield_(tids_phase, out_phase)
+                (tids, out) = pl.intrin.leak()
             return out
 
     return PlAtFlattenedPhaseFence
@@ -366,13 +376,15 @@ def _build_manual_dummy_auto_mix_program():
                     row: pl.Scalar[pl.INDEX] = (branches + branch) * tile_m
                     out, _ = pl.submit(self.kernel_stripe, data, row, out, deps=[user_barrier])
 
-                for branch, (out_branch,) in pl.parallel(branches, init_values=(out,)):
+                (out_branch,) = pl.intrin.carry(out)
+                for branch in pl.parallel(branches):
                     row = (2 * branches + branch) * tile_m
                     with pl.at(level=pl.Level.CORE_GROUP, name_hint="auto_mix_tile", deps=[tids]):
                         tile: pl.Tile[[tile_m, big_n], pl.FP32] = pl.load(data, [row, 0], [tile_m, big_n])
                         result: pl.Tile[[tile_m, big_n], pl.FP32] = pl.add(tile, 1.0)
-                        out_next = pl.store(result, [row, 0], out_branch)
-                    out = pl.yield_(out_next)
+                        out_branch = pl.store(result, [row, 0], out_branch)
+                    pl.intrin.yield_(out_branch)
+                (out,) = pl.intrin.leak()
             return out
 
     return ManualDummyAutoMixPhaseFence
@@ -407,14 +419,16 @@ def _build_if_consumer_program():
         ) -> pl.Tensor[[big_m, big_n], pl.FP32]:
             with pl.manual_scope():
                 tids = pl.array.create(branches, pl.TASK_ID)
-                for phase, (tids_phase,) in pl.range(phases, init_values=(tids,)):
+                (tids_phase,) = pl.intrin.carry(tids)
+                for phase in pl.range(phases):
                     tids_next = pl.array.create(branches, pl.TASK_ID)
                     for branch in pl.parallel(branches):
                         if branch >= 0:
                             row: pl.Scalar[pl.INDEX] = (phase * branches + branch) * tile_m
                             out, tid = pl.submit(self.kernel_stripe, data, row, out, deps=[tids_phase])
                             tids_next[branch] = tid
-                    tids = pl.yield_(tids_next)
+                    pl.intrin.yield_(tids_next)
+                (tids,) = pl.intrin.leak()
             return out
 
     return IfConsumerPhaseFence

@@ -114,7 +114,8 @@ def _build_allreduce_program(
             UB-sized remote_load+accumulate / barrier / store-back chunks.
             """
             # Phase 1 (stage-in) — copy local input into this rank's window slot.
-            for col, (data_iter,) in pl.range(0, sz, stage_cols, init_values=(data,)):
+            (data_iter,) = pl.intrin.carry(data)
+            for col in pl.range(0, sz, stage_cols):
                 valid = pl.min(stage_cols, sz - col)
                 local = pl.load(
                     inp,
@@ -123,7 +124,8 @@ def _build_allreduce_program(
                     valid_shape=[1, valid],
                 )
                 data_iter = pl.store(local, [0, col], data_iter)
-                staged_data = pl.yield_(data_iter)
+                pl.intrin.yield_(data_iter)
+            (staged_data,) = pl.intrin.leak()
 
             # Phases 2-4 (barrier + cross-rank reduce + write-back) — one call.
             # The composite rebinds `data` (in-place semantics, same as
@@ -131,7 +133,8 @@ def _build_allreduce_program(
             data = pld.tensor.allreduce(staged_data, signal, op=REDUCE_OP)
 
             # Stage-out — reduced chunks → local output.
-            for col, (out_iter,) in pl.range(0, sz, stage_cols, init_values=(out,)):
+            (out_iter,) = pl.intrin.carry(out)
+            for col in pl.range(0, sz, stage_cols):
                 valid = pl.min(stage_cols, sz - col)
                 acc = pl.load(
                     data,
@@ -140,7 +143,8 @@ def _build_allreduce_program(
                     valid_shape=[1, valid],
                 )
                 out_iter = pl.store(acc, [0, col], out_iter)
-                staged_out = pl.yield_(out_iter)
+                pl.intrin.yield_(out_iter)
+            (staged_out,) = pl.intrin.leak()
             return staged_out
 
         @pl.function(type=pl.FunctionType.Orchestration)

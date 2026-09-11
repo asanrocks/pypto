@@ -120,8 +120,8 @@ def _build_expected(
             # literal ``pl.Mem.<space>``, not the ``space`` parameter. The memory
             # space still reaches the IR through the ``target_memory`` kwarg.
             acc = pl.tile.create(out_shape, dtype=src_dtype, target_memory=space)
-            for pg_i, (acc_iter,) in pl.range(pg_rows, init_values=(acc,)):
-                # Only index/page-table metadata is scalar-read from GM.
+            (acc_iter,) = pl.intrin.carry(acc)
+            for pg_i in pl.range(pg_rows):
                 idx_raw: pl.Scalar[pl.INT32] = pl.tensor.read(idx, [pg_i])
                 pg_idx: pl.Scalar[pl.INDEX] = pl.cast(idx_raw, target_type=pl.INDEX)
                 pg_blk: pl.Scalar[pl.INDEX] = pg_idx // 128
@@ -131,7 +131,8 @@ def _build_expected(
                 pg_phys: pl.Scalar[pl.INDEX] = pg_pblk * 128 + pg_rem
                 # Bulk KV goes GM->on-chip straight into the accumulator sub-region.
                 pg_row = pl.tile.gather_row(acc_iter, src, [pg_i, 0], [pg_phys, 0], [1, 128], transpose=False)
-                pg_res = pl.yield_(pg_row)
+                pl.intrin.yield_(pg_row)
+            (pg_res,) = pl.intrin.leak()
             out_tile = pg_res
             ret_store: pl.Tensor[out_shape, src_dtype] = pl.tile.store(out_tile, [0, 0], ret_out)
             return ret_store
@@ -190,7 +191,8 @@ def test_paged_gather_transpose_swaps_output_and_load():
             acc: pl.Tile[[128, 16], pl.FP16, pl.Mem.Mat] = pl.tile.create(
                 [128, 16], dtype=pl.FP16, target_memory=pl.Mem.Mat
             )
-            for pg_i, (acc_iter,) in pl.range(pg_rows, init_values=(acc,)):
+            (acc_iter,) = pl.intrin.carry(acc)
+            for pg_i in pl.range(pg_rows):
                 idx_raw: pl.Scalar[pl.INT32] = pl.tensor.read(idx, [pg_i])
                 pg_idx: pl.Scalar[pl.INDEX] = pl.cast(idx_raw, target_type=pl.INDEX)
                 pg_blk: pl.Scalar[pl.INDEX] = pg_idx // 128
@@ -202,7 +204,8 @@ def test_paged_gather_transpose_swaps_output_and_load():
                 pg_row: pl.Tile[[128, 16], pl.FP16, pl.Mem.Mat] = pl.tile.gather_row(
                     acc_iter, src, [0, pg_i], [pg_phys, 0], [1, 128], transpose=True
                 )
-                pg_res = pl.yield_(pg_row)
+                pl.intrin.yield_(pg_row)
+            (pg_res,) = pl.intrin.leak()
             out_tile: pl.Tile[[128, 16], pl.FP16, pl.Mem.Mat] = pg_res
             ret_store: pl.Tensor[[128, 16], pl.FP16] = pl.tile.store(out_tile, [0, 0], ret_out)
             return ret_store

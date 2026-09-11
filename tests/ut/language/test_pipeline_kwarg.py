@@ -19,7 +19,6 @@ from typing import cast
 import pypto.language as pl
 import pytest
 from pypto import ir
-from pypto.language.parser.diagnostics import ParserSyntaxError
 
 
 def _outer_for(program: ir.Program) -> ir.ForStmt:
@@ -80,9 +79,11 @@ class TestPipelineKwargParser:
         class P:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                for i, (acc,) in pl.pipeline(8, stage=2, init_values=(x,)):
+                (acc,) = pl.intrin.carry(x)
+                for i in pl.pipeline(8, stage=2):
                     acc = pl.add(acc, 1.0)
-                    acc_rv = pl.yield_(acc)
+                    pl.intrin.yield_(acc)
+                (acc_rv,) = pl.intrin.leak()
                 return acc_rv
 
         fs = _outer_for(P)
@@ -110,10 +111,16 @@ class TestPipelineKwargParser:
 
 
 class TestPipelineKwargRejection:
-    """The parser must reject invalid pl.pipeline calls with clear errors."""
+    """Invalid ``pl.pipeline`` calls are rejected at trace time with clear errors.
+
+    Under tracing the construct itself is the guardrail: a missing ``stage``
+    or a misplaced kwarg is unrepresentable (Python's own signature error),
+    and a bad ``stage`` *value* is pinned by ``pl.pipeline`` at construction —
+    native exceptions, per the dialect's host-semantics rule. The parser's
+    textual counterparts live in the parser corpus."""
 
     def test_missing_stage_rejected(self):
-        with pytest.raises(ParserSyntaxError, match=r"pl\.pipeline\(\) requires stage="):
+        with pytest.raises(TypeError, match=r"required keyword-only argument: 'stage'"):
 
             @pl.program
             class _P:
@@ -124,7 +131,7 @@ class TestPipelineKwargRejection:
                     return x
 
     def test_stage_zero_rejected(self):
-        with pytest.raises(ParserSyntaxError, match=r"pl\.pipeline\(\) stage must be >= 1"):
+        with pytest.raises(ValueError, match=r"stage must be a positive integer"):
 
             @pl.program
             class _P:
@@ -135,7 +142,7 @@ class TestPipelineKwargRejection:
                     return x
 
     def test_stage_negative_rejected(self):
-        with pytest.raises(ParserSyntaxError, match=r"pl\.pipeline\(\) stage must be >= 1"):
+        with pytest.raises(ValueError, match=r"stage must be a positive integer"):
 
             @pl.program
             class _P:
@@ -146,8 +153,8 @@ class TestPipelineKwargRejection:
                     return x
 
     def test_stage_runtime_value_rejected(self):
-        """Non-constant ``stage`` is rejected by the parser (must be a literal int)."""
-        with pytest.raises(ParserSyntaxError, match=r"stage must be a compile-time constant"):
+        """Non-constant ``stage`` is pinned at construction (must be a literal int)."""
+        with pytest.raises(ValueError, match=r"stage must be a positive integer"):
 
             @pl.program
             class _P:
@@ -160,7 +167,7 @@ class TestPipelineKwargRejection:
                     return x
 
     def test_stage_on_range_rejected(self):
-        with pytest.raises(ParserSyntaxError, match=r"stage= is only supported on pl\.pipeline"):
+        with pytest.raises(TypeError, match=r"unexpected keyword argument 'stage'"):
 
             @pl.program
             class _P:
@@ -171,7 +178,7 @@ class TestPipelineKwargRejection:
                     return x
 
     def test_stage_on_unroll_rejected(self):
-        with pytest.raises(ParserSyntaxError, match=r"stage= is only supported on pl\.pipeline"):
+        with pytest.raises(TypeError, match=r"unexpected keyword argument 'stage'"):
 
             @pl.program
             class _P:

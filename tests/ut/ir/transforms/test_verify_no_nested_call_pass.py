@@ -117,17 +117,20 @@ def test_nested_calls_in_control_flow():
         @pl.function(strict_ssa=True)
         def main(self, x0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             r0: pl.Tensor[[64], pl.FP32] = x0
-            for i0, (r1,) in pl.range(5, init_values=(r0,)):
+            (r1,) = pl.intrin.carry(r0)
+            for i0 in pl.range(5):
                 tmp0: pl.Tensor[[64], pl.FP32] = pl.tensor.muls(r1, 2.0)
                 tmp1: pl.Tensor[[64], pl.FP32] = pl.tensor.exp(x0)
                 temp0: pl.Tensor[[64], pl.FP32] = pl.tensor.add(tmp0, tmp1)
                 if i0 > 2:
                     r2: pl.Tensor[[64], pl.FP32] = temp0
-                    r3: pl.Tensor[[64], pl.FP32] = pl.yield_(r2)
+                    pl.intrin.yield_(r2)
                 else:
                     r4: pl.Tensor[[64], pl.FP32] = pl.tensor.adds(temp0, 1.0)
-                    r3: pl.Tensor[[64], pl.FP32] = pl.yield_(r4)
-                r5: pl.Tensor[[64], pl.FP32] = pl.yield_(r3)
+                    pl.intrin.yield_(r4)
+                (r3,) = pl.intrin.leak()
+                pl.intrin.yield_(r3)
+            (r5,) = pl.intrin.leak()
             return r5
 
     After = passes.flatten_call_expr()(passes.convert_to_ssa()(Before))

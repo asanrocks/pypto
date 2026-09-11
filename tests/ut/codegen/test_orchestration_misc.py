@@ -867,7 +867,7 @@ class TestTupleReturnNameHintCollision:
         # tmp_first and tmp_second share the name_hint "ret__tmp_v0"; the tuple
         # metadata must still attach each call's elements to that call. Each
         # element is the in-place Out arg of its call, so it remaps to that arg
-        # (no ``const Tensor& first_a = ...`` alias is minted). The consumer
+        # (no ``const Tensor& first_a = ...`` alias is created). The consumer
         # reading first_a/second_a/first_b/second_b therefore reads call_a's
         # outs then call_b's outs, in order — not cross-contaminated.
         i_a1 = code.index("// Task 2: kernel_consume")
@@ -1014,7 +1014,7 @@ class TestScalarCarryPhiCodegen:
                 lens: pl.Tensor[[8], pl.INT64],
                 d: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
             ) -> pl.Tensor[[16, 16], pl.FP32]:
-                max_bn: pl.Scalar[pl.INT64] = 0
+                max_bn = pl.const(0, pl.INT64)
                 for b in pl.range(8):
                     bn_b = pl.tensor.read(lens, [b])
                     max_bn = pl.max(max_bn, bn_b)
@@ -1065,9 +1065,11 @@ class TestScalarCarryPhiCodegen:
                 a: pl.Tensor[[16, 16], pl.FP32],
                 d: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
             ) -> pl.Tensor[[16, 16], pl.FP32]:
-                for _k, (acc,) in pl.range(8, init_values=(4,)):
+                (acc,) = pl.intrin.carry(pl.const(4, pl.INT64))
+                for _k in pl.range(8):
                     d = self.kernel_add(a, d)
-                    acc_out: pl.Scalar[pl.INT64] = pl.yield_(acc)
+                    pl.intrin.yield_(acc)
+                (acc_out,) = pl.intrin.leak()
                 for _ in pl.range(acc_out):
                     d = self.kernel_add(a, d)
                 return d

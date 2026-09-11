@@ -12,6 +12,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 from typing import cast
 
@@ -130,14 +131,20 @@ def _run_auto_deps_debug_subprocess(program_source: str) -> subprocess.Completed
         + body
         + "\n"
     )
-    return subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=repo_root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as source_file:
+        source_file.write(script)
+        source_path = source_file.name
+    try:
+        return subprocess.run(
+            [sys.executable, source_path],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        os.unlink(source_path)
 
 
 class TestAutoDeriveTaskDependencies:
@@ -489,7 +496,7 @@ class TestAutoDeriveTaskDependencies:
                 scratch: pl.Tensor[[64], pl.FP32],
                 src: pl.Tensor[[4, 16], pl.FP32],
                 index: pl.Tensor[[4, 8], pl.INT32],
-            ) -> pl.Tensor[[4, 8], pl.FP32]:
+            ) -> pl.Tensor[[64], pl.FP32]:
                 with pl.scope(mode=pl.ScopeMode.AUTO):
                     produced, _producer_tid = pl.submit(self.fill, scratch)
                     produced = self.fill(produced)
@@ -979,9 +986,10 @@ class TestAutoDeriveTaskDependencies:
                 with pl.scope(mode=pl.ScopeMode.AUTO):
                     produced, producer_tid = pl.submit(self.fill, scratch)
                     if cond:
-                        selected = pl.yield_(produced)
+                        pl.intrin.yield_(produced)
                     else:
-                        selected = pl.yield_(produced)
+                        pl.intrin.yield_(produced)
+                    (selected,) = pl.intrin.leak()
                     out, _ = pl.submit(self.consume, selected)
                 return out
 
@@ -1016,9 +1024,10 @@ class TestAutoDeriveTaskDependencies:
                     produced_left, left_tid = pl.submit(self.fill, left)
                     produced_right, right_tid = pl.submit(self.fill, right)
                     if cond:
-                        selected = pl.yield_(produced_left)
+                        pl.intrin.yield_(produced_left)
                     else:
-                        selected = pl.yield_(produced_right)
+                        pl.intrin.yield_(produced_right)
+                    (selected,) = pl.intrin.leak()
                     out, _ = pl.submit(self.consume, selected)
                 return out
 
@@ -1050,8 +1059,10 @@ class TestAutoDeriveTaskDependencies:
                 with pl.scope(mode=pl.ScopeMode.AUTO):
                     produced_left, left_tid = pl.submit(self.fill, left)
                     produced_right, right_tid = pl.submit(self.fill, right)
-                    for _i, (selected_iter,) in pl.range(0, 4, init_values=(produced_left,)):
-                        selected = pl.yield_(produced_right)
+                    (selected_iter,) = pl.intrin.carry(produced_left)
+                    for _i in pl.range(0, 4):
+                        pl.intrin.yield_(produced_right)
+                    (selected,) = pl.intrin.leak()
                     out, _ = pl.submit(self.consume, selected)
                 return out
 
@@ -1086,9 +1097,10 @@ class TestAutoDeriveTaskDependencies:
                     produced, _producer_tid = pl.submit(self.fill, scratch)
                     dynamic = pl.tensor.gather(src, -1, index)
                     if cond:
-                        selected = pl.yield_(produced)
+                        pl.intrin.yield_(produced)
                     else:
-                        selected = pl.yield_(dynamic)
+                        pl.intrin.yield_(dynamic)
+                    (selected,) = pl.intrin.leak()
                     out, _ = pl.submit(self.consume, selected)
                 return out
 
@@ -1121,8 +1133,10 @@ class TestAutoDeriveTaskDependencies:
                 with pl.scope(mode=pl.ScopeMode.AUTO):
                     produced, _producer_tid = pl.submit(self.fill, scratch)
                     dynamic = pl.tensor.gather(src, -1, index)
-                    for _i, (selected_iter,) in pl.range(0, 4, init_values=(produced,)):
-                        selected = pl.yield_(dynamic)
+                    (selected_iter,) = pl.intrin.carry(produced)
+                    for _i in pl.range(0, 4):
+                        pl.intrin.yield_(dynamic)
+                    (selected,) = pl.intrin.leak()
                     out, _ = pl.submit(self.consume, selected)
                 return out
 
@@ -1264,13 +1278,11 @@ class TestAutoDeriveTaskDependencies:
             def main(self, scratch: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 carried = scratch
                 last_tid = pl.system.task_invalid()
-                for _i, (carried, last_tid) in pl.range(
-                    0,
-                    4,
-                    init_values=(carried, last_tid),  # pyright: ignore[reportArgumentType]
-                ):
+                (carried, last_tid) = pl.intrin.carry(carried, last_tid)
+                for _i in pl.range(0, 4):
                     carried, last_tid = pl.submit(self.fill, carried)
-                    carried, last_tid = pl.yield_(carried, last_tid)
+                    pl.intrin.yield_(carried, last_tid)
+                (carried, last_tid) = pl.intrin.leak()
                 out = self.consume(carried)
                 return out
 
@@ -1302,13 +1314,11 @@ class TestAutoDeriveTaskDependencies:
             ) -> pl.Tensor[[64], pl.FP32]:
                 carried = scratch
                 last_tid = pl.system.task_invalid()
-                for _i, (carried, last_tid) in pl.range(
-                    0,
-                    n_steps,
-                    init_values=(carried, last_tid),  # pyright: ignore[reportArgumentType]
-                ):
+                (carried, last_tid) = pl.intrin.carry(carried, last_tid)
+                for _i in pl.range(0, n_steps):
                     carried, last_tid = pl.submit(self.fill, carried)
-                    carried, last_tid = pl.yield_(carried, last_tid)
+                    pl.intrin.yield_(carried, last_tid)
+                (carried, last_tid) = pl.intrin.leak()
                 out = self.consume(carried)
                 return out
 
@@ -1341,10 +1351,11 @@ class TestAutoDeriveTaskDependencies:
                     scratch: pl.Tensor[[64], pl.FP32],
                     n_steps: pl.Scalar[pl.INDEX],
                 ) -> pl.Tensor[[64], pl.FP32]:
-                    carried = scratch
-                    for _i, (carried,) in pl.range(0, n_steps, init_values=(carried,)):
+                    (carried,) = pl.intrin.carry(scratch)
+                    for _i in pl.range(0, n_steps):
                         carried = self.fill(carried)
-                        carried = pl.yield_(carried)
+                        pl.intrin.yield_(carried)
+                    (carried,) = pl.intrin.leak()
                     out = self.consume(carried)
                     return out
 
@@ -1379,8 +1390,10 @@ class TestAutoDeriveTaskDependencies:
                 with pl.scope(mode=pl.ScopeMode.AUTO):
                     produced = self.fill(scratch)
                     carried = produced
-                    for _i, (carried,) in pl.range(0, n_steps, init_values=(carried,)):
-                        carried = pl.yield_(carried)
+                    (carried,) = pl.intrin.carry(carried)
+                    for _i in pl.range(0, n_steps):
+                        pl.intrin.yield_(carried)
+                    (carried,) = pl.intrin.leak()
                     out = self.consume(carried)
                 return out
 
@@ -1413,10 +1426,12 @@ class TestAutoDeriveTaskDependencies:
             ) -> pl.Tensor[[64], pl.FP32]:
                 with pl.scope(mode=pl.ScopeMode.AUTO):
                     carried = scratch
-                    for _i, (carried,) in pl.range(0, n_steps, init_values=(carried,)):
+                    (carried,) = pl.intrin.carry(carried)
+                    for _i in pl.range(0, n_steps):
                         produced = self.fill(carried)
                         carried = self.consume(produced)
-                        carried = pl.yield_(carried)
+                        pl.intrin.yield_(carried)
+                    (carried,) = pl.intrin.leak()
                 return carried
 
         out = _run_auto_deps(Prog, analyze_auto_scopes=True)
@@ -1447,13 +1462,11 @@ class TestAutoDeriveTaskDependencies:
                 n_steps: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[64], pl.FP32]:
                 carried = scratch
-                for _i, (carried,) in pl.range(
-                    0,
-                    n_steps,
-                    init_values=(carried,),
-                ):
+                (carried,) = pl.intrin.carry(carried)
+                for _i in pl.range(0, n_steps):
                     carried = self.fill(carried)
-                    carried = pl.yield_(carried)
+                    pl.intrin.yield_(carried)
+                (carried,) = pl.intrin.leak()
                 out = self.consume(carried)
                 return out
 
@@ -1483,13 +1496,11 @@ class TestAutoDeriveTaskDependencies:
                 n_steps: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[64], pl.FP32]:
                 carried = scratch
-                for _i, (carried,) in pl.parallel(
-                    0,
-                    n_steps,
-                    init_values=(carried,),
-                ):
+                (carried,) = pl.intrin.carry(carried)
+                for _i in pl.parallel(0, n_steps):
                     carried = self.fill(carried)
-                    carried = pl.yield_(carried)
+                    pl.intrin.yield_(carried)
+                (carried,) = pl.intrin.leak()
                 out = self.consume(carried)
                 return out
 
@@ -1521,15 +1532,15 @@ class TestAutoDeriveTaskDependencies:
                 n_steps: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[64], pl.FP32]:
                 carried = scratch
-                for _i, (carried,) in pl.range(0, 4, init_values=(carried,)):
-                    for _j, (inner_carried,) in pl.parallel(
-                        0,
-                        n_steps,
-                        init_values=(carried,),
-                    ):
+                (carried,) = pl.intrin.carry(carried)
+                for _i in pl.range(0, 4):
+                    (inner_carried,) = pl.intrin.carry(carried)
+                    for _j in pl.parallel(0, n_steps):
                         produced = self.fill(inner_carried)
-                        inner_carried = pl.yield_(produced)
-                    carried = pl.yield_(inner_carried)
+                        pl.intrin.yield_(produced)
+                    (inner_carried,) = pl.intrin.leak()
+                    pl.intrin.yield_(inner_carried)
+                (carried,) = pl.intrin.leak()
                 out = self.consume(carried)
                 return out
 
@@ -1560,13 +1571,11 @@ class TestAutoDeriveTaskDependencies:
                 right: pl.Tensor[[64], pl.FP32],
                 n_steps: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[64], pl.FP32]:
-                for _i, (left_carried, right_carried) in pl.range(
-                    0,
-                    n_steps,
-                    init_values=(left, right),
-                ):
+                (left_carried, right_carried) = pl.intrin.carry(left, right)
+                for _i in pl.range(0, n_steps):
                     left_carried, right_carried = self.fill_pair(left_carried, right_carried)
-                    left_carried, right_carried = pl.yield_(left_carried, right_carried)
+                    pl.intrin.yield_(left_carried, right_carried)
+                (left_carried, right_carried) = pl.intrin.leak()
                 out = self.consume(right_carried)
                 return out
 
@@ -1628,13 +1637,11 @@ class TestAutoDeriveTaskDependencies:
                 with pl.manual_scope():
                     carried = scratch
                     last_tid = None
-                    for _i, (carried, last_tid) in pl.range(
-                        0,
-                        4,
-                        init_values=(carried, last_tid),  # pyright: ignore[reportArgumentType]
-                    ):
+                    (carried, last_tid) = pl.intrin.carry(carried, last_tid)
+                    for _i in pl.range(0, 4):
                         carried, last_tid = pl.submit(self.fill, carried)
-                        carried, last_tid = pl.yield_(carried, last_tid)
+                        pl.intrin.yield_(carried, last_tid)
+                    (carried, last_tid) = pl.intrin.leak()
                     out, _ = pl.submit(self.consume, carried, deps=[last_tid])
                 return out
 
@@ -1879,7 +1886,7 @@ class TestAutoDeriveTaskDependencies:
                 scratch: pl.Tensor[[64], pl.FP32],
                 src: pl.Tensor[[4, 16], pl.FP32],
                 index: pl.Tensor[[4, 8], pl.INT32],
-            ) -> pl.Tensor[[4, 8], pl.FP32]:
+            ) -> pl.Tensor[[64], pl.FP32]:
                 with pl.scope(mode=pl.ScopeMode.AUTO):
                     produced, _producer_tid = pl.submit(self.fill, scratch)
                     _first, _ = pl.submit(self.consume, produced)
@@ -1988,9 +1995,11 @@ class TestAutoDeriveTaskDependencies:
 
             @pl.function(type=pl.FunctionType.Orchestration)
             def main(self, scratch: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                for _, (carried,) in pl.range(1, init_values=(scratch,)):
+                (carried,) = pl.intrin.carry(scratch)
+                for _ in pl.range(1):
                     produced = self.fill(carried)
-                    carried_next = pl.yield_(produced)
+                    pl.intrin.yield_(produced)
+                (carried_next,) = pl.intrin.leak()
                 out = self.consume(carried_next)
                 return out
 
@@ -2079,7 +2088,7 @@ class TestAutoDeriveTaskDependencies:
                 return x
 
             @pl.function(type=pl.FunctionType.Orchestration, auto_scope=False)
-            def main(self, scratch: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+            def main(self, scratch: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[4, 16], pl.FP32]:
                 with pl.scope():
                     produced = self.fill(scratch)
                 with pl.scope():
@@ -2162,7 +2171,7 @@ class TestAutoDeriveTaskDependencies:
                 self,
                 scratch: pl.Tensor[[4, 16], pl.FP32],
                 index: pl.Tensor[[4, 16], pl.INT32],
-            ) -> pl.Tensor[[4, 16], pl.FP32]:
+            ) -> pl.Tensor[[64], pl.FP32]:
                 with pl.scope():
                     dynamic = pl.tensor.gather(scratch, -1, index)
                     produced = self.fill(dynamic)
@@ -2229,10 +2238,12 @@ class TestAutoDeriveTaskDependencies:
             @pl.function(type=pl.FunctionType.Orchestration, auto_scope=False)
             def main(self, scratch: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 temp = pl.create_tensor([64], dtype=pl.FP32)
-                for _i, (carried,) in pl.range(0, 16, 16, init_values=(temp,)):
+                (carried,) = pl.intrin.carry(temp)
+                for _i in pl.range(0, 16, 16):
                     with pl.scope():
                         produced = self.fill(carried)
-                    produced = pl.yield_(produced)
+                    pl.intrin.yield_(produced)
+                (produced,) = pl.intrin.leak()
                 with pl.scope():
                     out = self.consume(produced)
                 return out
@@ -2264,9 +2275,11 @@ class TestAutoDeriveTaskDependencies:
                 later: pl.Tensor[[64], pl.FP32],
             ) -> pl.Tensor[[64], pl.FP32]:
                 loop_buf = pl.create_tensor([64], dtype=pl.FP32)
-                for _i, (carried,) in pl.range(0, 4, init_values=(loop_buf,)):
+                (carried,) = pl.intrin.carry(loop_buf)
+                for _i in pl.range(0, 4):
                     loop_produced = self.fill(carried)
-                    loop_produced = pl.yield_(loop_produced)
+                    pl.intrin.yield_(loop_produced)
+                (loop_produced,) = pl.intrin.leak()
                 self.consume(loop_produced)
                 later_produced = self.fill(later)
                 out = self.consume(later_produced)
@@ -2319,21 +2332,25 @@ class TestAutoDeriveTaskDependencies:
                     p3, _tid3 = pl.submit(self.fill, t3)
                     p4, _tid4 = pl.submit(self.fill, t4)
                     if c0:
-                        selected_a = pl.yield_(p0)
+                        pl.intrin.yield_(p0)
                     else:
-                        selected_a = pl.yield_(p1)
+                        pl.intrin.yield_(p1)
+                    (selected_a,) = pl.intrin.leak()
                     if c1:
-                        selected_b = pl.yield_(p2)
+                        pl.intrin.yield_(p2)
                     else:
-                        selected_b = pl.yield_(p3)
+                        pl.intrin.yield_(p3)
+                    (selected_b,) = pl.intrin.leak()
                     if c2:
-                        selected_c = pl.yield_(selected_a)
+                        pl.intrin.yield_(selected_a)
                     else:
-                        selected_c = pl.yield_(selected_b)
+                        pl.intrin.yield_(selected_b)
+                    (selected_c,) = pl.intrin.leak()
                     if c3:
-                        selected = pl.yield_(selected_c)
+                        pl.intrin.yield_(selected_c)
                     else:
-                        selected = pl.yield_(p4)
+                        pl.intrin.yield_(p4)
+                    (selected,) = pl.intrin.leak()
                     out, _ = pl.submit(self.consume, selected)
                 return out
 

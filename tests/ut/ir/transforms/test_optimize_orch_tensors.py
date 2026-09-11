@@ -136,10 +136,12 @@ class TestIterArgReuse:
             def main(
                 self, acc0: pl.Tensor[[64], pl.FP32], x: pl.Tensor[[64], pl.FP32]
             ) -> pl.Tensor[[64], pl.FP32]:
-                for i, (acc,) in pl.range(10, init_values=(acc0,)):
+                (acc,) = pl.intrin.carry(acc0)
+                for i in pl.range(10):
                     ret0__out: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     result: pl.Tensor[[64], pl.FP32] = self.main_incore_0(acc, x, ret0__out)
-                    new_acc = pl.yield_(result)
+                    pl.intrin.yield_(result)
+                (new_acc,) = pl.intrin.leak()
                 return new_acc
 
         @pl.program
@@ -160,9 +162,11 @@ class TestIterArgReuse:
             def main(
                 self, acc0: pl.Tensor[[64], pl.FP32], x: pl.Tensor[[64], pl.FP32]
             ) -> pl.Tensor[[64], pl.FP32]:
-                for i, (acc,) in pl.range(10, init_values=(acc0,)):
+                (acc,) = pl.intrin.carry(acc0)
+                for i in pl.range(10):
                     result = self.main_incore_0(acc, x)
-                    new_acc = pl.yield_(result)
+                    pl.intrin.yield_(result)
+                (new_acc,) = pl.intrin.leak()
                 return new_acc
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -198,10 +202,12 @@ class TestIterArgReuse:
                 self, acc0: pl.Tensor[[64], pl.FP32], x: pl.Tensor[[64], pl.FP32]
             ) -> pl.Tensor[[64], pl.FP32]:
                 pl.dump_tag(x)
-                for i, (acc,) in pl.range(10, init_values=(acc0,)):
+                (acc,) = pl.intrin.carry(acc0)
+                for i in pl.range(10):
                     ret0__out: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     result: pl.Tensor[[64], pl.FP32] = self.main_incore_0(acc, x, ret0__out)
-                    new_acc = pl.yield_(result)
+                    pl.intrin.yield_(result)
+                (new_acc,) = pl.intrin.leak()
                 return new_acc
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -249,7 +255,8 @@ class TestIterArgReuse:
                 a0: pl.Tensor[[64], pl.FP32],
                 b0: pl.Tensor[[64], pl.FP32],
             ) -> tuple[pl.Tensor[[64], pl.FP32], pl.Tensor[[64], pl.FP32]]:
-                for i, (a, b) in pl.range(3, init_values=(a0, b0)):
+                (a, b) = pl.intrin.carry(a0, b0)
+                for i in pl.range(3):
                     ret0__out: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     ret1__out: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     result: tuple[pl.Tensor[[64], pl.FP32], pl.Tensor[[64], pl.FP32]] = self.main_incore_0(
@@ -257,7 +264,8 @@ class TestIterArgReuse:
                     )
                     new_a: pl.Tensor[[64], pl.FP32] = result[0]
                     new_b: pl.Tensor[[64], pl.FP32] = result[1]
-                    out_a, out_b = pl.yield_(new_a, new_b)
+                    pl.intrin.yield_(new_a, new_b)
+                (out_a, out_b) = pl.intrin.leak()
                 return out_a, out_b
 
         @pl.program
@@ -282,11 +290,13 @@ class TestIterArgReuse:
                 a0: pl.Tensor[[64], pl.FP32],
                 b0: pl.Tensor[[64], pl.FP32],
             ) -> tuple[pl.Tensor[[64], pl.FP32], pl.Tensor[[64], pl.FP32]]:
-                for i, (a, b) in pl.range(3, init_values=(a0, b0)):
+                (a, b) = pl.intrin.carry(a0, b0)
+                for i in pl.range(3):
                     result = self.main_incore_0(a, b)
                     new_a = result[0]
                     new_b = result[1]
-                    out_a, out_b = pl.yield_(new_a, new_b)
+                    pl.intrin.yield_(new_a, new_b)
+                (out_a, out_b) = pl.intrin.leak()
                 return out_a, out_b
 
         After = passes.optimize_orch_tensors()(Before)
@@ -311,11 +321,12 @@ class TestIterArgReuse:
                 if n == 0:
                     ra: pl.Tile[[64], pl.FP32] = a__tile
                     rb: pl.Tile[[64], pl.FP32] = b__tile
-                    phi_a, phi_b = pl.yield_(ra, rb)
+                    pl.intrin.yield_(ra, rb)
                 else:
                     ra__tile: pl.Tile[[64], pl.FP32] = pl.tile.add(a__tile, b__tile)
                     rb__tile: pl.Tile[[64], pl.FP32] = pl.tile.mul(a__tile, b__tile)
-                    phi_a, phi_b = pl.yield_(ra__tile, rb__tile)
+                    pl.intrin.yield_(ra__tile, rb__tile)
+                (phi_a, phi_b) = pl.intrin.leak()
                 ret0__store: pl.Tensor[[64], pl.FP32] = pl.store(phi_a, [0], ret0__out)
                 ret1__store: pl.Tensor[[64], pl.FP32] = pl.store(phi_b, [0], ret1__out)
                 return ret0__store, ret1__store
@@ -327,7 +338,8 @@ class TestIterArgReuse:
                 b0: pl.Tensor[[64], pl.FP32],
                 n: pl.Scalar[pl.INT64],
             ) -> tuple[pl.Tensor[[64], pl.FP32], pl.Tensor[[64], pl.FP32]]:
-                for i, (a, b) in pl.range(3, init_values=(a0, b0)):
+                (a, b) = pl.intrin.carry(a0, b0)
+                for i in pl.range(3):
                     ret0__out: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     ret1__out: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                     result: tuple[pl.Tensor[[64], pl.FP32], pl.Tensor[[64], pl.FP32]] = self.main_incore_0(
@@ -335,7 +347,8 @@ class TestIterArgReuse:
                     )
                     new_a: pl.Tensor[[64], pl.FP32] = result[0]
                     new_b: pl.Tensor[[64], pl.FP32] = result[1]
-                    out_a, out_b = pl.yield_(new_a, new_b)
+                    pl.intrin.yield_(new_a, new_b)
+                (out_a, out_b) = pl.intrin.leak()
                 return out_a, out_b
 
         @pl.program
@@ -352,11 +365,12 @@ class TestIterArgReuse:
                 if n == 0:
                     ra: pl.Tile[[64], pl.FP32] = a__tile
                     rb: pl.Tile[[64], pl.FP32] = b__tile
-                    phi_a, phi_b = pl.yield_(ra, rb)
+                    pl.intrin.yield_(ra, rb)
                 else:
                     ra__tile: pl.Tile[[64], pl.FP32] = pl.tile.add(a__tile, b__tile)
                     rb__tile: pl.Tile[[64], pl.FP32] = pl.tile.mul(a__tile, b__tile)
-                    phi_a, phi_b = pl.yield_(ra__tile, rb__tile)
+                    pl.intrin.yield_(ra__tile, rb__tile)
+                (phi_a, phi_b) = pl.intrin.leak()
                 ret0__store = pl.store(phi_a, [0], a)
                 ret1__store = pl.store(phi_b, [0], b)
                 return ret0__store, ret1__store
@@ -368,11 +382,13 @@ class TestIterArgReuse:
                 b0: pl.Tensor[[64], pl.FP32],
                 n: pl.Scalar[pl.INT64],
             ) -> tuple[pl.Tensor[[64], pl.FP32], pl.Tensor[[64], pl.FP32]]:
-                for i, (a, b) in pl.range(3, init_values=(a0, b0)):
+                (a, b) = pl.intrin.carry(a0, b0)
+                for i in pl.range(3):
                     result = self.main_incore_0(a, b, n)
                     new_a = result[0]
                     new_b = result[1]
-                    out_a, out_b = pl.yield_(new_a, new_b)
+                    pl.intrin.yield_(new_a, new_b)
+                (out_a, out_b) = pl.intrin.leak()
                 return out_a, out_b
 
         After = passes.optimize_orch_tensors()(Before)
@@ -398,9 +414,11 @@ class TestIterArgReuse:
             ) -> pl.Tensor[[64], pl.FP32]:
                 acc__tile: pl.Tile[[64], pl.FP32] = pl.load(acc, [0], [64])
                 x__tile: pl.Tile[[64], pl.FP32] = pl.load(x, [0], [64])
-                for i, (a,) in pl.range(n, init_values=(acc__tile,)):
+                (a,) = pl.intrin.carry(acc__tile)
+                for i in pl.range(n):
                     new_a__tile: pl.Tile[[64], pl.FP32] = pl.tile.add(a, x__tile)
-                    final = pl.yield_(new_a__tile)
+                    pl.intrin.yield_(new_a__tile)
+                (final,) = pl.intrin.leak()
                 ret0__store: pl.Tensor[[64], pl.FP32] = pl.store(final, [0], ret0__out)
                 return ret0__store
 
@@ -426,9 +444,11 @@ class TestIterArgReuse:
             ) -> pl.Tensor[[64], pl.FP32]:
                 acc__tile = pl.load(acc, [0], [64])
                 x__tile = pl.load(x, [0], [64])
-                for i, (a,) in pl.range(n, init_values=(acc__tile,)):
+                (a,) = pl.intrin.carry(acc__tile)
+                for i in pl.range(n):
                     new_a__tile = pl.tile.add(a, x__tile)
-                    final = pl.yield_(new_a__tile)
+                    pl.intrin.yield_(new_a__tile)
+                (final,) = pl.intrin.leak()
                 ret0__store = pl.store(final, [0], acc)
                 return ret0__store
 
@@ -461,9 +481,11 @@ class TestIterArgReuse:
                 ret0__out: pl.Out[pl.Tensor[[64], pl.FP32]],
             ) -> pl.Tensor[[64], pl.FP32]:
                 acc__tile: pl.Tile[[64], pl.FP32] = pl.load(acc, [0], [64])
-                for i, (a,) in pl.range(n, init_values=(acc__tile,)):
+                (a,) = pl.intrin.carry(acc__tile)
+                for i in pl.range(n):
                     next_a: pl.Tile[[64], pl.FP32] = pl.tile.add(a, a)
-                    final = pl.yield_(next_a)
+                    pl.intrin.yield_(next_a)
+                (final,) = pl.intrin.leak()
                 ret0__store: pl.Tensor[[64], pl.FP32] = pl.store(final, [0], ret0__out)
                 return ret0__store
 
@@ -511,9 +533,11 @@ class TestIterArgReuse:
                 ret0__out: pl.Out[pl.Tensor[[64], pl.FP32]],
             ) -> pl.Tensor[[64], pl.FP32]:
                 acc__tile: pl.Tile[[64], pl.FP32] = pl.load(acc, [0], [64])
-                for i, (a,) in pl.range(n, init_values=(acc__tile,)):
+                (a,) = pl.intrin.carry(acc__tile)
+                for i in pl.range(n):
                     next_a: pl.Tile[[64], pl.FP32] = pl.tile.add(a, a)
-                    final = pl.yield_(next_a)
+                    pl.intrin.yield_(next_a)
+                (final,) = pl.intrin.leak()
                 ret0__store: pl.Tensor[[64], pl.FP32] = pl.store(final, [0], ret0__out)
                 return ret0__store
 
@@ -648,13 +672,17 @@ class TestAssembleParentStrides:
                 a: pl.Tensor[[128, 128], pl.FP32],
                 c: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
             ) -> pl.Tensor[[128, 128], pl.FP32]:
-                for mb, (c_iter,) in pl.range(0, 128, 32, init_values=(c,)):
-                    for nb, (c_iter2,) in pl.range(0, 128, 32, init_values=(c_iter,)):
+                (c_iter,) = pl.intrin.carry(c)
+                for mb in pl.range(0, 128, 32):
+                    (c_iter2,) = pl.intrin.carry(c_iter)
+                    for nb in pl.range(0, 128, 32):
                         ret0__out: pl.Tensor[[32, 32], pl.FP32] = pl.create_tensor([32, 32], dtype=pl.FP32)
                         result: pl.Tensor[[32, 32], pl.FP32] = self.main_incore_0(a, mb, nb, ret0__out)
                         c_next: pl.Tensor[[128, 128], pl.FP32] = pl.assemble(c_iter2, result, [mb, nb])
-                        c_rv = pl.yield_(c_next)
-                    c_rv2 = pl.yield_(c_rv)
+                        pl.intrin.yield_(c_next)
+                    (c_rv,) = pl.intrin.leak()
+                    pl.intrin.yield_(c_rv)
+                (c_rv2,) = pl.intrin.leak()
                 return c_rv2
 
         # fmt: off
@@ -682,8 +710,10 @@ class TestAssembleParentStrides:
                 a: pl.Tensor[[128, 128], pl.FP32],
                 c: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
             ) -> pl.Tensor[[128, 128], pl.FP32]:
-                for mb, (c_iter,) in pl.range(0, 128, 32, init_values=(c,)):
-                    for nb, (c_iter2,) in pl.range(0, 128, 32, init_values=(c_iter,)):
+                (c_iter,) = pl.intrin.carry(c)
+                for mb in pl.range(0, 128, 32):
+                    (c_iter2,) = pl.intrin.carry(c_iter)
+                    for nb in pl.range(0, 128, 32):
                         ret0__out = pl.create_tensor(
                             [32, 32], dtype=pl.FP32
                         )
@@ -693,8 +723,10 @@ class TestAssembleParentStrides:
                         c_next = pl.assemble(
                             c_iter2, result, [mb, nb]
                         )
-                        c_rv = pl.yield_(c_next)
-                    c_rv2 = pl.yield_(c_rv)
+                        pl.intrin.yield_(c_next)
+                    (c_rv,) = pl.intrin.leak()
+                    pl.intrin.yield_(c_rv)
+                (c_rv2,) = pl.intrin.leak()
                 return c_rv2
         # fmt: on
 
@@ -725,7 +757,8 @@ class TestAssembleParentStrides:
             ) -> pl.Tensor[[4, 128, 5120], pl.FP32]:
                 for b in pl.range(4):
                     for p0 in pl.range(0, 128, 16):
-                        for q0, (q_iter,) in pl.range(0, 5120, 64, init_values=(q_proj,)):
+                        (q_iter,) = pl.intrin.carry(q_proj)
+                        for q0 in pl.range(0, 5120, 64):
                             ret0__out: pl.Tensor[[16, 64], pl.FP32] = pl.create_tensor(
                                 [16, 64], dtype=pl.FP32
                             )
@@ -733,7 +766,8 @@ class TestAssembleParentStrides:
                             q_next: pl.Tensor[[4, 128, 5120], pl.FP32] = pl.assemble(
                                 q_iter, result, [b, p0, q0]
                             )
-                            q_rv = pl.yield_(q_next)
+                            pl.intrin.yield_(q_next)
+                        (q_rv,) = pl.intrin.leak()
                 return q_rv
 
         # fmt: off
@@ -762,7 +796,8 @@ class TestAssembleParentStrides:
             ) -> pl.Tensor[[4, 128, 5120], pl.FP32]:
                 for b in pl.range(4):
                     for p0 in pl.range(0, 128, 16):
-                        for q0, (q_iter,) in pl.range(0, 5120, 64, init_values=(q_proj,)):
+                        (q_iter,) = pl.intrin.carry(q_proj)
+                        for q0 in pl.range(0, 5120, 64):
                             ret0__out = pl.create_tensor(
                                 [16, 64], dtype=pl.FP32
                             )
@@ -772,7 +807,8 @@ class TestAssembleParentStrides:
                             q_next = pl.assemble(
                                 q_iter, result, [b, p0, q0]
                             )
-                            q_rv = pl.yield_(q_next)
+                            pl.intrin.yield_(q_next)
+                        (q_rv,) = pl.intrin.leak()
                 return q_rv
         # fmt: on
 
@@ -797,11 +833,13 @@ class TestAssembleLoopRewrite:
                 buf__tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.create(
                     [1, 64], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
                 )
-                for i, (acc,) in pl.range(2, init_values=(buf__tile,)):
+                (acc,) = pl.intrin.carry(buf__tile)
+                for i in pl.range(2):
                     off: pl.Scalar[pl.INDEX] = i * 32
                     chunk__tile: pl.Tile[[1, 32], pl.FP32] = pl.load(x, [0, 0], [1, 32])
                     acc_next__tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.assemble(acc, chunk__tile, [0, off])
-                    result: pl.Tile[[1, 64], pl.FP32] = pl.yield_(acc_next__tile)
+                    pl.intrin.yield_(acc_next__tile)
+                (result,) = pl.intrin.leak()
                 ret0__store: pl.Tensor[[1, 64], pl.FP32] = pl.store(result, [0, 0], ret0__out)
                 return ret0__store
 
@@ -819,11 +857,13 @@ class TestAssembleLoopRewrite:
                 x: pl.Tensor[[1, 32], pl.FP32],
                 ret0__out: pl.Out[pl.Tensor[[1, 64], pl.FP32]],
             ) -> pl.Tensor[[1, 64], pl.FP32]:
-                for i, (acc,) in pl.range(2, init_values=(ret0__out,)):
+                (acc,) = pl.intrin.carry(ret0__out)
+                for i in pl.range(2):
                     off: pl.Scalar[pl.INDEX] = i * 32
                     chunk__tile = pl.load(x, [0, 0], [1, 32])
                     acc_next = pl.store(chunk__tile, [0, off], acc)
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function
@@ -863,12 +903,14 @@ class TestSliceInputStrides:
                 c: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
             ) -> pl.Tensor[[128, 128], pl.FP32]:
                 for mb in pl.range(0, 128, 32):
-                    for nb, (c_iter,) in pl.range(0, 128, 32, init_values=(c,)):
+                    (c_iter,) = pl.intrin.carry(c)
+                    for nb in pl.range(0, 128, 32):
                         chunk: pl.Tensor[[32, 32], pl.FP32] = pl.slice(data, [32, 32], [mb, nb])
                         ret0__out: pl.Tensor[[32, 32], pl.FP32] = pl.create_tensor([32, 32], dtype=pl.FP32)
                         result: pl.Tensor[[32, 32], pl.FP32] = self.main_incore_0(chunk, mb, nb, ret0__out)
                         c_next: pl.Tensor[[128, 128], pl.FP32] = pl.assemble(c_iter, result, [mb, nb])
-                        c_rv = pl.yield_(c_next)
+                        pl.intrin.yield_(c_next)
+                    (c_rv,) = pl.intrin.leak()
                 return c_rv
 
         # fmt: off
@@ -899,7 +941,8 @@ class TestSliceInputStrides:
                 c: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
             ) -> pl.Tensor[[128, 128], pl.FP32]:
                 for mb in pl.range(0, 128, 32):
-                    for nb, (c_iter,) in pl.range(0, 128, 32, init_values=(c,)):
+                    (c_iter,) = pl.intrin.carry(c)
+                    for nb in pl.range(0, 128, 32):
                         chunk = pl.slice(data, [32, 32], [mb, nb])
                         ret0__out = pl.create_tensor(
                             [32, 32], dtype=pl.FP32
@@ -910,7 +953,8 @@ class TestSliceInputStrides:
                         c_next = pl.assemble(
                             c_iter, result, [mb, nb]
                         )
-                        c_rv = pl.yield_(c_next)
+                        pl.intrin.yield_(c_next)
+                    (c_rv,) = pl.intrin.leak()
                 return c_rv
         # fmt: on
 
@@ -1259,10 +1303,12 @@ class Program:
                 score: pl.Tensor[[64, 128], pl.FP32],
                 seed: pl.Tensor[[32, 64], pl.FP32],
             ) -> pl.Tensor[[32, 64], pl.FP32]:
-                for i, (result,) in pl.range(2, init_values=(seed,)):
+                (result,) = pl.intrin.carry(seed)
+                for i in pl.range(2):
                     row: pl.Scalar[pl.INDEX] = i * 32
                     block: pl.Tensor[[32, 64], pl.FP32] = self.consume(score, row)
-                    result_rv = pl.yield_(block)
+                    pl.intrin.yield_(block)
+                (result_rv,) = pl.intrin.leak()
                 return result_rv
 
         @pl.program
@@ -1301,14 +1347,16 @@ class Program:
                 score: pl.Tensor[[64, 128], pl.FP32],
                 seed: pl.Tensor[[32, 64], pl.FP32],
             ) -> pl.Tensor[[32, 64], pl.FP32]:
-                for i, (result,) in pl.range(2, init_values=(seed,)):
+                (result,) = pl.intrin.carry(seed)
+                for i in pl.range(2):
                     row: pl.Scalar[pl.INDEX] = i * 32
                     ret0__out: pl.Tensor[[32, 64], pl.FP32] = pl.create_tensor([32, 64], dtype=pl.FP32)
                     score__window: pl.Tensor[[32, 64], pl.FP32] = pl.tensor.slice(score, [32, 64], [row, 0])
                     block: pl.Tensor[[32, 64], pl.FP32] = self.consume__windowed(
                         score__window, row, ret0__out
                     )
-                    result_rv = pl.yield_(block)
+                    pl.intrin.yield_(block)
+                (result_rv,) = pl.intrin.leak()
                 return result_rv
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -1431,14 +1479,20 @@ class Program:
             ) -> pl.Tensor[[64, 128], pl.FP32]:
                 seed: pl.Tile[[64, 128], pl.FP32] = pl.load(src, [0, 0], [64, 128])
                 out0: pl.Tensor[[64, 128], pl.FP32] = pl.store(seed, [0, 0], acc)
-                total0: pl.Scalar[pl.INDEX] = 0
-                for _i1, (t1,) in pl.range(128, init_values=(total0,)):
-                    for _i2, (t2,) in pl.range(128, init_values=(t1,)):
-                        for _i3, (t3,) in pl.range(128, init_values=(t2,)):
+                total0 = pl.const(0, pl.INDEX)
+                (t1,) = pl.intrin.carry(total0)
+                for _i1 in pl.range(128):
+                    (t2,) = pl.intrin.carry(t1)
+                    for _i2 in pl.range(128):
+                        (t3,) = pl.intrin.carry(t2)
+                        for _i3 in pl.range(128):
                             bumped: pl.Scalar[pl.INDEX] = t3 + 1
-                            r3 = pl.yield_(bumped)
-                        r2 = pl.yield_(r3)
-                    r1 = pl.yield_(r2)
+                            pl.intrin.yield_(bumped)
+                        (r3,) = pl.intrin.leak()
+                        pl.intrin.yield_(r3)
+                    (r2,) = pl.intrin.leak()
+                    pl.intrin.yield_(r2)
+                (r1,) = pl.intrin.leak()
                 return out0
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -1473,7 +1527,7 @@ class Program:
             def main(
                 self,
                 src: pl.Tensor[[64, 128], pl.FP32],
-            ) -> pl.Scalar[pl.TASK_ID]:
+            ) -> pl.Tuple[pl.Scalar[pl.TASK_ID]]:
                 with pl.manual_scope():
                     dummy: pl.Tensor[[64, 1], pl.FP32] = pl.create_tensor([64, 1], dtype=pl.FP32)
                     _tid = pl.submit(self.fence, src, dummy)
@@ -1527,15 +1581,19 @@ class Program:
                 score: pl.Out[pl.Tensor[[4, 16], pl.FP32]],
                 topk: pl.Out[pl.Tensor[[4, 16], pl.INT32]],
             ) -> tuple[pl.Tensor[[4, 16], pl.FP32], pl.Tensor[[4, 16], pl.INT32]]:
-                for b, (score_iter, topk_iter) in pl.parallel(2, init_values=(score, topk)):
+                (score_iter, topk_iter) = pl.intrin.carry(score, topk)
+                for b in pl.parallel(2):
                     t0: pl.Scalar[pl.INDEX] = b * 2
                     score_init_next: pl.Tensor[[4, 16], pl.FP32] = self.score_init(score_iter, t0)
-                    for cb, (score_iter2,) in pl.parallel(4, init_values=(score_init_next,)):
+                    (score_iter2,) = pl.intrin.carry(score_init_next)
+                    for cb in pl.parallel(4):
                         cache0: pl.Scalar[pl.INDEX] = cb * 4
                         score_next: pl.Tensor[[4, 16], pl.FP32] = self.score_writer(score_iter2, t0, cache0)
-                        score_rv = pl.yield_(score_next)
+                        pl.intrin.yield_(score_next)
+                    (score_rv,) = pl.intrin.leak()
                     topk_next: pl.Tensor[[4, 16], pl.INT32] = self.topk_like(topk_iter, t0, score_rv)
-                    score_out, topk_out = pl.yield_(score_rv, topk_next)
+                    pl.intrin.yield_(score_rv, topk_next)
+                (score_out, topk_out) = pl.intrin.leak()
                 return score_out, topk_out
 
         @pl.program
@@ -1627,7 +1685,8 @@ class Program:
                 score: pl.Out[pl.Tensor[[4, 16], pl.FP32]],
                 topk: pl.Out[pl.Tensor[[4, 16], pl.INT32]],
             ) -> tuple[pl.Tensor[[4, 16], pl.FP32], pl.Tensor[[4, 16], pl.INT32]]:
-                for b, (score_iter, topk_iter) in pl.parallel(2, init_values=(score, topk)):
+                (score_iter, topk_iter) = pl.intrin.carry(score, topk)
+                for b in pl.parallel(2):
                     t0: pl.Scalar[pl.INDEX] = b * 2
                     score_win: pl.Tensor[[2, 16], pl.FP32] = pl.tensor.slice(score_iter, [2, 16], [t0, 0])
                     init_windowed: pl.Tensor[
@@ -1636,7 +1695,8 @@ class Program:
                     score_init_next: pl.Tensor[[4, 16], pl.FP32] = pl.tensor.assemble(
                         score_iter, init_windowed, [t0, 0]
                     )
-                    for cb, (score_iter2,) in pl.parallel(4, init_values=(score_init_next,)):
+                    (score_iter2,) = pl.intrin.carry(score_init_next)
+                    for cb in pl.parallel(4):
                         cache0: pl.Scalar[pl.INDEX] = cb * 4
                         score2_win: pl.Tensor[[2, 4], pl.FP32] = pl.tensor.slice(
                             score_iter2, [2, 4], [t0, cache0]
@@ -1647,10 +1707,12 @@ class Program:
                         score_next: pl.Tensor[[4, 16], pl.FP32] = pl.tensor.assemble(
                             score_iter2, writer_windowed, [t0, cache0]
                         )
-                        score_rv = pl.yield_(score_next)
+                        pl.intrin.yield_(score_next)
+                    (score_rv,) = pl.intrin.leak()
                     # Full `score_rv` handed to the reader -- no slice, no clone.
                     topk_next: pl.Tensor[[4, 16], pl.INT32] = self.topk_like(topk_iter, t0, score_rv)
-                    score_out, topk_out = pl.yield_(score_rv, topk_next)
+                    pl.intrin.yield_(score_rv, topk_next)
+                (score_out, topk_out) = pl.intrin.leak()
                 return score_out, topk_out
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -1677,13 +1739,15 @@ class Program:
                 cache: pl.Tensor[[1024, 64], pl.FP32],
                 block_table: pl.Tensor[[4], pl.INT32],
             ) -> pl.Tensor[[4, 64], pl.FP32]:
-                for sb, (out_iter,) in pl.range(0, 4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for sb in pl.range(0, 4):
                     pbid_i32: pl.Scalar[pl.INT32] = pl.tensor.read(block_table, [sb])
                     pbid: pl.Scalar[pl.INDEX] = pl.cast(pbid_i32, target_type=pl.INDEX)
                     row: pl.Scalar[pl.INDEX] = pbid * 128
                     cache_tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.load(cache, [row, 0], [1, 64], [1, 64])
                     out_next: pl.Tensor[[4, 64], pl.FP32] = pl.tile.store(cache_tile, [sb, 0], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -1694,9 +1758,11 @@ class Program:
                 block_table: pl.Tensor[[4], pl.INT32],
                 out: pl.Out[pl.Tensor[[4, 64], pl.FP32]],
             ) -> tuple[pl.Tensor[[1024, 64], pl.FP32], pl.Tensor[[4, 64], pl.FP32]]:
-                for _, (cache_iter,) in pl.range(1, init_values=(cache,)):
+                (cache_iter,) = pl.intrin.carry(cache)
+                for _ in pl.range(1):
                     cache_next: pl.Tensor[[1024, 64], pl.FP32] = self.cache_write(cache_iter, data, 7)
-                    cache_rv = pl.yield_(cache_next)
+                    pl.intrin.yield_(cache_next)
+                (cache_rv,) = pl.intrin.leak()
                 result: pl.Tensor[[4, 64], pl.FP32] = self.cache_read(out, cache_rv, block_table)
                 return cache_rv, result
 
@@ -1739,13 +1805,15 @@ class Program:
                 cache: pl.Tensor[[1024, 64], pl.FP32],
                 block_table: pl.Tensor[[4], pl.INT32],
             ) -> pl.Tensor[[4, 64], pl.FP32]:
-                for sb, (out_iter,) in pl.range(0, 4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for sb in pl.range(0, 4):
                     pbid_i32: pl.Scalar[pl.INT32] = pl.tensor.read(block_table, [sb])
                     pbid: pl.Scalar[pl.INDEX] = pl.cast(pbid_i32, target_type=pl.INDEX)
                     row: pl.Scalar[pl.INDEX] = pbid * 128
                     cache_tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.load(cache, [row, 0], [1, 64], [1, 64])
                     out_next: pl.Tensor[[4, 64], pl.FP32] = pl.tile.store(cache_tile, [sb, 0], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -1801,13 +1869,15 @@ class Program:
                 cache: pl.Tensor[[1024, 64], pl.FP32],
                 block_table: pl.Tensor[[4], pl.INT32],
             ) -> pl.Tensor[[4, 64], pl.FP32]:
-                for sb, (out_iter,) in pl.range(0, 4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for sb in pl.range(0, 4):
                     pbid_i32: pl.Scalar[pl.INT32] = pl.tensor.read(block_table, [sb])
                     pbid: pl.Scalar[pl.INDEX] = pl.cast(pbid_i32, target_type=pl.INDEX)
                     row: pl.Scalar[pl.INDEX] = pbid * 128
                     cache_tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.load(cache, [row, 0], [1, 64], [1, 64])
                     out_next: pl.Tensor[[4, 64], pl.FP32] = pl.tile.store(cache_tile, [sb, 0], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -1892,13 +1962,15 @@ class Program:
                 cache: pl.Tensor[[1024, 64], pl.FP32],
                 block_table: pl.Tensor[[4], pl.INT32],
             ) -> pl.Tensor[[4, 64], pl.FP32]:
-                for sb, (out_iter,) in pl.range(0, 4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for sb in pl.range(0, 4):
                     pbid_i32: pl.Scalar[pl.INT32] = pl.tensor.read(block_table, [sb])
                     pbid: pl.Scalar[pl.INDEX] = pl.cast(pbid_i32, target_type=pl.INDEX)
                     row: pl.Scalar[pl.INDEX] = pbid * 128
                     cache_tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.load(cache, [row, 0], [1, 64], [1, 64])
                     out_next: pl.Tensor[[4, 64], pl.FP32] = pl.tile.store(cache_tile, [sb, 0], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -1941,7 +2013,8 @@ class Program:
                 cache: pl.Tensor[[1024, 64], pl.FP32],
                 block_table: pl.Tensor[[4], pl.INT32],
             ) -> pl.Tensor[[4, 64], pl.FP32]:
-                for sb, (out_iter,) in pl.range(0, 4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for sb in pl.range(0, 4):
                     if sb < 0:
                         pbid_i32: pl.Scalar[pl.INT32] = pl.tensor.read(block_table, [sb])
                         pbid: pl.Scalar[pl.INDEX] = pl.cast(pbid_i32, target_type=pl.INDEX)
@@ -1953,7 +2026,8 @@ class Program:
                     else:
                         zero_tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.full([1, 64], dtype=pl.FP32, value=0.0)
                         out_next: pl.Tensor[[4, 64], pl.FP32] = pl.tile.store(zero_tile, [sb, 0], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -1982,13 +2056,15 @@ class Program:
                 cache: pl.Tensor[[1024, 64], pl.FP32],
                 block_table: pl.Tensor[[4], pl.INT32],
             ) -> pl.Tensor[[4, 1], pl.FP32]:
-                for sb, (out_iter,) in pl.range(0, 4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for sb in pl.range(0, 4):
                     pbid_i32: pl.Scalar[pl.INT32] = pl.tensor.read(block_table, [sb])
                     pbid: pl.Scalar[pl.INDEX] = pl.cast(pbid_i32, target_type=pl.INDEX)
                     row: pl.Scalar[pl.INDEX] = pbid * 128
                     cache_tile: pl.Tile[[1, 1], pl.FP32] = pl.tile.load(cache, [row, sb], [1, 1], [1, 1])
                     out_next: pl.Tensor[[4, 1], pl.FP32] = pl.tile.store(cache_tile, [sb, 0], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -2035,10 +2111,12 @@ class Program:
                 self,
                 out: pl.Out[pl.Tensor[[4, 16], pl.INT32]],
             ) -> pl.Tensor[[4, 16], pl.INT32]:
-                for row, (out_iter,) in pl.parallel(4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for row in pl.parallel(4):
                     init_next: pl.Tensor[[4, 16], pl.INT32] = self.init_row(out_iter, row)
                     write_next: pl.Tensor[[4, 16], pl.INT32] = self.write_prefix(init_next, row)
-                    out_rv = pl.yield_(write_next)
+                    pl.intrin.yield_(write_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -2075,8 +2153,10 @@ class Program:
                 out: pl.Out[pl.Tensor[[4, 16], pl.INT32]],
             ) -> pl.Tensor[[4, 16], pl.INT32]:
                 init_next: pl.Tensor[[4, 16], pl.INT32] = self.init_row(out, 0)
-                for _, (out_iter,) in pl.range(1, init_values=(init_next,)):
-                    out_rv = pl.yield_(out_iter)
+                (out_iter,) = pl.intrin.carry(init_next)
+                for _ in pl.range(1):
+                    pl.intrin.yield_(out_iter)
+                (out_rv,) = pl.intrin.leak()
                 result: pl.Tensor[[4, 16], pl.INT32] = self.full_overwrite(out_rv)
                 return result
 
@@ -2104,12 +2184,14 @@ class Program:
                 self,
                 out: pl.Out[pl.Tensor[[4, 16], pl.INT32]],
             ) -> pl.Tensor[[4, 16], pl.INT32]:
-                for row, (out_iter,) in pl.parallel(4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for row in pl.parallel(4):
                     init_next: pl.Tensor[[4, 16], pl.INT32] = self.init_row(out_iter, row)
                     with pl.at(level=pl.Level.CORE_GROUP, name_hint="write_prefix"):
                         value: pl.Scalar[pl.INT32] = pl.cast(row, target_type=pl.INT32)
                         write_next: pl.Tensor[[4, 16], pl.INT32] = pl.write(init_next, [row, 0], value)
-                    out_rv = pl.yield_(write_next)
+                    pl.intrin.yield_(write_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -2129,14 +2211,16 @@ class Program:
                 k_proj: pl.Tensor[[16, 1024], pl.FP32],
                 row: pl.Scalar[pl.INDEX],
             ) -> tuple[pl.Tensor[[16, 5120], pl.FP32], pl.Tensor[[16, 1024], pl.FP32]]:
-                for h, (q_iter, k_iter) in pl.range(8, init_values=(q_out, k_out)):
+                (q_iter, k_iter) = pl.intrin.carry(q_out, k_out)
+                for h in pl.range(8):
                     q0: pl.Scalar[pl.INDEX] = h * 640
                     k0: pl.Scalar[pl.INDEX] = h * 128
                     q_tile: pl.Tile[[16, 640], pl.FP32] = pl.load(q_proj, [row, q0], [16, 640])
                     k_tile: pl.Tile[[16, 128], pl.FP32] = pl.load(k_proj, [row, k0], [16, 128])
                     q_next: pl.Tensor[[16, 5120], pl.FP32] = pl.store(q_tile, [row, q0], q_iter)
                     k_next: pl.Tensor[[16, 1024], pl.FP32] = pl.store(k_tile, [row, k0], k_iter)
-                    q_rv, k_rv = pl.yield_(q_next, k_next)
+                    pl.intrin.yield_(q_next, k_next)
+                (q_rv, k_rv) = pl.intrin.leak()
                 return q_rv, k_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -2184,14 +2268,16 @@ class Program:
                 k_proj: pl.Tensor[[16, 1024], pl.FP32],
                 row: pl.Scalar[pl.INDEX],
             ) -> tuple[pl.Tensor[[16, 5120], pl.FP32], pl.Tensor[[16, 1024], pl.FP32]]:
-                for h, (q_iter, k_iter) in pl.range(8, init_values=(q_out, k_out)):
+                (q_iter, k_iter) = pl.intrin.carry(q_out, k_out)
+                for h in pl.range(8):
                     q0: pl.Scalar[pl.INDEX] = h * 640
                     k0: pl.Scalar[pl.INDEX] = h * 128
                     q_tile: pl.Tile[[16, 640], pl.FP32] = pl.load(q_proj, [row, q0], [16, 640])
                     k_tile: pl.Tile[[16, 128], pl.FP32] = pl.load(k_proj, [row, k0], [16, 128])
                     q_next: pl.Tensor[[16, 5120], pl.FP32] = pl.store(q_tile, [row, q0], q_iter)
                     k_next: pl.Tensor[[16, 1024], pl.FP32] = pl.store(k_tile, [row, k0], k_iter)
-                    q_norm, k_norm = pl.yield_(q_next, k_next)
+                    pl.intrin.yield_(q_next, k_next)
+                (q_norm, k_norm) = pl.intrin.leak()
                 return q_norm, k_norm
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -2202,8 +2288,10 @@ class Program:
                 q_out: pl.Out[pl.Tensor[[16, 5120], pl.FP32]],
                 k_out: pl.Out[pl.Tensor[[16, 1024], pl.FP32]],
             ) -> tuple[pl.Tensor[[16, 5120], pl.FP32], pl.Tensor[[16, 1024], pl.FP32]]:
-                for i, (q_iter, k_iter) in pl.range(1, init_values=(q_proj, k_proj)):
-                    q_rv, k_rv = pl.yield_(q_iter, k_iter)
+                (q_iter, k_iter) = pl.intrin.carry(q_proj, k_proj)
+                for i in pl.range(1):
+                    pl.intrin.yield_(q_iter, k_iter)
+                (q_rv, k_rv) = pl.intrin.leak()
                 row: pl.Scalar[pl.INDEX] = 0
                 return self.qk_norm_like(q_out, k_out, q_rv, k_rv, row)
 
@@ -2218,7 +2306,8 @@ class Program:
                 k_proj: pl.Tensor[[16, 1024], pl.FP32],
                 row: pl.Scalar[pl.INDEX],
             ) -> tuple[pl.Tensor[[16, 5120], pl.FP32], pl.Tensor[[16, 1024], pl.FP32]]:
-                for h, (q_iter, k_iter) in pl.range(8, init_values=(q_out, k_out)):
+                (q_iter, k_iter) = pl.intrin.carry(q_out, k_out)
+                for h in pl.range(8):
                     q0: pl.Scalar[pl.INDEX] = h * 640
                     k0: pl.Scalar[pl.INDEX] = h * 128
                     q_tile: pl.Tile[[16, 640], pl.FP32] = pl.tile.load(
@@ -2229,7 +2318,8 @@ class Program:
                     )
                     q_next: pl.Tensor[[16, 5120], pl.FP32] = pl.tile.store(q_tile, [row, q0], q_iter)
                     k_next: pl.Tensor[[16, 1024], pl.FP32] = pl.tile.store(k_tile, [row, k0], k_iter)
-                    q_norm, k_norm = pl.yield_(q_next, k_next)
+                    pl.intrin.yield_(q_next, k_next)
+                (q_norm, k_norm) = pl.intrin.leak()
                 return q_norm, k_norm
 
             # The windowed clone reads at row 0: the window absorbed the row offset.
@@ -2253,7 +2343,8 @@ class Program:
                 pl.Tensor[[16, 5120], pl.FP32, pl.TensorView(stride=[5120, 1], layout=pl.TensorLayout.ND)],
                 pl.Tensor[[16, 1024], pl.FP32, pl.TensorView(stride=[1024, 1], layout=pl.TensorLayout.ND)],
             ]:
-                for h, (q_iter, k_iter) in pl.range(8, init_values=(q_out, k_out)):
+                (q_iter, k_iter) = pl.intrin.carry(q_out, k_out)
+                for h in pl.range(8):
                     q0: pl.Scalar[pl.INDEX] = h * 640
                     k0: pl.Scalar[pl.INDEX] = h * 128
                     q_tile: pl.Tile[[16, 640], pl.FP32] = pl.tile.load(q_proj, [0, q0], [16, 640], [16, 640])
@@ -2264,7 +2355,8 @@ class Program:
                     k_next: pl.Tensor[
                         [16, 1024], pl.FP32, pl.TensorView(stride=[1024, 1], layout=pl.TensorLayout.ND)
                     ] = pl.tile.store(k_tile, [0, k0], k_iter)
-                    q_norm, k_norm = pl.yield_(q_next, k_next)
+                    pl.intrin.yield_(q_next, k_next)
+                (q_norm, k_norm) = pl.intrin.leak()
                 return q_norm, k_norm
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -2302,10 +2394,7 @@ class Program:
                     [16, 1024], pl.FP32, pl.TensorView(stride=[1024, 1], layout=pl.TensorLayout.ND)
                 ] = windowed[1]
                 k_res: pl.Tensor[[16, 1024], pl.FP32] = pl.tensor.assemble(k_out, k_w, [0, 0])
-                res: pl.Tuple[pl.Tensor[[16, 5120], pl.FP32], pl.Tensor[[16, 1024], pl.FP32]] = [
-                    q_res,
-                    k_res,
-                ]
+                res = pl.Tuple(q_res, k_res)
                 return res
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -2319,10 +2408,12 @@ class Program:
                 self,
                 out: pl.Out[pl.Tensor[[4, 4], pl.FP32]],
             ) -> pl.Tensor[[4, 4], pl.FP32]:
-                for i, (out_iter,) in pl.range(4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for i in pl.range(4):
                     tile: pl.Tile[[1, 1], pl.FP32] = pl.tile.full([1, 1], dtype=pl.FP32, value=1.0)
                     out_next: pl.Tensor[[4, 4], pl.FP32] = pl.store(tile, [i, i], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -2345,12 +2436,14 @@ class Program:
                 self,
                 out: pl.Out[pl.Tensor[[2, 2], pl.FP32]],
             ) -> pl.Tensor[[2, 2], pl.FP32]:
-                for i, (out_iter,) in pl.range(1, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for i in pl.range(1):
                     row_tile: pl.Tile[[1, 2], pl.FP32] = pl.tile.full([1, 2], dtype=pl.FP32, value=1.0)
                     col_tile: pl.Tile[[2, 1], pl.FP32] = pl.tile.full([2, 1], dtype=pl.FP32, value=2.0)
                     out_next: pl.Tensor[[2, 2], pl.FP32] = pl.store(row_tile, [0, 0], out_iter)
                     out_next_2: pl.Tensor[[2, 2], pl.FP32] = pl.store(col_tile, [0, 0], out_next)
-                    out_rv = pl.yield_(out_next_2)
+                    pl.intrin.yield_(out_next_2)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -2384,10 +2477,12 @@ class Program:
                 src: pl.Tensor[[16, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
-                for k, (out_iter,) in pl.range(2, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for k in pl.range(2):
                     col: pl.Scalar[pl.INDEX] = k * 32
                     out_next: pl.Tensor[[16, 128], pl.FP32] = self.write_overlap(src, col, out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -2407,12 +2502,14 @@ class Program:
                 row: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
                 header_tile: pl.Tile[[16, 64], pl.FP32] = pl.load(header, [row, 0], [16, 64])
-                for h, (out_iter,) in pl.range(4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for h in pl.range(4):
                     col: pl.Scalar[pl.INDEX] = h * 64
                     data_tile: pl.Tile[[16, 64], pl.FP32] = pl.load(data, [row, col], [16, 64])
                     mixed: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(data_tile, header_tile)
                     out_next: pl.Tensor[[16, 256], pl.FP32] = pl.store(mixed, [row, col], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -2436,12 +2533,14 @@ class Program:
                 row: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
                 header_tile: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(header, [row, 0], [16, 64], [16, 64])
-                for h, (out_iter,) in pl.range(4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for h in pl.range(4):
                     col: pl.Scalar[pl.INDEX] = h * 64
                     data_tile: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(data, [row, col], [16, 64], [16, 64])
                     mixed: pl.Tile[[16, 64], pl.FP32, pl.Mem.Vec] = pl.tile.add(data_tile, header_tile)
                     out_next: pl.Tensor[[16, 256], pl.FP32] = pl.tile.store(mixed, [row, col], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.InCore)
@@ -2459,14 +2558,16 @@ class Program:
                 row: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[16, 256], pl.FP32, pl.TensorView(stride=[256, 1], layout=pl.TensorLayout.ND)]:
                 header_tile: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(header, [0, 0], [16, 64], [16, 64])
-                for h, (out_iter,) in pl.range(4, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for h in pl.range(4):
                     col: pl.Scalar[pl.INDEX] = h * 64
                     data_tile: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(data, [0, col], [16, 64], [16, 64])
                     mixed: pl.Tile[[16, 64], pl.FP32, pl.Mem.Vec] = pl.tile.add(data_tile, header_tile)
                     out_next: pl.Tensor[
                         [16, 256], pl.FP32, pl.TensorView(stride=[256, 1], layout=pl.TensorLayout.ND)
                     ] = pl.tile.store(mixed, [0, col], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -2589,8 +2690,10 @@ class Program:
                 data: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (out_iter,) in pl.range(1, init_values=(out,)):
-                    out_rv = pl.yield_(out_iter)
+                (out_iter,) = pl.intrin.carry(out)
+                for i in pl.range(1):
+                    pl.intrin.yield_(out_iter)
+                (out_rv,) = pl.intrin.leak()
                 row: pl.Scalar[pl.INDEX] = 64
                 result: pl.Tensor[[256, 64], pl.FP32] = self.kernel_stripe(data, row, out_rv)
                 return result
@@ -2693,9 +2796,11 @@ class Program:
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
                 first: pl.Tensor[[256, 64], pl.FP32] = self.kernel_stripe(data, 0, out)
-                for i, (first_iter,) in pl.range(1, init_values=(first,)):
+                (first_iter,) = pl.intrin.carry(first)
+                for i in pl.range(1):
                     second: pl.Tensor[[256, 64], pl.FP32] = self.kernel_stripe(data, 32, first_iter)
-                    second_rv = pl.yield_(second)
+                    pl.intrin.yield_(second)
+                (second_rv,) = pl.intrin.leak()
                 return second_rv
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -2761,9 +2866,11 @@ class Program:
                 data: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (out_iter,) in pl.range(1, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for i in pl.range(1):
                     result: pl.Tensor[[256, 64], pl.FP32] = self.kernel_stripe(data, 64, out_iter)
-                    result_rv = pl.yield_(result)
+                    pl.intrin.yield_(result)
+                (result_rv,) = pl.intrin.leak()
                 return result_rv
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -2848,14 +2955,18 @@ class Program:
                 data: pl.Tensor[[1024, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[1024, 64], pl.FP32]],
             ) -> pl.Tensor[[1024, 64], pl.FP32]:
-                for phase, (out_phase,) in pl.range(4, init_values=(out,)):
-                    for branch, (out_branch,) in pl.parallel(4, init_values=(out_phase,)):
+                (out_phase,) = pl.intrin.carry(out)
+                for phase in pl.range(4):
+                    (out_branch,) = pl.intrin.carry(out_phase)
+                    for branch in pl.parallel(4):
                         row: pl.Scalar[pl.INDEX] = (phase * 4 + branch) * 64
                         out_next: pl.Tensor[[1024, 64], pl.FP32] = self.kernel_stripe(
                             data, row, 1.0, out_branch
                         )
-                        out_branch_next = pl.yield_(out_next)
-                    out_phase_next = pl.yield_(out_branch_next)
+                        pl.intrin.yield_(out_next)
+                    (out_branch_next,) = pl.intrin.leak()
+                    pl.intrin.yield_(out_branch_next)
+                (out_phase_next,) = pl.intrin.leak()
                 return out_phase_next
 
         @pl.program
@@ -2900,8 +3011,10 @@ class Program:
                 data: pl.Tensor[[1024, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[1024, 64], pl.FP32]],
             ) -> pl.Tensor[[1024, 64], pl.FP32]:
-                for phase, (out_phase,) in pl.range(4, init_values=(out,)):
-                    for branch, (out_branch,) in pl.parallel(4, init_values=(out_phase,)):
+                (out_phase,) = pl.intrin.carry(out)
+                for phase in pl.range(4):
+                    (out_branch,) = pl.intrin.carry(out_phase)
+                    for branch in pl.parallel(4):
                         row: pl.Scalar[pl.INDEX] = (phase * 4 + branch) * 64
                         data__window = pl.tensor.slice(data, [64, 64], [row, 0])
                         out_branch__window = pl.tensor.slice(out_branch, [64, 64], [row, 0])
@@ -2909,8 +3022,10 @@ class Program:
                             [64, 64], pl.FP32, pl.TensorView(stride=[64, 1], layout=pl.TensorLayout.ND)
                         ] = self.kernel_stripe__windowed(data__window, row, 1.0, out_branch__window)
                         out_next = pl.tensor.assemble(out_branch, out_next__windowed, [row, 0])
-                        out_branch_next = pl.yield_(out_next)
-                    out_phase_next = pl.yield_(out_branch_next)
+                        pl.intrin.yield_(out_next)
+                    (out_branch_next,) = pl.intrin.leak()
+                    pl.intrin.yield_(out_branch_next)
+                (out_phase_next,) = pl.intrin.leak()
                 return out_phase_next
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -3009,10 +3124,7 @@ class Program:
                     [64, 64], pl.FP32, pl.TensorView(stride=[64, 1], layout=pl.TensorLayout.ND)
                 ] = result__windowed[1]
                 result__assembled_1 = pl.tensor.assemble(v_out, result__windowed_1, [64, 0])
-                result: pl.Tuple[pl.Tensor[[256, 64], pl.FP32], pl.Tensor[[256, 64], pl.FP32]] = [
-                    result__assembled_0,
-                    result__assembled_1,
-                ]
+                result = pl.Tuple(result__assembled_0, result__assembled_1)
                 return result
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -3149,11 +3261,13 @@ class Program:
                 row_base: pl.Scalar[pl.INDEX],
                 data: pl.Tensor[[128, 64], pl.FP32],
             ) -> pl.Tensor[[128, 64], pl.FP32]:
-                for i, (out_iter,) in pl.range(2, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for i in pl.range(2):
                     row: pl.Scalar[pl.INDEX] = row_base + i * 32
                     tile: pl.Tile[[32, 64], pl.FP32] = pl.tile.load(data, [row, 0], [32, 64], [32, 64])
                     out_next: pl.Tensor[[128, 64], pl.FP32] = pl.tile.store(tile, [row, 0], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.InCore)
@@ -3254,10 +3368,10 @@ class Program:
                 k_proj: pl.Out[pl.Tensor[[16, 512], pl.FP32]],
                 v_proj: pl.Out[pl.Tensor[[16, 512], pl.FP32]],
             ) -> tuple[pl.Tensor[[16, 512], pl.FP32], pl.Tensor[[16, 512], pl.FP32]]:
-                for ob_chunk, (k_proj_iter, v_proj_iter) in pl.range(0, 8, 4, init_values=(k_proj, v_proj)):
-                    for ob, (k_proj_iter2, v_proj_iter2) in pl.range(
-                        ob_chunk, ob_chunk + 4, init_values=(k_proj_iter, v_proj_iter)
-                    ):
+                (k_proj_iter, v_proj_iter) = pl.intrin.carry(k_proj, v_proj)
+                for ob_chunk in pl.range(0, 8, 4):
+                    (k_proj_iter2, v_proj_iter2) = pl.intrin.carry(k_proj_iter, v_proj_iter)
+                    for ob in pl.range(ob_chunk, ob_chunk + 4):
                         kv0: pl.Scalar[pl.INDEX] = ob * 64
                         tile_a: pl.Tile[[16, 128], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                             normed_tile,
@@ -3276,7 +3390,8 @@ class Program:
                             attrs={"__compiler_tensor_to_tile_mat_bridge": True},
                         )
                         k_acc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(tile_a, tile_wk)
-                        for kb, (k_acc_iter,) in pl.range(1, 4, init_values=(k_acc,)):
+                        (k_acc_iter,) = pl.intrin.carry(k_acc)
+                        for kb in pl.range(1, 4):
                             k0: pl.Scalar[pl.INDEX] = kb * 128
                             tile_a_i: pl.Tile[[16, 128], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                                 normed_tile,
@@ -3297,7 +3412,8 @@ class Program:
                             k_acc_next: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                                 k_acc_iter, tile_a_i, tile_wk_i
                             )
-                            k_acc_rv: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(k_acc_next)
+                            pl.intrin.yield_(k_acc_next)
+                        (k_acc_rv,) = pl.intrin.leak()
                         k_proj_tile = pl.tile.store(k_acc_rv, [0, kv0], k_proj_iter2)
                         tile_a_2: pl.Tile[[16, 128], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                             normed_tile,
@@ -3316,7 +3432,8 @@ class Program:
                             attrs={"__compiler_tensor_to_tile_mat_bridge": True},
                         )
                         v_acc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(tile_a_2, tile_wv)
-                        for kb2, (v_acc_iter,) in pl.range(1, 4, init_values=(v_acc,)):
+                        (v_acc_iter,) = pl.intrin.carry(v_acc)
+                        for kb2 in pl.range(1, 4):
                             k0_2: pl.Scalar[pl.INDEX] = kb2 * 128
                             tile_a_i_2: pl.Tile[[16, 128], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                                 normed_tile,
@@ -3337,10 +3454,13 @@ class Program:
                             v_acc_next: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                                 v_acc_iter, tile_a_i_2, tile_wv_i
                             )
-                            v_acc_rv: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(v_acc_next)
+                            pl.intrin.yield_(v_acc_next)
+                        (v_acc_rv,) = pl.intrin.leak()
                         v_proj_tile = pl.tile.store(v_acc_rv, [0, kv0], v_proj_iter2)
-                        k_proj_rv2, v_proj_rv2 = pl.yield_(k_proj_tile, v_proj_tile)
-                    k_proj_rv, v_proj_rv = pl.yield_(k_proj_rv2, v_proj_rv2)
+                        pl.intrin.yield_(k_proj_tile, v_proj_tile)
+                    (k_proj_rv2, v_proj_rv2) = pl.intrin.leak()
+                    pl.intrin.yield_(k_proj_rv2, v_proj_rv2)
+                (k_proj_rv, v_proj_rv) = pl.intrin.leak()
                 return k_proj_rv, v_proj_rv
 
             @pl.function
@@ -3373,9 +3493,8 @@ class Program:
                 wk: pl.Tensor[[512, 512], pl.BF16],
                 wv: pl.Tensor[[512, 512], pl.BF16],
             ) -> tuple[pl.Tensor[[16, 512], pl.FP32], pl.Tensor[[16, 512], pl.FP32]]:
-                for ob, (k_proj_iter, v_proj_iter) in pl.range(
-                    ob_chunk, ob_chunk + 4, init_values=(k_proj, v_proj)
-                ):
+                (k_proj_iter, v_proj_iter) = pl.intrin.carry(k_proj, v_proj)
+                for ob in pl.range(ob_chunk, ob_chunk + 4):
                     kv0: pl.Scalar[pl.INDEX] = ob * 64
                     tile_a: pl.Tile[[16, 128], pl.BF16] = pl.tile.load(
                         normed_tile, [0, 0], [16, 128], [16, 128]
@@ -3387,7 +3506,8 @@ class Program:
                     tile_wv: pl.Tile[[128, 64], pl.BF16] = pl.tile.load(wv, [0, kv0], [128, 64], [128, 64])
                     v_acc: pl.Tile[[16, 64], pl.FP32] = pl.tile.matmul(tile_a, tile_wv)
                     v_proj_next: pl.Tensor[[16, 512], pl.FP32] = pl.tile.store(v_acc, [0, kv0], v_proj_iter)
-                    k_proj_rv, v_proj_rv = pl.yield_(k_proj_next, v_proj_next)
+                    pl.intrin.yield_(k_proj_next, v_proj_next)
+                (k_proj_rv, v_proj_rv) = pl.intrin.leak()
                 return k_proj_rv, v_proj_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -3403,25 +3523,27 @@ class Program:
                 final_v: pl.Tensor[[16, 512], pl.FP32] = pl.tensor.create(
                     [16, 512], dtype=pl.FP32, layout=pl.TensorLayout.ND
                 )
-                for layer_idx, (final_k_iter, final_v_iter) in pl.range(40, init_values=(final_k, final_v)):
+                (final_k_iter, final_v_iter) = pl.intrin.carry(final_k, final_v)
+                for layer_idx in pl.range(40):
                     k_proj: pl.Tensor[[16, 512], pl.FP32] = pl.tensor.create(
                         [16, 512], dtype=pl.FP32, layout=pl.TensorLayout.ND
                     )
                     v_proj: pl.Tensor[[16, 512], pl.FP32] = pl.tensor.create(
                         [16, 512], dtype=pl.FP32, layout=pl.TensorLayout.ND
                     )
-                    for ob_chunk, (k_proj_iter, v_proj_iter) in pl.parallel(
-                        0, 8, 4, init_values=(k_proj, v_proj)
-                    ):
+                    (k_proj_iter, v_proj_iter) = pl.intrin.carry(k_proj, v_proj)
+                    for ob_chunk in pl.parallel(0, 8, 4):
                         result: tuple[pl.Tensor[[16, 512], pl.FP32], pl.Tensor[[16, 512], pl.FP32]] = (
                             self.kv_proj(k_proj_iter, v_proj_iter, ob_chunk, normed_tile, wk, wv)
                         )
                         k_proj_next: pl.Tensor[[16, 512], pl.FP32] = result[0]
                         v_proj_next: pl.Tensor[[16, 512], pl.FP32] = result[1]
-                        k_proj_rv, v_proj_rv = pl.yield_(k_proj_next, v_proj_next)
+                        pl.intrin.yield_(k_proj_next, v_proj_next)
+                    (k_proj_rv, v_proj_rv) = pl.intrin.leak()
                     final_k_next: pl.Tensor[[16, 512], pl.FP32] = k_proj_rv
                     final_v_next: pl.Tensor[[16, 512], pl.FP32] = v_proj_rv
-                    final_k_rv, final_v_rv = pl.yield_(final_k_next, final_v_next)
+                    pl.intrin.yield_(final_k_next, final_v_next)
+                (final_k_rv, final_v_rv) = pl.intrin.leak()
                 return final_k_rv, final_v_rv
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -3444,7 +3566,8 @@ class Program:
                 wk: pl.Tensor[[512, 512], pl.BF16],
             ) -> pl.Tensor[[16, 512], pl.FP32]:
                 k_acc: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(k_out, [0, 0], [16, 64], [16, 64])
-                for ob, (k_iter,) in pl.range(ob_chunk, ob_chunk + 4, init_values=(k_out,)):
+                (k_iter,) = pl.intrin.carry(k_out)
+                for ob in pl.range(ob_chunk, ob_chunk + 4):
                     kv0: pl.Scalar[pl.INDEX] = ob * 64
                     tile_a: pl.Tile[[16, 128], pl.BF16] = pl.tile.load(
                         normed_tile, [0, 0], [16, 128], [16, 128]
@@ -3453,7 +3576,8 @@ class Program:
                     matmul: pl.Tile[[16, 64], pl.FP32] = pl.tile.matmul(tile_a, tile_wk)
                     k_acc = pl.tile.add(k_acc, matmul)
                     k_next: pl.Tensor[[16, 512], pl.FP32] = pl.tile.store(k_acc, [0, kv0], k_iter)
-                    k_rv = pl.yield_(k_next)
+                    pl.intrin.yield_(k_next)
+                (k_rv,) = pl.intrin.leak()
                 return k_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -3463,9 +3587,11 @@ class Program:
                 wk: pl.Tensor[[512, 512], pl.BF16],
                 k_out: pl.Out[pl.Tensor[[16, 512], pl.FP32]],
             ) -> pl.Tensor[[16, 512], pl.FP32]:
-                for ob_chunk, (k_iter,) in pl.range(0, 8, 4, init_values=(k_out,)):
+                (k_iter,) = pl.intrin.carry(k_out)
+                for ob_chunk in pl.range(0, 8, 4):
                     k_next: pl.Tensor[[16, 512], pl.FP32] = self.k_proj(k_iter, ob_chunk, normed_tile, wk)
-                    k_rv = pl.yield_(k_next)
+                    pl.intrin.yield_(k_next)
+                (k_rv,) = pl.intrin.leak()
                 return k_rv
 
         @pl.program
@@ -3479,7 +3605,8 @@ class Program:
                 wk: pl.Tensor[[512, 512], pl.BF16],
             ) -> pl.Tensor[[16, 512], pl.FP32]:
                 k_acc: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(k_out, [0, 0], [16, 64], [16, 64])
-                for ob, (k_iter, k_acc_iter) in pl.range(ob_chunk, ob_chunk + 4, init_values=(k_out, k_acc)):
+                (k_iter, k_acc_iter) = pl.intrin.carry(k_out, k_acc)
+                for ob in pl.range(ob_chunk, ob_chunk + 4):
                     kv0: pl.Scalar[pl.INDEX] = ob * 64
                     tile_a: pl.Tile[[16, 128], pl.BF16] = pl.tile.load(
                         normed_tile, [0, 0], [16, 128], [16, 128]
@@ -3488,7 +3615,8 @@ class Program:
                     matmul: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(tile_a, tile_wk)
                     k_acc_next: pl.Tile[[16, 64], pl.FP32, pl.Mem.Vec] = pl.tile.add(k_acc_iter, matmul)
                     k_next = pl.tile.store(k_acc_next, [0, kv0], k_iter)
-                    k_rv, k_acc_rv = pl.yield_(k_next, k_acc_next)
+                    pl.intrin.yield_(k_next, k_acc_next)
+                (k_rv, k_acc_rv) = pl.intrin.leak()
                 return k_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -3498,9 +3626,11 @@ class Program:
                 wk: pl.Tensor[[512, 512], pl.BF16],
                 k_out: pl.Out[pl.Tensor[[16, 512], pl.FP32]],
             ) -> pl.Tensor[[16, 512], pl.FP32]:
-                for ob_chunk, (k_iter,) in pl.range(0, 8, 4, init_values=(k_out,)):
+                (k_iter,) = pl.intrin.carry(k_out)
+                for ob_chunk in pl.range(0, 8, 4):
                     k_next = self.k_proj(k_iter, ob_chunk, normed_tile, wk)
-                    k_rv = pl.yield_(k_next)
+                    pl.intrin.yield_(k_next)
+                (k_rv,) = pl.intrin.leak()
                 return k_rv
 
         After = _run_to_optimize_orch_tensors(Before)
@@ -3555,12 +3685,13 @@ class Program:
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
                 n: pl.Scalar[pl.INDEX],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                row: pl.Scalar[pl.INDEX] = 0
-                for row_iter, out_iter in pl.while_(init_values=(row, out)):
-                    pl.cond(row_iter < n)
+                row: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                (row_iter, out_iter) = pl.intrin.carry(row, out)
+                while row_iter < n:
                     out_next: pl.Tensor[[256, 64], pl.FP32] = self.kernel_stripe(data, row_iter, out_iter)
                     row_next: pl.Scalar[pl.INDEX] = row_iter + 64
-                    row_rv, out_rv = pl.yield_(row_next, out_next)
+                    pl.intrin.yield_(row_next, out_next)
+                (row_rv, out_rv) = pl.intrin.leak()
                 return out_rv
 
         After = passes.optimize_orch_tensors()(Before)
@@ -3654,14 +3785,15 @@ class TestPattern3WhileLoop:
                 buf__tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.create(
                     [1, 64], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
                 )
-                i0: pl.Scalar[pl.INDEX] = 0
-                for acc, ii in pl.while_(init_values=(buf__tile, i0)):
-                    pl.cond(ii < n)
+                i0: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                (acc, ii) = pl.intrin.carry(buf__tile, i0)
+                while ii < n:
                     off: pl.Scalar[pl.INDEX] = ii * 32
                     chunk__tile: pl.Tile[[1, 32], pl.FP32] = pl.load(x, [0, 0], [1, 32])
                     acc_next__tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.assemble(acc, chunk__tile, [0, off])
                     ii_next: pl.Scalar[pl.INDEX] = ii + 1
-                    acc_rv, ii_rv = pl.yield_(acc_next__tile, ii_next)
+                    pl.intrin.yield_(acc_next__tile, ii_next)
+                (acc_rv, ii_rv) = pl.intrin.leak()
                 ret0__store: pl.Tensor[[1, 64], pl.FP32] = pl.store(acc_rv, [0, 0], ret0__out)
                 return ret0__store
 
@@ -3741,11 +3873,13 @@ class TestOutWindowSubmitCall:
                 out: pl.Out[pl.Tensor[[16, 64], pl.FP32]],
                 data: pl.Tensor[[1, 64], pl.FP32],
             ) -> pl.Tensor[[16, 64], pl.FP32]:
-                for i, (out_iter,) in pl.range(0, 2, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for i in pl.range(0, 2):
                     tile: pl.Tile[[1, 64], pl.FP32] = pl.tile.load(data, [0, 0], [1, 64], [1, 64])
                     row: pl.Scalar[pl.INDEX] = i * 9223372036854775807 + i
                     out_next: pl.Tensor[[16, 64], pl.FP32] = pl.tile.store(tile, [row, 0], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -3773,10 +3907,12 @@ class TestOutWindowSubmitCall:
                 out: pl.Out[pl.Tensor[[8, huge_extent], pl.FP32]],
                 data: pl.Tensor[[2, huge_extent], pl.FP32],
             ) -> pl.Tensor[[8, huge_extent], pl.FP32]:
-                for i, (out_iter,) in pl.range(0, 2, init_values=(out,)):
+                (out_iter,) = pl.intrin.carry(out)
+                for i in pl.range(0, 2):
                     tile = pl.tile.load(data, [0, 0], [2, huge_extent], [2, huge_extent])
                     out_next = pl.tile.store(tile, [i * 2, 0], out_iter)
-                    out_rv = pl.yield_(out_next)
+                    pl.intrin.yield_(out_next)
+                (out_rv,) = pl.intrin.leak()
                 return out_rv
 
             @pl.function(type=pl.FunctionType.Orchestration)

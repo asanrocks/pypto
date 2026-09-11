@@ -133,8 +133,10 @@ class TestStmtDependencyGraph:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 a: pl.Tensor[[64], pl.FP32] = pl.add(x, x)
-                for i, (acc,) in pl.range(0, 4, 1, init_values=(a,)):
-                    acc = pl.yield_(pl.add(acc, a))
+                (acc,) = pl.intrin.carry(a)
+                for i in pl.range(0, 4, 1):
+                    pl.intrin.yield_(pl.add(acc, a))
+                (acc,) = pl.intrin.leak()
                 b: pl.Tensor[[64], pl.FP32] = pl.add(acc, x)
                 return b
 
@@ -271,8 +273,10 @@ class TestInOutUseDiscipline:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 T_new: pl.Tensor[[64], pl.FP32] = self.mutate(x)
-                for i, (acc,) in pl.range(0, 4, 1, init_values=(T_new,)):  # noqa: F841
-                    acc = pl.yield_(pl.add(acc, x))  # VIOLATION reading x
+                (acc,) = pl.intrin.carry(T_new)
+                for i in pl.range(0, 4, 1):
+                    pl.intrin.yield_(pl.add(acc, x))
+                (acc,) = pl.intrin.leak()
                 return acc
 
         _assert_violation(_seq_body(P, "main"), P, "x")
@@ -388,11 +392,13 @@ class TestInOutUseDiscipline:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 T_new: pl.Tensor[[64], pl.FP32] = self.mutate(x)
+                (acc,) = pl.intrin.carry(T_new)
                 # Loop header `i` and iter_arg `acc` are definitions — must not
                 # be flagged as reads even though the body runs after an InOut
                 # call has marked `x` dead.
-                for i, (acc,) in pl.range(0, 4, 1, init_values=(T_new,)):  # noqa: F841
-                    acc = pl.yield_(pl.add(acc, T_new))
+                for i in pl.range(0, 4, 1):
+                    pl.intrin.yield_(pl.add(acc, T_new))
+                (acc,) = pl.intrin.leak()
                 return acc
 
         assert dep_analysis.check_inout_use_discipline(_seq_body(P, "main"), P) is None

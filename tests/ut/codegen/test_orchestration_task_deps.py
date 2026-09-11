@@ -101,7 +101,7 @@ def test_direct_producer_dep_skips_is_valid_guard():
     straight-line scope is statically always-valid — the runtime never hands it
     the ``TaskId::invalid()`` sentinel. Orchestration codegen must therefore
     emit its ``set_dependencies`` insert *without* the redundant ``is_valid()``
-    guard. Loop-carried ``iter_arg`` / ``None``-seed / array-slot TaskIds still
+    guard. Loop-carried ``iter_arg`` / ``None`` initializer / array-slot TaskIds still
     keep the guard (see ``test_compiler_derived_deps_for_fixed_trip_loop_fan_in_``
     ``capture_task_ids`` and ``test_array_slot_task_id_usable_as_submit_dep``).
     """
@@ -395,13 +395,11 @@ def test_compiler_derived_deps_for_fixed_trip_loop_fan_in_capture_task_ids():
         def main(self, scratch: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             carried = scratch
             last_tid = pl.system.task_invalid()
-            for _i, (carried, last_tid) in pl.range(
-                0,
-                4,
-                init_values=(carried, last_tid),  # pyright: ignore[reportArgumentType]
-            ):
+            (carried, last_tid) = pl.intrin.carry(carried, last_tid)
+            for _i in pl.range(0, 4):
                 carried, last_tid = pl.submit(self.fill, carried)
-                carried, last_tid = pl.yield_(carried, last_tid)
+                pl.intrin.yield_(carried, last_tid)
+            (carried, last_tid) = pl.intrin.leak()
             out = self.consume(carried)
             return out
 
@@ -449,13 +447,11 @@ def test_compiler_derived_deps_for_dynamic_trip_loop_fan_in_falls_back():
         ) -> pl.Tensor[[64], pl.FP32]:
             carried = scratch
             last_tid = pl.system.task_invalid()
-            for _i, (carried, last_tid) in pl.range(
-                0,
-                n_steps,
-                init_values=(carried, last_tid),  # pyright: ignore[reportArgumentType]
-            ):
+            (carried, last_tid) = pl.intrin.carry(carried, last_tid)
+            for _i in pl.range(0, n_steps):
                 carried, last_tid = pl.submit(self.fill, carried)
-                carried, last_tid = pl.yield_(carried, last_tid)
+                pl.intrin.yield_(carried, last_tid)
+            (carried, last_tid) = pl.intrin.leak()
             out = self.consume(carried)
             return out
 
@@ -493,13 +489,11 @@ def test_compiler_derived_deps_for_dynamic_trip_tensor_carrier_falls_back():
             n_steps: pl.Scalar[pl.INDEX],
         ) -> pl.Tensor[[64], pl.FP32]:
             carried = scratch
-            for _i, (carried,) in pl.range(
-                0,
-                n_steps,
-                init_values=(carried,),
-            ):
+            (carried,) = pl.intrin.carry(carried)
+            for _i in pl.range(0, n_steps):
                 carried = self.fill(carried)
-                carried = pl.yield_(carried)
+                pl.intrin.yield_(carried)
+            (carried,) = pl.intrin.leak()
             out = self.consume(carried)
             return out
 
@@ -540,9 +534,11 @@ def test_descending_parallel_loop_emits_descending_cpp_loop():
             @pl.function(type=pl.FunctionType.Orchestration)
             def main(self, q: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 q_c = q
-                for _i, (q_c,) in pl.parallel(start, stop, step, init_values=(q_c,)):
+                (q_c,) = pl.intrin.carry(q_c)
+                for _i in pl.parallel(start, stop, step):
                     q_c = self.fill(q_c)
-                    q_c = pl.yield_(q_c)
+                    pl.intrin.yield_(q_c)
+                (q_c,) = pl.intrin.leak()
                 return self.consume(q_c)
 
         return P
@@ -592,9 +588,11 @@ def test_zero_step_loop_emits_a_terminating_condition():
         @pl.function(type=pl.FunctionType.Orchestration)
         def main(self, q: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             q_c = q
-            for _i, (q_c,) in pl.parallel(0, 4, 0, init_values=(q_c,)):
+            (q_c,) = pl.intrin.carry(q_c)
+            for _i in pl.parallel(0, 4, 0):
                 q_c = self.fill(q_c)
-                q_c = pl.yield_(q_c)
+                pl.intrin.yield_(q_c)
+            (q_c,) = pl.intrin.leak()
             return self.consume(q_c)
 
     code = _generate_orch_full_pipeline(P, analyze_auto_scopes_for_deps=True)
@@ -654,15 +652,13 @@ def test_compiler_derived_deps_for_dynamic_parallel_tensor_carriers_share_phase_
             q_carried = q
             k_carried = k
             v_carried = v
-            for _i, (q_carried, k_carried, v_carried) in pl.parallel(
-                0,
-                n_steps,
-                init_values=(q_carried, k_carried, v_carried),
-            ):
+            (q_carried, k_carried, v_carried) = pl.intrin.carry(q_carried, k_carried, v_carried)
+            for _i in pl.parallel(0, n_steps):
                 q_carried = self.fill_q(q_carried)
                 k_carried = self.fill_k(k_carried)
                 v_carried = self.fill_v(v_carried)
-                q_carried, k_carried, v_carried = pl.yield_(q_carried, k_carried, v_carried)
+                pl.intrin.yield_(q_carried, k_carried, v_carried)
+            (q_carried, k_carried, v_carried) = pl.intrin.leak()
             out = self.consume(q_carried, k_carried, v_carried)
             return out
 
@@ -718,13 +714,11 @@ def test_compiler_derived_deps_for_dynamic_trip_tuple_output_tensor_carrier_fall
             right: pl.Tensor[[64], pl.FP32],
             n_steps: pl.Scalar[pl.INDEX],
         ) -> pl.Tensor[[64], pl.FP32]:
-            for _i, (left_carried, right_carried) in pl.range(
-                0,
-                n_steps,
-                init_values=(left, right),
-            ):
+            (left_carried, right_carried) = pl.intrin.carry(left, right)
+            for _i in pl.range(0, n_steps):
                 left_carried, right_carried = self.fill_pair(left_carried, right_carried)
-                left_carried, right_carried = pl.yield_(left_carried, right_carried)
+                pl.intrin.yield_(left_carried, right_carried)
+            (left_carried, right_carried) = pl.intrin.leak()
             out = self.consume(right_carried)
             return out
 
@@ -786,15 +780,13 @@ def test_compiler_auto_manual_scope_is_not_tied_to_function_name():
             n_steps: pl.Scalar[pl.INDEX],
         ) -> pl.Tensor[[64], pl.FP32]:
             q_norm_buf, k_norm_buf = self.qk_norm(q_src, k_src, q_norm_buf, k_norm_buf)
-            for _i, (all_q_carried, k_cache_carried) in pl.parallel(
-                0,
-                n_steps,
-                init_values=(all_q, k_cache),
-            ):
+            (all_q_carried, k_cache_carried) = pl.intrin.carry(all_q, k_cache)
+            for _i in pl.parallel(0, n_steps):
                 all_q_carried, k_cache_carried = self.cache_update(
                     q_norm_buf, k_norm_buf, all_q_carried, k_cache_carried
                 )
-                all_q_carried, k_cache_carried = pl.yield_(all_q_carried, k_cache_carried)
+                pl.intrin.yield_(all_q_carried, k_cache_carried)
+            (all_q_carried, k_cache_carried) = pl.intrin.leak()
             out = self.consume(k_cache_carried)
             return out
 

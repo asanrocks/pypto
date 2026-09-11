@@ -503,7 +503,8 @@ def test_loop_carried_returned_distributed_tensors_reuse_contexts():
         ) -> pl.Tensor[[4], pl.FP32]:
             # Both call sites forward the caller's ctx params: the loop carry is
             # seeded from them and the yield keeps naming the same windows.
-            for _layer, (data_i, signal_i, value_i) in pl.range(2, init_values=(data, signal, value)):
+            data_i, signal_i, value_i = pl.intrin.carry(data, signal, value)
+            for _layer in pl.range(2):
                 carried = self.comm(
                     data_i,
                     signal_i,
@@ -518,10 +519,11 @@ def test_loop_carried_returned_distributed_tensors_reuse_contexts():
                         ]
                     },
                 )
-                data_next = carried[0]
-                signal_next = carried[1]
-                value_next = self.compute(value_i, attrs={"arg_directions": [pl.adir.inout]})
-                data_out, signal_out, value_out = pl.yield_(data_next, signal_next, value_next)
+                data_i = carried[0]
+                signal_i = carried[1]
+                value_i = self.compute(value_i, attrs={"arg_directions": [pl.adir.inout]})
+                pl.intrin.yield_(data_i, signal_i, value_i)
+            data_out, signal_out, value_out = pl.intrin.leak()
             tail = self.comm(
                 data_out,
                 signal_out,

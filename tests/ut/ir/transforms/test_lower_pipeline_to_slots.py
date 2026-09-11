@@ -108,11 +108,15 @@ class SingleLoad:
         a: pl.Tensor[[256, 64], pl.FP32],
         out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
     ) -> pl.Tensor[[256, 64], pl.FP32]:
-        for i, (acc,) in pl.pipeline(0, 4, 1, stage=2, init_values=(out,)):
-            t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
+        (acc,) = pl.intrin.carry(out)
+        for i in pl.pipeline(0, 4, 1, stage=2):
+            t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+            )
             e: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(t)
             nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(e, [i * 64, 0], acc)
-            y = pl.yield_(nxt)
+            pl.intrin.yield_(nxt)
+        (y,) = pl.intrin.leak()
         return y
 
 
@@ -186,12 +190,18 @@ class TestBinding:
                 a: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (acc, off) in pl.pipeline(0, 4, 1, stage=2, init_values=(out, 0)):
-                    carried_load: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [off, 0], [64, 64])
-                    good: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
+                (acc, off) = pl.intrin.carry(out, pl.const(0, pl.INDEX))
+                for i in pl.pipeline(0, 4, 1, stage=2):
+                    carried_load: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [off, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
+                    good: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
                     s: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.add(carried_load, good)
                     nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(s, [i * 64, 0], acc)
-                    y, y_off = pl.yield_(nxt, off + 64)
+                    pl.intrin.yield_(nxt, off + 64)
+                (y, y_off) = pl.intrin.leak()
                 return y
 
         after = _run_to_slots(Before, passes.MemoryPlanner.PTOAS)
@@ -230,11 +240,15 @@ class TestFallback:
                 a: pl.Tensor[[512, 256], pl.FP32],
                 out: pl.Out[pl.Tensor[[512, 256], pl.FP32]],
             ) -> pl.Tensor[[512, 256], pl.FP32]:
-                for i, (acc,) in pl.pipeline(0, 4, 1, stage=2, init_values=(out,)):
-                    t: pl.Tile[[128, 256], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 128, 0], [128, 256])
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.pipeline(0, 4, 1, stage=2):
+                    t: pl.Tile[[128, 256], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i * 128, 0], [128, 256], target_memory=pl.Mem.Vec
+                    )
                     e: pl.Tile[[128, 256], pl.FP32, pl.Mem.Vec] = pl.exp(t)
                     nxt: pl.Tensor[[512, 256], pl.FP32] = pl.store(e, [i * 128, 0], acc)
-                    y = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (y,) = pl.intrin.leak()
                 return y
 
         self._assert_declined(Before)
@@ -254,16 +268,23 @@ class TestFallback:
                 flag: pl.Scalar[pl.INT32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                seed: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [0, 0], [64, 64])
-                for i, (carried,) in pl.pipeline(0, 4, 1, stage=2, init_values=(seed,)):
-                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
+                seed: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                    a, [0, 0], [64, 64], target_memory=pl.Mem.Vec
+                )
+                (carried,) = pl.intrin.carry(seed)
+                for i in pl.pipeline(0, 4, 1, stage=2):
+                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
                     if flag > 0:
                         v: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = t
-                        yv = pl.yield_(v)
+                        pl.intrin.yield_(v)
                     else:
                         v2: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(carried)
-                        yv = pl.yield_(v2)
-                    y = pl.yield_(yv)
+                        pl.intrin.yield_(v2)
+                    (yv,) = pl.intrin.leak()
+                    pl.intrin.yield_(yv)
+                (y,) = pl.intrin.leak()
                 nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(y, [0, 0], out)
                 return nxt
 
@@ -274,9 +295,11 @@ class TestFallback:
         Budgeting only the regions this pass synthesizes lets a 128 KB region in
         alongside the author's 128 KB one, and the pair overflows the space."""
 
-        @pl.program
+        # Parser-owned MemRef slot authoring, as in test_author_declared_
+        # allocation_is_left_alone above.
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[512, 256], pl.FP32],
@@ -285,9 +308,11 @@ class TestFallback:
             ) -> pl.Tensor[[512, 256], pl.FP32]:
                 for i, (acc,) in pl.pipeline(0, 4, 1, stage=2, init_values=(out,)):
                     mine: pl.Tile[[64, 256], pl.FP32, pl.MemRef("mine", slots=2)[i % 2], pl.Mem.Vec] = (
-                        pl.load(a, [i * 64, 0], [64, 256])
+                        pl.load(a, [i * 64, 0], [64, 256], target_memory=pl.Mem.Vec)
                     )
-                    t: pl.Tile[[64, 256], pl.FP32, pl.Mem.Vec] = pl.load(b, [i * 64, 0], [64, 256])
+                    t: pl.Tile[[64, 256], pl.FP32, pl.Mem.Vec] = pl.load(
+                        b, [i * 64, 0], [64, 256], target_memory=pl.Mem.Vec
+                    )
                     s: pl.Tile[[64, 256], pl.FP32, pl.Mem.Vec] = pl.add(mine, t)
                     nxt: pl.Tensor[[512, 256], pl.FP32] = pl.store(s, [i * 64, 0], acc)
                     y = pl.yield_(nxt)
@@ -311,13 +336,19 @@ class TestFallback:
                 a: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (acc,) in pl.pipeline(0, 4, 1, stage=2, init_values=(out,)):
-                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
-                    for _k, (carried,) in pl.range(2, init_values=(t,)):
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.pipeline(0, 4, 1, stage=2):
+                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
+                    (carried,) = pl.intrin.carry(t)
+                    for _k in pl.range(2):
                         stepped: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(carried)
-                        yk = pl.yield_(stepped)
+                        pl.intrin.yield_(stepped)
+                    (yk,) = pl.intrin.leak()
                     nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(yk, [i * 64, 0], acc)
-                    y = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (y,) = pl.intrin.leak()
                 return y
 
         self._assert_declined(Before)
@@ -333,11 +364,15 @@ class TestFallback:
                 a: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (acc,) in pl.pipeline(0, 256, 64, stage=2, init_values=(out,)):
-                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i, 0], [64, 64])
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.pipeline(0, 256, 64, stage=2):
+                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
                     e: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(t)
                     nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(e, [i, 0], acc)
-                    y = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (y,) = pl.intrin.leak()
                 return y
 
         self._assert_declined(Before)
@@ -354,10 +389,16 @@ class TestFallback:
                 a: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                seed: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [0, 0], [64, 64])
-                for i, (carried,) in pl.pipeline(0, 4, 1, stage=2, init_values=(seed,)):
-                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
-                    y = pl.yield_(t)
+                seed: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                    a, [0, 0], [64, 64], target_memory=pl.Mem.Vec
+                )
+                (carried,) = pl.intrin.carry(seed)
+                for i in pl.pipeline(0, 4, 1, stage=2):
+                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
+                    pl.intrin.yield_(t)
+                (y,) = pl.intrin.leak()
                 nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(y, [0, 0], out)
                 return nxt
 
@@ -375,13 +416,17 @@ class TestFallback:
                 a: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (acc,) in pl.pipeline(0, 4, 1, stage=2, init_values=(out,)):
-                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.pipeline(0, 4, 1, stage=2):
+                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
                     r: pl.Tile[[32, 128], pl.FP32, pl.Mem.Vec] = pl.tile.reshape(t, [32, 128])
                     e: pl.Tile[[32, 128], pl.FP32, pl.Mem.Vec] = pl.exp(r)
                     f: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.tile.reshape(e, [64, 64])
                     nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(f, [i * 64, 0], acc)
-                    y = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (y,) = pl.intrin.leak()
                 return y
 
         self._assert_declined(Before)
@@ -397,11 +442,15 @@ class TestFallback:
                 a: pl.Tensor[[2048, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[2048, 64], pl.FP32]],
             ) -> pl.Tensor[[2048, 64], pl.FP32]:
-                for i, (acc,) in pl.pipeline(0, 32, 1, stage=32, init_values=(out,)):
-                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.pipeline(0, 32, 1, stage=32):
+                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
                     e: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(t)
                     nxt: pl.Tensor[[2048, 64], pl.FP32] = pl.store(e, [i * 64, 0], acc)
-                    y = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (y,) = pl.intrin.leak()
                 return y
 
         self._assert_declined(Before)
@@ -417,11 +466,15 @@ class TestFallback:
                 a: pl.Tensor[[320, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[320, 64], pl.FP32]],
             ) -> pl.Tensor[[320, 64], pl.FP32]:
-                for i, (acc,) in pl.pipeline(1, 5, 1, stage=2, init_values=(out,)):
-                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.pipeline(1, 5, 1, stage=2):
+                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
                     e: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(t)
                     nxt: pl.Tensor[[320, 64], pl.FP32] = pl.store(e, [i * 64, 0], acc)
-                    y = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (y,) = pl.intrin.leak()
                 return y
 
         self._assert_declined(Before)
@@ -438,13 +491,19 @@ class TestFallback:
                 a: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for _o, (outer,) in pl.pipeline(0, 256, 64, stage=2, init_values=(out,)):
-                    for i, (inner,) in pl.pipeline(0, 4, 1, stage=2, init_values=(outer,)):
-                        t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
+                (outer,) = pl.intrin.carry(out)
+                for _o in pl.pipeline(0, 256, 64, stage=2):
+                    (inner,) = pl.intrin.carry(outer)
+                    for i in pl.pipeline(0, 4, 1, stage=2):
+                        t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                            a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                        )
                         e: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(t)
                         nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(e, [i * 64, 0], inner)
-                        y_in = pl.yield_(nxt)
-                    y = pl.yield_(y_in)
+                        pl.intrin.yield_(nxt)
+                    (y_in,) = pl.intrin.leak()
+                    pl.intrin.yield_(y_in)
+                (y,) = pl.intrin.leak()
                 return y
 
         self._assert_declined(Before)
@@ -462,17 +521,23 @@ class TestFallback:
                 b: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (acc,) in pl.pipeline(0, 4, 1, stage=2, init_values=(out,)):
-                    ok: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i * 64, 0], [64, 64])
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.pipeline(0, 4, 1, stage=2):
+                    ok: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
                     # Consumed by a view op, so it can never become a slot.
-                    blocked: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(b, [i * 64, 0], [64, 64])
+                    blocked: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        b, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
                     r: pl.Tile[[32, 128], pl.FP32, pl.Mem.Vec] = pl.tile.reshape(blocked, [32, 128])
                     v: pl.Tile[[32, 128], pl.FP32, pl.Mem.Vec] = pl.exp(r)
                     f: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.tile.reshape(v, [64, 64])
                     e: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(ok)
                     s: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.add(e, f)
                     nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(s, [i * 64, 0], acc)
-                    y = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (y,) = pl.intrin.leak()
                 return y
 
         self._assert_declined(Before)
@@ -480,9 +545,14 @@ class TestFallback:
     def test_author_declared_allocation_is_left_alone(self):
         """A binding the author wrote stays the author's."""
 
-        @pl.program
+        # The declared pl.MemRef slot authoring lives only in LHS annotations —
+        # a parser-owned channel (see tests/ut/ir/parser/test_multi_buffer_codegen.py);
+        # the tracing surface has no producer-side spelling yet, so this
+        # fixture collects through the parser markers with the round-trip
+        # carry spelling.
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[256, 64], pl.FP32],
@@ -490,7 +560,7 @@ class TestFallback:
             ) -> pl.Tensor[[256, 64], pl.FP32]:
                 for i, (acc,) in pl.pipeline(0, 4, 1, stage=2, init_values=(out,)):
                     t: pl.Tile[[64, 64], pl.FP32, pl.MemRef("mine", slots=2)[i % 2], pl.Mem.Vec] = pl.load(
-                        a, [i * 64, 0], [64, 64]
+                        a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec
                     )
                     e: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(t)
                     nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(e, [i * 64, 0], acc)
@@ -517,11 +587,15 @@ class TestChaining:
                 a: pl.Tensor[[256, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                for i, (acc,) in pl.pipeline(0, 256, 64, stage=2, init_values=(out,)):
-                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(a, [i, 0], [64, 64])
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.pipeline(0, 256, 64, stage=2):
+                    t: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.load(
+                        a, [i, 0], [64, 64], target_memory=pl.Mem.Vec
+                    )
                     e: pl.Tile[[64, 64], pl.FP32, pl.Mem.Vec] = pl.exp(t)
                     nxt: pl.Tensor[[256, 64], pl.FP32] = pl.store(e, [i, 0], acc)
-                    y = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (y,) = pl.intrin.leak()
                 return y
 
         before_loads = _load_count(Before)

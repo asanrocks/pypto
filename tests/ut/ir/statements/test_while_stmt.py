@@ -9,8 +9,6 @@
 
 """Unit tests for WhileStmt class."""
 
-from typing import cast
-
 import pypto.language as pl
 import pytest
 from pypto import DataType, ir, passes
@@ -74,8 +72,8 @@ class TestWhileStmt:
 
         assert len(while_stmt.iter_args) == 1
         assert len(while_stmt.return_vars) == 1
-        assert cast(ir.IterArg, while_stmt.iter_args[0]).name_hint == "x"
-        assert cast(ir.Var, while_stmt.return_vars[0]).name_hint == "x_final"
+        assert while_stmt.iter_args[0].name_hint == "x"
+        assert while_stmt.return_vars[0].name_hint == "x_final"
         assert isinstance(while_stmt.body, ir.YieldStmt)
 
     def test_while_stmt_is_stmt(self):
@@ -167,9 +165,9 @@ class TestWhileStmtIterArgMutatorRemap:
                 acc: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tile.create(
                     [4], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
                 )
-                n: pl.Scalar[pl.INT64] = 0
-                for (a,) in pl.while_(init_values=(acc,)):
-                    pl.cond(n < 2)
+                n = pl.const(0, pl.INT64)
+                (a,) = pl.intrin.carry(acc)
+                while n < 2:
                     # Spelled out so `Before` is already fully placed: this test is about
                     # IterArg pointer remapping, not about memory-space inference.
                     t: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.load(
@@ -179,7 +177,8 @@ class TestWhileStmtIterArgMutatorRemap:
                         target_memory=pl.Mem.Vec,
                     )
                     s: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.add(a, t)
-                    r: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.yield_(s)
+                    pl.intrin.yield_(s)
+                (r,) = pl.intrin.leak()
                 out: pl.Tensor[[4], pl.FP32] = pl.store(r, [0], out)
                 return out
 
@@ -196,9 +195,9 @@ class TestWhileStmtIterArgMutatorRemap:
                 acc: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tile.create(
                     [4], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
                 )
-                n: pl.Scalar[pl.INT64] = 0
-                for (a,) in pl.while_(init_values=(acc,)):
-                    pl.cond(n < 2)
+                n = pl.const(0, pl.INT64)
+                (a,) = pl.intrin.carry(acc)
+                while n < 2:
                     t: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.load(
                         x,
                         [0],
@@ -206,7 +205,8 @@ class TestWhileStmtIterArgMutatorRemap:
                         target_memory=pl.Mem.Vec,
                     )
                     s: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.add(a, t)
-                    r: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.yield_(s)
+                    pl.intrin.yield_(s)
+                (r,) = pl.intrin.leak()
                 out: pl.Tensor[[4], pl.FP32] = pl.store(r, [0], out)
                 return out
 
@@ -234,9 +234,9 @@ class TestWhileStmtIterArgMutatorRemap:
                 acc: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tile.create(
                     [4], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
                 )
-                cnt: pl.Scalar[pl.INT64] = 0
-                for c, a in pl.while_(init_values=(cnt, acc)):
-                    pl.cond(c < 2)
+                cnt = pl.const(0, pl.INT64)
+                (c, a) = pl.intrin.carry(cnt, acc)
+                while c < 2:
                     # Spelled out so `Before` is already fully placed: this test is about
                     # IterArg pointer remapping, not about memory-space inference.
                     t: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.load(
@@ -247,7 +247,8 @@ class TestWhileStmtIterArgMutatorRemap:
                     )
                     s: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.add(a, t)
                     c2: pl.Scalar[pl.INT64] = c + 1
-                    rc, ra = pl.yield_(c2, s)
+                    pl.intrin.yield_(c2, s)
+                (rc, ra) = pl.intrin.leak()
                 out: pl.Tensor[[4], pl.FP32] = pl.store(ra, [0], out)
                 return out
 
@@ -264,9 +265,9 @@ class TestWhileStmtIterArgMutatorRemap:
                 acc: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tile.create(
                     [4], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
                 )
-                cnt: pl.Scalar[pl.INT64] = 0
-                for c, a in pl.while_(init_values=(cnt, acc)):
-                    pl.cond(c < 2)
+                cnt = pl.const(0, pl.INT64)
+                (c, a) = pl.intrin.carry(cnt, acc)
+                while c < 2:
                     t: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.load(
                         x,
                         [0],
@@ -275,7 +276,8 @@ class TestWhileStmtIterArgMutatorRemap:
                     )
                     s: pl.Tile[[4], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.add(a, t)
                     c2: pl.Scalar[pl.INT64] = c + 1
-                    rc, ra = pl.yield_(c2, s)
+                    pl.intrin.yield_(c2, s)
+                (rc, ra) = pl.intrin.leak()
                 out: pl.Tensor[[4], pl.FP32] = pl.store(ra, [0], out)
                 return out
 

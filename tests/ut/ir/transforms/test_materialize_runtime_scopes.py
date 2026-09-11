@@ -499,10 +499,12 @@ def test_opt_out_scopes_survive_full_pipeline():
             # RuntimeScopeStmt is transparent to SSA (ConvertToSSA / SSAVerify see
             # the carry-yield through the scope), so this is supported.
             with pl.scope():
-                for i, (acc,) in pl.range(4, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.range(4):
                     with pl.scope():
                         nxt: pl.Tensor[[16, 16], pl.FP32] = self.kernel(a, acc)
-                        acc = pl.yield_(nxt)
+                        pl.intrin.yield_(nxt)
+                (acc,) = pl.intrin.leak()
                 return acc
 
     pm = PassManager.get_strategy(OptimizationStrategy.Default)

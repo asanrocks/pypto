@@ -303,10 +303,11 @@ class TestInsertMxScaleAddr:
                 )
                 if flag > 0:
                     then_value = pl.matmul_mx(lhs, lhs_scale, rhs, rhs_scale)
-                    result = pl.yield_(then_value)
+                    pl.intrin.yield_(then_value)
                 else:
                     else_value = pl.matmul_mx(lhs, lhs_scale, rhs, rhs_scale)
-                    result = pl.yield_(else_value)
+                    pl.intrin.yield_(else_value)
+                (result,) = pl.intrin.leak()
                 stored = pl.store(result, [0, 0], out)
                 return stored
 
@@ -494,9 +495,11 @@ class TestInsertMxScaleAddr:
                     target_memory=pl.Mem.RightScale,
                 )
                 acc0 = pl.tile.create([16, 32], dtype=pl.FP32, target_memory=pl.Mem.Acc)
-                for _i, (lhs_i, ls_i, acc) in pl.range(0, 1, 1, init_values=(lhs, lhs_scale, acc0)):
+                (lhs_i, ls_i, acc) = pl.intrin.carry(lhs, lhs_scale, acc0)
+                for _i in pl.range(0, 1, 1):
                     acc_next = pl.matmul_mx_acc(acc, lhs_i, ls_i, rhs, rhs_scale)
-                    _lhs_o, _ls_o, acc_out = pl.yield_(lhs_i, ls_i, acc_next)
+                    pl.intrin.yield_(lhs_i, ls_i, acc_next)
+                (_lhs_o, _ls_o, acc_out) = pl.intrin.leak()
                 stored = pl.store(acc_out, [0, 0], out)
                 return stored
 

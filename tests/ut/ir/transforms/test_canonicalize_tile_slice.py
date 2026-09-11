@@ -388,7 +388,8 @@ class TestSliceIntoExtract:
                 c_init: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [16, 64], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko, (c_iter,) in pl.pipeline(0, 512, 256, init_values=(c_init,), stage=2):
+                (c_iter,) = pl.intrin.carry(c_init)
+                for ko in pl.pipeline(0, 512, 256, stage=2):
                     a: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_slice, 0, ko, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -396,7 +397,8 @@ class TestSliceIntoExtract:
                         rhs_mat, ko, 0, shape=[256, 64], target_memory=pl.Mem.Right
                     )
                     cc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(c_iter, a, b)
-                    c: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(cc)
+                    pl.intrin.yield_(cc)
+                (c,) = pl.intrin.leak()
                 out = pl.store(c, [0, 0], out)
                 return out
 
@@ -418,7 +420,8 @@ class TestSliceIntoExtract:
                 c_init: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [16, 64], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko, (c_iter,) in pl.pipeline(0, 512, 256, init_values=(c_init,), stage=2):
+                (c_iter,) = pl.intrin.carry(c_init)
+                for ko in pl.pipeline(0, 512, 256, stage=2):
                     a: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko + 256, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -426,7 +429,8 @@ class TestSliceIntoExtract:
                         rhs_mat, ko, 0, shape=[256, 64], target_memory=pl.Mem.Right
                     )
                     cc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(c_iter, a, b)
-                    c: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(cc)
+                    pl.intrin.yield_(cc)
+                (c,) = pl.intrin.leak()
                 out = pl.store(c, [0, 0], out)
                 return out
 
@@ -457,7 +461,8 @@ class TestSliceIntoExtract:
                 c_init: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [16, 64], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko, (c_iter,) in pl.pipeline(0, 512, 256, init_values=(c_init,), stage=2):
+                (c_iter,) = pl.intrin.carry(c_init)
+                for ko in pl.pipeline(0, 512, 256, stage=2):
                     a: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_slice, 0, ko, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -465,7 +470,8 @@ class TestSliceIntoExtract:
                         rhs_slice, ko, 0, shape=[256, 64], target_memory=pl.Mem.Right
                     )
                     cc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(c_iter, a, b)
-                    c: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(cc)
+                    pl.intrin.yield_(cc)
+                (c,) = pl.intrin.leak()
                 out = pl.store(c, [0, 0], out)
                 return out
 
@@ -487,7 +493,8 @@ class TestSliceIntoExtract:
                 c_init: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [16, 64], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko, (c_iter,) in pl.pipeline(0, 512, 256, init_values=(c_init,), stage=2):
+                (c_iter,) = pl.intrin.carry(c_init)
+                for ko in pl.pipeline(0, 512, 256, stage=2):
                     a: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -495,7 +502,8 @@ class TestSliceIntoExtract:
                         rhs_mat, ko, 0, shape=[256, 64], target_memory=pl.Mem.Right
                     )
                     cc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(c_iter, a, b)
-                    c: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(cc)
+                    pl.intrin.yield_(cc)
+                (c,) = pl.intrin.leak()
                 out = pl.store(c, [0, 0], out)
                 return out
 
@@ -1066,9 +1074,11 @@ class TestUnalignedVecSlice:
                     x, [0, 0], [16, 8], target_memory=pl.Mem.Vec
                 )
                 head: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.tile.slice(local, [16, 1], [0, 1])
-                for _i, (carried,) in pl.range(1, init_values=(head,)):
+                (carried,) = pl.intrin.carry(head)
+                for _i in pl.range(1):
                     scaled: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.tile.muls(carried, 0.5)
-                    result: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.yield_(scaled)
+                    pl.intrin.yield_(scaled)
+                (result,) = pl.intrin.leak()
                 out = pl.store(result, [0, 0], out)
                 return out
 
@@ -1086,9 +1096,11 @@ class TestUnalignedVecSlice:
                 head_ext: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.tile.extract(
                     local, 0, 1, shape=[16, 1], target_memory=pl.Mem.Vec
                 )
-                for _i, (carried,) in pl.range(1, init_values=(head_ext,)):
+                (carried,) = pl.intrin.carry(head_ext)
+                for _i in pl.range(1):
                     scaled: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.tile.muls(carried, 0.5)
-                    result: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.yield_(scaled)
+                    pl.intrin.yield_(scaled)
+                (result,) = pl.intrin.leak()
                 out = pl.store(result, [0, 0], out)
                 return out
 
@@ -1112,9 +1124,11 @@ class TestUnalignedVecSlice:
                 seed: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.tile.create(
                     [16, 1], dtype=pl.FP32, target_memory=pl.Mem.Vec
                 )
-                for _i, (carried,) in pl.range(1, init_values=(seed,)):
+                (carried,) = pl.intrin.carry(seed)
+                for _i in pl.range(1):
                     head: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.tile.slice(local, [16, 1], [0, 1])
-                    result: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.yield_(head)
+                    pl.intrin.yield_(head)
+                (result,) = pl.intrin.leak()
                 out = pl.store(result, [0, 0], out)
                 return out
 
@@ -1132,11 +1146,13 @@ class TestUnalignedVecSlice:
                 seed: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.tile.create(
                     [16, 1], dtype=pl.FP32, target_memory=pl.Mem.Vec
                 )
-                for _i, (carried,) in pl.range(1, init_values=(seed,)):
+                (carried,) = pl.intrin.carry(seed)
+                for _i in pl.range(1):
                     head_ext: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.tile.extract(
                         local, 0, 1, shape=[16, 1], target_memory=pl.Mem.Vec
                     )
-                    result: pl.Tile[[16, 1], pl.FP32, pl.Mem.Vec] = pl.yield_(head_ext)
+                    pl.intrin.yield_(head_ext)
+                (result,) = pl.intrin.leak()
                 out = pl.store(result, [0, 0], out)
                 return out
 
@@ -1671,9 +1687,11 @@ class TestAccAccumulatorWindowResolution:
                 b: pl.Tile[[k, cols], pl.FP16, pl.Mem.Right] = pl.tile.move(w_mat, target_memory=pl.Mem.Right)
                 acc = pl.tile.create(acc_shape, pl.FP32, target_memory=pl.Mem.Acc)
                 acc_win = pl.tile.slice(acc, slice_shape, offset)
-                for _k0, (carried,) in pl.range(2, init_values=(acc_win,)):
+                (carried,) = pl.intrin.carry(acc_win)
+                for _k0 in pl.range(2):
                     stepped = pl.tile.matmul_acc(carried, a, b)
-                    settled = pl.yield_(stepped)
+                    pl.intrin.yield_(stepped)
+                (settled,) = pl.intrin.leak()
                 out = pl.tile.store(settled, [0, 0], out)
                 return out
 
@@ -1747,15 +1765,19 @@ class TestAccAccumulatorWindowResolution:
                 # Legal: the window spans every row of its [16, 64] parent.
                 acc_ok = pl.tile.create([16, 64], pl.FP32, target_memory=pl.Mem.Acc)
                 win_ok = pl.tile.slice(acc_ok, [16, 32], [0, 32])
-                for _i, (carried_ok,) in pl.range(2, init_values=(win_ok,)):
+                (carried_ok,) = pl.intrin.carry(win_ok)
+                for _i in pl.range(2):
                     stepped_ok = pl.tile.matmul_acc(carried_ok, a, b)
-                    settled_ok = pl.yield_(stepped_ok)
+                    pl.intrin.yield_(stepped_ok)
+                (settled_ok,) = pl.intrin.leak()
                 # Illegal: a row window of a two-block-column [32, 32] parent.
                 acc_bad = pl.tile.create([32, 32], pl.FP32, target_memory=pl.Mem.Acc)
                 win_bad = pl.tile.slice(acc_bad, [16, 32], [16, 0])
-                for _j, (carried_bad,) in pl.range(2, init_values=(win_bad,)):
+                (carried_bad,) = pl.intrin.carry(win_bad)
+                for _j in pl.range(2):
                     stepped_bad = pl.tile.matmul_acc(carried_bad, a, b)
-                    settled_bad = pl.yield_(stepped_bad)
+                    pl.intrin.yield_(stepped_bad)
+                (settled_bad,) = pl.intrin.leak()
                 stored_ok = pl.tile.store(settled_ok, [0, 0], out)
                 stored_all = pl.tile.store(settled_bad, [0, 0], stored_ok)
                 return stored_all
@@ -1924,9 +1946,11 @@ class TestAccAccumulatorLoopEdges:
                 acc_small = pl.tile.create(win_shape, pl.FP32, target_memory=pl.Mem.Acc)
                 acc_big = pl.tile.create(big_acc_shape, pl.FP32, target_memory=pl.Mem.Acc)
                 big_win = pl.tile.slice(acc_big, win_shape, win_offset)
-                for _k0, (carried,) in pl.range(trip, init_values=(acc_small,)):
+                (carried,) = pl.intrin.carry(acc_small)
+                for _k0 in pl.range(trip):
                     stepped = pl.tile.matmul_acc(carried, a, b)
-                    settled = pl.yield_(big_win)
+                    pl.intrin.yield_(big_win)
+                (settled,) = pl.intrin.leak()
                 out = pl.tile.store(acc_big, [0, 0], out)
                 return out
 
@@ -1977,8 +2001,10 @@ class TestAccAccumulatorLoopEdges:
                 )
                 acc = pl.tile.create(acc_shape, pl.FP32, target_memory=pl.Mem.Acc)
                 acc_win = pl.tile.slice(acc, win_shape, win_offset)
-                for _k0, (carried,) in pl.range(2, init_values=(acc_win,)):
-                    settled = pl.yield_(carried)
+                (carried,) = pl.intrin.carry(acc_win)
+                for _k0 in pl.range(2):
+                    pl.intrin.yield_(carried)
+                (settled,) = pl.intrin.leak()
                 final = pl.tile.matmul_acc(settled, a, b)
                 out = pl.tile.store(acc, [0, 0], out)
                 return out
@@ -2025,10 +2051,11 @@ class TestAccAccumulatorLoopEdges:
                 acc = pl.tile.create(acc_shape, pl.FP32, target_memory=pl.Mem.Acc)
                 win = pl.tile.slice(acc, win_shape, win_offset)
                 if flag > 0:
-                    chosen = pl.yield_(win)
+                    pl.intrin.yield_(win)
                 else:
                     aliased = pl.tile.reshape(win, win_shape)
-                    chosen = pl.yield_(aliased)
+                    pl.intrin.yield_(aliased)
+                (chosen,) = pl.intrin.leak()
                 done = pl.tile.matmul_acc(chosen, a, b)
                 out = pl.tile.store(acc, [0, 0], out)
                 return out
