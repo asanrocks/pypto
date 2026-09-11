@@ -183,12 +183,15 @@ def test_c2v_boundary_becomes_aiv_shard_and_vector_region_is_halved():
         ) -> pl.Tensor[[128, 128], pl.FP32]:
             subblock_idx = pl.tile.get_subblock_idx()
             popped = pl.tile.aiv_shard(qk, split=1)
-            y: pl.Tile[
-                [64, 128],
-                pl.FP32,
-                pl.Mem.Vec,
-                pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-            ] = pl.tile.add(popped, popped)
+            y = pl.intrin.transmute(
+                pl.tile.add(popped, popped),
+                pl.Tile[
+                    [64, 128],
+                    pl.FP32,
+                    pl.Mem.Vec,
+                    pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
+                ],
+            )
             out_store = pl.tile.store(y, [0 + subblock_idx * 64, 0], out_0)
             return out_store
 
@@ -238,14 +241,17 @@ def test_auto_c2v_boundary_localizes_a_ragged_split_axis():
             out_0: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
         ) -> pl.Tensor[[128, 128], pl.FP32]:
             subblock_idx = pl.tile.get_subblock_idx()
-            popped: pl.Tile[
-                [64, 128],
-                pl.FP32,
-                pl.Mem.Vec,
-                pl.TileView(
-                    valid_shape=[pl.min(pl.max(127, subblock_idx * 64) - subblock_idx * 64, 64), 128]
-                ),
-            ] = pl.tile.aiv_shard(qk, split=1)
+            popped = pl.intrin.transmute(
+                pl.tile.aiv_shard(qk, split=1),
+                pl.Tile[
+                    [64, 128],
+                    pl.FP32,
+                    pl.Mem.Vec,
+                    pl.TileView(
+                        valid_shape=[pl.min(pl.max(127, subblock_idx * 64) - subblock_idx * 64, 64), 128]
+                    ),
+                ],
+            )
             out_store = pl.tile.store(popped, [0 + subblock_idx * 64, 0], out_0)
             return out_store
 
@@ -285,12 +291,15 @@ def test_store_offset_at_nonzero_base_localizes_additively():
         ) -> pl.Tensor[[256, 128], pl.FP32]:
             subblock_idx = pl.tile.get_subblock_idx()
             popped = pl.tile.aiv_shard(qk, split=1)
-            y: pl.Tile[
-                [64, 128],
-                pl.FP32,
-                pl.Mem.Vec,
-                pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-            ] = pl.tile.add(popped, popped)
+            y = pl.intrin.transmute(
+                pl.tile.add(popped, popped),
+                pl.Tile[
+                    [64, 128],
+                    pl.FP32,
+                    pl.Mem.Vec,
+                    pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
+                ],
+            )
             out_store = pl.tile.store(y, [16 + subblock_idx * 64, 0], out_0)
             return out_store
 
@@ -421,12 +430,17 @@ def test_ragged_boundary_is_rebalanced_across_the_two_lanes():
             out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
         ) -> pl.Tensor[[16, 128], pl.FP32]:
             subblock_idx = pl.tile.get_subblock_idx()
-            popped: pl.Tile[
-                [8, 128],
-                pl.FP32,
-                pl.Mem.Vec,
-                pl.TileView(valid_shape=[pl.min(pl.max(13, subblock_idx * 7) - subblock_idx * 7, 7), 128]),
-            ] = pl.tile.aiv_shard(qk, split=1, lane_stride=7)
+            popped = pl.intrin.transmute(
+                pl.tile.aiv_shard(qk, split=1, lane_stride=7),
+                pl.Tile[
+                    [8, 128],
+                    pl.FP32,
+                    pl.Mem.Vec,
+                    pl.TileView(
+                        valid_shape=[pl.min(pl.max(13, subblock_idx * 7) - subblock_idx * 7, 7), 128]
+                    ),
+                ],
+            )
             out_store = pl.tile.store(popped, [0 + subblock_idx * 7, 0], out_0)
             return out_store
 
@@ -463,12 +477,15 @@ def test_empty_boundary_keeps_the_box_partition():
             out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
         ) -> pl.Tensor[[16, 128], pl.FP32]:
             subblock_idx = pl.tile.get_subblock_idx()
-            popped: pl.Tile[
-                [8, 128],
-                pl.FP32,
-                pl.Mem.Vec,
-                pl.TileView(valid_shape=[pl.min(pl.max(0, subblock_idx * 8) - subblock_idx * 8, 8), 128]),
-            ] = pl.tile.aiv_shard(qk, split=1)
+            popped = pl.intrin.transmute(
+                pl.tile.aiv_shard(qk, split=1),
+                pl.Tile[
+                    [8, 128],
+                    pl.FP32,
+                    pl.Mem.Vec,
+                    pl.TileView(valid_shape=[pl.min(pl.max(0, subblock_idx * 8) - subblock_idx * 8, 8), 128]),
+                ],
+            )
             out_store = pl.tile.store(popped, [0 + subblock_idx * 8, 0], out_0)
             return out_store
 
@@ -509,12 +526,17 @@ def test_rebalance_is_declined_when_a_value_is_split_independently():
             out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
         ) -> pl.Tensor[[16, 128], pl.FP32]:
             subblock_idx = pl.tile.get_subblock_idx()
-            popped: pl.Tile[  # noqa: F841
-                [8, 128],
-                pl.FP32,
-                pl.Mem.Vec,
-                pl.TileView(valid_shape=[pl.min(pl.max(13, subblock_idx * 8) - subblock_idx * 8, 8), 128]),
-            ] = pl.tile.aiv_shard(qk, split=1)
+            popped = pl.intrin.transmute(  # noqa: F841
+                pl.tile.aiv_shard(qk, split=1),
+                pl.Tile[
+                    [8, 128],
+                    pl.FP32,
+                    pl.Mem.Vec,
+                    pl.TileView(
+                        valid_shape=[pl.min(pl.max(13, subblock_idx * 8) - subblock_idx * 8, 8), 128]
+                    ),
+                ],
+            )
             prev = pl.tile.load(data, [0 + subblock_idx * 8, 0], [8, 128], target_memory=pl.Mem.Vec)
             out_store = pl.tile.store(prev, [0 + subblock_idx * 8, 0], out_0)
             return out_store
@@ -1322,7 +1344,7 @@ def test_random_left_right_singleton_split_dim_preserved():
 
 
 def test_loop_iter_arg_keeps_split_tracking():
-    """UP_DOWN: a loop iter_arg seeded by a halved load keeps split-aware store
+    """UP_DOWN: a loop iter_arg initialized from a halved load keeps split-aware store
     offsets inside the loop body (tile_vars tracking flows through iter_args)."""
 
     @pl.program
@@ -1335,9 +1357,11 @@ def test_loop_iter_arg_keeps_split_tracking():
         ) -> pl.Tensor[[128, 128], pl.FP32]:
             seed_vec = pl.tile.move(cube_seed, target_memory=pl.Mem.Vec)  # noqa: F841
             accum = pl.tile.load(data, [0, 0], [128, 128], target_memory=pl.Mem.Vec)
-            for i, (out_it,) in pl.range(2, init_values=(out_0,)):  # noqa: B007
+            (out_it,) = pl.intrin.carry(out_0)
+            for i in pl.range(2):
                 out_it_next = pl.tile.store(accum, [0, 0], out_it)
-                out_loop = pl.yield_(out_it_next)
+                pl.intrin.yield_(out_it_next)
+            (out_loop,) = pl.intrin.leak()
             return out_loop
 
     @pl.program
@@ -1354,9 +1378,11 @@ def test_loop_iter_arg_keeps_split_tracking():
             subblock_idx = pl.tile.get_subblock_idx()
             seed_vec = pl.tile.aiv_shard(cube_seed, split=1)  # noqa: F841
             accum = pl.tile.load(data, [0 + subblock_idx * 64, 0], [64, 128], target_memory=pl.Mem.Vec)
-            for i, (out_it,) in pl.range(2, init_values=(out_0,)):  # noqa: B007
+            (out_it,) = pl.intrin.carry(out_0)
+            for i in pl.range(2):
                 out_it_next = pl.tile.store(accum, [0 + subblock_idx * 64, 0], out_it)
-                out_loop = pl.yield_(out_it_next)
+                pl.intrin.yield_(out_it_next)
+            (out_loop,) = pl.intrin.leak()
             return out_loop
 
     ir.assert_structural_equal(_lower(Before), Expected)
@@ -2661,9 +2687,11 @@ def test_loop_carried_tile_accumulator_is_tracked():
         ) -> pl.Tensor[[128, 128], pl.FP32]:
             seed_vec = pl.tile.move(cube_seed, target_memory=pl.Mem.Vec)  # noqa: F841
             accum = pl.tile.load(data, [0, 0], [128, 128], target_memory=pl.Mem.Vec)
-            for i, (acc_it,) in pl.range(2, init_values=(accum,)):  # noqa: B007
+            (acc_it,) = pl.intrin.carry(accum)
+            for i in pl.range(2):
                 acc_next = pl.tile.add(acc_it, acc_it)
-                acc_loop = pl.yield_(acc_next)
+                pl.intrin.yield_(acc_next)
+            (acc_loop,) = pl.intrin.leak()
             out_store = pl.tile.store(acc_loop, [0, 0], out_0)
             return out_store
 
@@ -4760,7 +4788,7 @@ def test_region_membership_does_not_add_call_attributes():
 # ---------------------------------------------------------------------------
 # End to end: an explicit crossing out of a task-parallel (NONE) region.
 #
-# These run the WHOLE pipeline (``pl.jit(...).lower()``), not just this pass,
+# These run the WHOLE pipeline (``pl.jit(...).compile_for_test()``), not just this pass,
 # because the fact under test spans three of them: this pass splices the region
 # body through with the boundary op intact, ExpandMixedKernel folds that op into
 # a tpush/tpop pair, and the split=0 stamp has to survive both. Property
@@ -4830,7 +4858,9 @@ def test_e2e_none_region_v2c_crossing_lowers_to_split_zero_transport():
 
     aic, aiv = _e2e_kernel_text(none_v2c)
     assert "pl.tile.tpush_to_aic(" in aiv and "split=0" in aiv
-    assert "pl.tile.tpop_from_aiv(split=0)" in aic
+    # The synthesized tpop states its shape/dtype producers (spec(ir)); the
+    # split code is asserted on the producer form.
+    assert "pl.tile.tpop_from_aiv(" in aic and "split=0" in aic
     # Full width on both ends: the crossing preserved the shape.
     assert "pl.Tile[[64, 64], pl.FP16" in aiv
     assert "pl.Tile[[64, 64], pl.FP16" in aic
@@ -4864,7 +4894,9 @@ def test_e2e_none_region_c2v_crossing_lowers_to_split_zero_transport():
 
     aic, aiv = _e2e_kernel_text(none_c2v)
     assert "pl.tile.tpush_to_aiv(" in aic and "split=0" in aic
-    assert "pl.tile.tpop_from_aic(split=0)" in aiv
+    # The synthesized tpop states its shape/dtype producers (spec(ir)); the
+    # split code is asserted on the producer form.
+    assert "pl.tile.tpop_from_aic(" in aiv and "split=0" in aiv
     assert "pl.Tile[[64, 64], pl.FP32" in aiv
     assert "pl.tile.aiv_shard" not in aic and "pl.tile.aiv_shard" not in aiv
 
@@ -4892,9 +4924,10 @@ def test_if_merge_variable_is_retyped_and_tracked():
             v = pl.tile.load(data, [0, 0], [128, 128], target_memory=pl.Mem.Vec)
             if flag > 0:
                 doubled = pl.tile.add(v, v)
-                merged: pl.Tile[[128, 128], pl.FP32, pl.Mem.Vec] = pl.yield_(doubled)
+                pl.intrin.yield_(doubled)
             else:
-                merged: pl.Tile[[128, 128], pl.FP32, pl.Mem.Vec] = pl.yield_(v)
+                pl.intrin.yield_(v)
+            (merged,) = pl.intrin.leak()
             out_store = pl.tile.store(merged, [0, 0], out_0)
             return out_store
 
@@ -4928,9 +4961,10 @@ def test_if_branches_disagreeing_on_the_merge_are_rejected():
             seed_vec = pl.tile.move(cube_seed, target_memory=pl.Mem.Vec)  # noqa: F841
             v = pl.tile.load(data, [0, 0], [128, 128], target_memory=pl.Mem.Vec)
             if flag > 0:
-                merged: pl.Tile[[128, 128], pl.FP32, pl.Mem.Vec] = pl.yield_(v)
+                pl.intrin.yield_(v)
             else:
-                merged: pl.Tile[[128, 128], pl.FP32, pl.Mem.Vec] = pl.yield_(shared)
+                pl.intrin.yield_(shared)
+            (merged,) = pl.intrin.leak()
             out_store = pl.tile.store(merged, [0, 0], out_0)
             return out_store
 
@@ -5010,8 +5044,10 @@ def test_loop_backedge_yielding_a_full_width_value_is_rejected():
         ) -> pl.Tensor[[128, 128], pl.FP32]:
             seed_vec = pl.tile.move(cube_seed, target_memory=pl.Mem.Vec)  # noqa: F841
             accum = pl.tile.load(data, [0, 0], [128, 128], target_memory=pl.Mem.Vec)
-            for i, (acc_it,) in pl.range(2, init_values=(accum,)):  # noqa: B007
-                acc_loop = pl.yield_(full)
+            (acc_it,) = pl.intrin.carry(accum)
+            for i in pl.range(2):
+                pl.intrin.yield_(full)
+            (acc_loop,) = pl.intrin.leak()
             out_store = pl.tile.store(acc_loop, [0, 0], out_0)
             return out_store
 
@@ -5039,9 +5075,11 @@ def test_loop_backedge_yielding_a_lane_local_value_into_a_shared_carry_is_reject
             out_0: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
         ) -> pl.Tensor[[128, 128], pl.FP32]:
             seed_vec = pl.tile.move(cube_seed, target_memory=pl.Mem.Vec)  # noqa: F841
-            for i, (acc_it,) in pl.range(2, init_values=(full,)):  # noqa: B007
+            (acc_it,) = pl.intrin.carry(full)
+            for i in pl.range(2):
                 halved = pl.tile.load(data, [0, 0], [128, 128], target_memory=pl.Mem.Vec)
-                acc_loop = pl.yield_(halved)
+                pl.intrin.yield_(halved)
+            (acc_loop,) = pl.intrin.leak()
             out_store = pl.tile.store(acc_loop, [0, 0], out_0)
             return out_store
 

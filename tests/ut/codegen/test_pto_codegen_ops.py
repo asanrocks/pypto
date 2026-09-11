@@ -2822,9 +2822,10 @@ class TestTileSliceCodegen:
                 self,
                 dst: pl.Tensor[[8, 8], pl.FP32],
             ) -> pl.Tensor[[8, 8], pl.FP32]:
-                narrow_parent: pl.Tile[
-                    [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[12, 12])
-                ] = pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
+                narrow_parent = pl.intrin.transmute(
+                    pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec),
+                    pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[12, 12])],
+                )
                 sliced: pl.Tile[[8, 8], pl.FP32] = pl.tile.slice(narrow_parent, [8, 8], [6, 6])
                 return pl.store(sliced, [0, 0], dst)
 
@@ -4403,9 +4404,13 @@ class TestTileMoveAddressValidation:
     def test_declared_same_address_rejected_after_planning(self, planner, ascend_backend):
         """A pinned allocation cannot bypass the baked-address invariant."""
 
-        @pl.program
+        # The declared pl.MemRef channel lives only in LHS annotations — the
+        # parser-owned fold (tests/ut/ir/parser/test_multi_buffer_codegen.py
+        # records the decision); the tracing surface has no producer-side
+        # spelling yet, so this fixture collects through the parser markers.
+        @pl.program_parser
         class SameAddressMove:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 inp: pl.Tensor[[32, 128], pl.FP32],

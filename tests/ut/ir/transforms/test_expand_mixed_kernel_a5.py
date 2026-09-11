@@ -54,13 +54,9 @@ def _expand_raw(program):
 
 def _get_stmt_op_name(stmt):
     """Return the op name for AssignStmt/EvalStmt calls, or empty string."""
-    if (
-        isinstance(stmt, ir.AssignStmt)
-        and isinstance(stmt.value, ir.Call)
-        and isinstance(stmt.value.op, ir.Op)
-    ):
+    if isinstance(stmt, ir.AssignStmt) and isinstance(stmt.value, ir.Call):
         return stmt.value.op.name
-    if isinstance(stmt, ir.EvalStmt) and isinstance(stmt.expr, ir.Call) and isinstance(stmt.expr.op, ir.Op):
+    if isinstance(stmt, ir.EvalStmt) and isinstance(stmt.expr, ir.Call):
         return stmt.expr.op.name
     return ""
 
@@ -299,7 +295,9 @@ def _make_cube_bias_expected(cube_op: str):
                 a_left = pl.move(a_mat, target_memory=pl.MemorySpace.Left)
                 b_mat = pl.load(b, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
                 b_right = pl.move(b_mat, target_memory=pl.MemorySpace.Right)
-                bias_mat: pl.Tile[[1, 128], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+                bias_mat: pl.Tile[[1, 128], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                    shape=[1, 128], dtype=pl.FP32, split=0
+                )
                 bias_mat_bias = pl.move(bias_mat, target_memory=pl.MemorySpace.Bias)
                 c_tile = pl.matmul_bias(a_left, b_right, bias_mat_bias)
                 pl.tpush_to_aiv(c_tile, split=0)
@@ -321,7 +319,7 @@ def _make_cube_bias_expected(cube_op: str):
                 )
                 pl.tpush_to_aic(bias_tile_nz, split=0)
                 c_vec: pl.Tile[[1, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[1, 128], dtype=pl.FP32, split=0
                 )
                 out_0_store = pl.store(c_vec, [0, 0], out_0)
                 return out_0_store
@@ -356,7 +354,9 @@ def _make_cube_bias_expected(cube_op: str):
                 a_left = pl.move(a_mat, target_memory=pl.MemorySpace.Left)
                 b_mat = pl.load(b, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
                 b_right = pl.move(b_mat, target_memory=pl.MemorySpace.Right)
-                bias_mat: pl.Tile[[1, 128], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+                bias_mat: pl.Tile[[1, 128], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                    shape=[1, 128], dtype=pl.FP32, split=0
+                )
                 bias_mat_bias = pl.move(bias_mat, target_memory=pl.MemorySpace.Bias)
                 c_tile = pl.gemv_bias(a_left, b_right, bias_mat_bias)
                 pl.tpush_to_aiv(c_tile, split=0)
@@ -377,12 +377,15 @@ def _make_cube_bias_expected(cube_op: str):
                     slayout=pl.TileLayout.row_major,
                 )
                 pl.tpush_to_aic(bias_tile_nz, split=0)
-                c_vec: pl.Tile[
-                    [16, 128],
-                    pl.FP32,
-                    pl.MemorySpace.Vec,
-                    pl.TileView(valid_shape=[1, 128]),
-                ] = pl.tpop_from_aic(split=0)
+                c_vec = pl.intrin.transmute(
+                    pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0),
+                    pl.Tile[
+                        [16, 128],
+                        pl.FP32,
+                        pl.MemorySpace.Vec,
+                        pl.TileView(valid_shape=[1, 128]),
+                    ],
+                )
                 out_0_store = pl.store(c_vec, [0, 0], out_0)
                 return out_0_store
 
@@ -503,7 +506,7 @@ def _make_cube_acc_expected(cube_op: str):
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 d_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 out_0_store = pl.store(d_vec, [0, 0], out_0)
                 return out_0_store
@@ -549,12 +552,15 @@ def _make_cube_acc_expected(cube_op: str):
                 b: pl.Tensor[[128, 128], pl.BF16],
                 out_0: pl.Out[pl.Tensor[[1, 128], pl.FP32]],
             ) -> pl.Tensor[[1, 128], pl.FP32]:
-                d_vec: pl.Tile[
-                    [16, 128],
-                    pl.FP32,
-                    pl.MemorySpace.Vec,
-                    pl.TileView(valid_shape=[1, 128]),
-                ] = pl.tpop_from_aic(split=0)
+                d_vec = pl.intrin.transmute(
+                    pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0),
+                    pl.Tile[
+                        [16, 128],
+                        pl.FP32,
+                        pl.MemorySpace.Vec,
+                        pl.TileView(valid_shape=[1, 128]),
+                    ],
+                )
                 out_0_store = pl.store(d_vec, [0, 0], out_0)
                 return out_0_store
 
@@ -604,12 +610,15 @@ def _make_gemv_expected():
             b: pl.Tensor[[128, 128], pl.BF16],
             out_0: pl.Out[pl.Tensor[[1, 128], pl.FP32]],
         ) -> pl.Tensor[[1, 128], pl.FP32]:
-            c_vec: pl.Tile[
-                [16, 128],
-                pl.FP32,
-                pl.MemorySpace.Vec,
-                pl.TileView(valid_shape=[1, 128]),
-            ] = pl.tpop_from_aic(split=0)
+            c_vec = pl.intrin.transmute(
+                pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0),
+                pl.Tile[
+                    [16, 128],
+                    pl.FP32,
+                    pl.MemorySpace.Vec,
+                    pl.TileView(valid_shape=[1, 128]),
+                ],
+            )
             out_0_store: pl.Tensor[[1, 128], pl.FP32] = pl.store(c_vec, [0, 0], out_0)
             return out_0_store
 
@@ -685,7 +694,7 @@ def _make_post_chain_program(post_op: str):
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 exp_tile = pl.exp(z_vec)
                 sum_tile = pl.add(exp_tile, exp_tile)
@@ -756,7 +765,7 @@ def _make_post_chain_program(post_op: str):
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 z_exp = pl.exp(z_vec)
                 z_mul = pl.mul(z_exp, z_exp)
@@ -830,7 +839,7 @@ def _make_v2c_boundary_program(vec_op: str):
                     pl.BF16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[16, 128], dtype=pl.BF16, split=0)
                 x_sum_left = pl.move(x_sum_mat, target_memory=pl.MemorySpace.Left)
                 y_mat = pl.load(y, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                 y_right = pl.move(y_mat, target_memory=pl.MemorySpace.Right)
@@ -854,7 +863,7 @@ def _make_v2c_boundary_program(vec_op: str):
                 )
                 pl.tpush_to_aic(x_sum_nz, split=0)
                 z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 64], dtype=pl.FP32, split=0
                 )
                 out_0_store = pl.store(z_vec, [0, 0], out_0)
                 return out_0_store
@@ -918,7 +927,7 @@ def _make_v2c_boundary_program(vec_op: str):
                     pl.BF16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[16, 128], dtype=pl.BF16, split=0)
                 x_sub_left = pl.move(x_sub_mat, target_memory=pl.MemorySpace.Left)
                 y_mat = pl.load(y, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                 y_right = pl.move(y_mat, target_memory=pl.MemorySpace.Right)
@@ -942,7 +951,7 @@ def _make_v2c_boundary_program(vec_op: str):
                 )
                 pl.tpush_to_aic(x_sub_nz, split=0)
                 z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 64], dtype=pl.FP32, split=0
                 )
                 out_0_store = pl.store(z_vec, [0, 0], out_0)
                 return out_0_store
@@ -1184,7 +1193,7 @@ class TestSplitStructure:
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 out_0_store = pl.store(z_vec, [0, 0], out_0)
                 return out_0_store
@@ -1272,7 +1281,7 @@ class TestCrossCoreBoundaries:
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 w_tile = pl.exp(z_vec)
                 out_0_store = pl.store(w_tile, [0, 0], out_0)
@@ -1343,7 +1352,7 @@ class TestCrossCoreBoundaries:
                     pl.BF16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[16, 128], dtype=pl.BF16, split=0)
                 x_left = pl.move(
                     x_left_mat,
                     target_memory=pl.MemorySpace.Left,
@@ -1371,7 +1380,7 @@ class TestCrossCoreBoundaries:
                 )
                 pl.tpush_to_aic(x_tile_nz, split=0)
                 z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 64], dtype=pl.FP32, split=0
                 )
                 out_0_store = pl.store(z_vec, [0, 0], out_0)
                 return out_0_store
@@ -1436,7 +1445,7 @@ class TestCrossCoreBoundaries:
                         blayout=pl.TileLayout.col_major,
                         slayout=pl.TileLayout.row_major,
                     ),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[128, 64], dtype=pl.BF16, split=0)
                 y_right = pl.move(
                     y_right_mat,
                     target_memory=pl.MemorySpace.Right,
@@ -1462,7 +1471,7 @@ class TestCrossCoreBoundaries:
                 )
                 pl.tpush_to_aic(y_tile_nz, split=0)
                 z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 64], dtype=pl.FP32, split=0
                 )
                 out_0_store = pl.store(z_vec, [0, 0], out_0)
                 return out_0_store
@@ -1824,7 +1833,7 @@ class TestVectorOpClassification:
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 z_exp = pl.exp(z_vec)
                 out_0_store = pl.store(z_exp, [0, 0], out_0)
@@ -1946,8 +1955,9 @@ class TestMultipleInCore:
                 y: pl.Tensor[[128, 128], pl.BF16],
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
-                z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                z_vec = pl.intrin.transmute(
+                    pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0),
+                    pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()],
                 )
                 out_0_store = pl.store(z_vec, [0, 0], out_0)
                 return out_0_store
@@ -1984,12 +1994,15 @@ class TestMultipleInCore:
                 b: pl.Tensor[[128, 128], pl.BF16],
                 out_0: pl.Out[pl.Tensor[[1, 128], pl.FP32]],
             ) -> pl.Tensor[[1, 128], pl.FP32]:
-                c_vec: pl.Tile[
-                    [16, 128],
-                    pl.FP32,
-                    pl.MemorySpace.Vec,
-                    pl.TileView(valid_shape=[1, 128]),
-                ] = pl.tpop_from_aic(split=0)
+                c_vec = pl.intrin.transmute(
+                    pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0),
+                    pl.Tile[
+                        [16, 128],
+                        pl.FP32,
+                        pl.MemorySpace.Vec,
+                        pl.TileView(valid_shape=[1, 128]),
+                    ],
+                )
                 out_0_store = pl.store(c_vec, [0, 0], out_0)
                 return out_0_store
 
@@ -2080,7 +2093,7 @@ class TestMultipleInCore:
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 out_0_store = pl.store(z_vec, [0, 0], out_0)
                 return out_0_store
@@ -2132,12 +2145,17 @@ class TestPropertyVerification:
         class BadProgram:
             @pl.function(type=pl.FunctionType.AIC)
             def bad_aic(self):
-                _: pl.Tile[
-                    [16, 128],
-                    pl.BF16,
-                    pl.MemorySpace.Left,
-                    pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0)
+                # The bad landing space is stated at the producer — the
+                # annotation channel is cosmetic under tracing.
+                _ = pl.intrin.transmute(
+                    pl.tpop_from_aiv(shape=[16, 128], dtype=pl.BF16, split=0),
+                    pl.Tile[
+                        [16, 128],
+                        pl.BF16,
+                        pl.MemorySpace.Left,
+                        pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
+                    ],
+                )
 
         prop_set = passes.IRPropertySet()
         prop_set.insert(passes.IRProperty.MixedKernelExpanded)
@@ -2152,7 +2170,10 @@ class TestPropertyVerification:
         class BadProgram:
             @pl.function(type=pl.FunctionType.AIV)
             def bad_aiv(self):
-                _: pl.Tile[[16, 128], pl.BF16, pl.MemorySpace.Mat, pl.TileView()] = pl.tpop_from_aic(split=0)
+                _ = pl.intrin.transmute(
+                    pl.tpop_from_aic(shape=[16, 128], dtype=pl.BF16, split=0),
+                    pl.Tile[[16, 128], pl.BF16, pl.MemorySpace.Mat, pl.TileView()],
+                )
 
         prop_set = passes.IRPropertySet()
         prop_set.insert(passes.IRProperty.MixedKernelExpanded)
@@ -2172,11 +2193,13 @@ class TestPropertyVerification:
                     pl.BF16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[16, 128], dtype=pl.BF16, split=0)
 
             @pl.function(type=pl.FunctionType.AIV)
             def bad_aiv(self):
-                x: pl.Tile[[16, 128], pl.FP32, pl.TileView()] = pl.tpop_from_aic(split=0)
+                x: pl.Tile[[16, 128], pl.FP32, pl.TileView()] = pl.tpop_from_aic(
+                    shape=[16, 128], dtype=pl.FP32, split=0
+                )
                 _ = pl.exp(x)
 
         prop_set = passes.IRPropertySet()
@@ -2197,7 +2220,9 @@ class TestPropertyVerification:
             def bad_aiv(self):
                 pipe_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=pipe_buf)
-                _: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(split=0)
+                _: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
+                    shape=[16, 16], dtype=pl.FP32, split=0
+                )
 
         prop_set = passes.IRPropertySet()
         prop_set.insert(passes.IRProperty.MixedKernelExpanded)
@@ -2222,13 +2247,13 @@ class TestPropertyVerification:
                     pl.FP16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0)
                 second: pl.Tile[
                     [16, 16],
                     pl.FP16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0)
                 first_left = pl.move(first, target_memory=pl.MemorySpace.Left)
                 second_right = pl.move(second, target_memory=pl.MemorySpace.Right)
                 pl.tfree_to_aiv(first)
@@ -2256,13 +2281,13 @@ class TestPropertyVerification:
                     pl.FP16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0, id=0)
+                ] = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0, id=0)
                 second: pl.Tile[
                     [16, 16],
                     pl.FP16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0, id=1)
+                ] = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0, id=1)
                 pl.tfree_to_aiv(first, id=0)
                 pl.tfree_to_aiv(second, id=1)
 
@@ -2293,13 +2318,13 @@ class TestPropertyVerification:
                     pl.FP16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0, id=0)
+                ] = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0, id=0)
                 second: pl.Tile[
                     [16, 16],
                     pl.FP16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0, id=1)
+                ] = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0, id=1)
                 pl.tfree_to_aiv(first, id=0)
                 pl.tfree_to_aiv(second, id=1)
 
@@ -2325,7 +2350,7 @@ class TestPropertyVerification:
                 pipe_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=pipe_buf)
                 popped: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 16], dtype=pl.FP32, split=0
                 )
                 pl.tfree_to_aic(popped)
                 pl.tfree_to_aic(popped)
@@ -2349,7 +2374,7 @@ class TestPropertyVerification:
             @pl.function(type=pl.FunctionType.AIV)
             def bad_aiv(self):
                 popped: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 16], dtype=pl.FP32, split=0
                 )
                 processed = pl.exp(popped)
                 pl.tfree_to_aic(popped)
@@ -2565,7 +2590,7 @@ class TestAutoPipeSetup:
                     pl.BF16,
                     pl.MemorySpace.Mat,
                     pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[16, 128], dtype=pl.BF16, split=0)
                 x_left = pl.move(
                     x_left_mat,
                     target_memory=pl.MemorySpace.Left,
@@ -2630,7 +2655,7 @@ class TestAutoPipeSetup:
                     slot_num=2,
                 )
                 z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 16], dtype=pl.FP32, split=0
                 )
                 z_exp = pl.exp(z_vec)
                 z_sum = pl.add(z_vec, z_exp)
@@ -2654,12 +2679,13 @@ class TestAutoPipeSetup:
             @pl.function(type=pl.FunctionType.InCore)
             def main_incore_0(self):
                 received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
-                    split=0,
-                    id=1,
+                    shape=[16, 16], dtype=pl.FP16, split=0, id=1
                 )
                 alias: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = received
                 pl.tfree_to_aiv(alias, id=0)
-                vector_tile: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+                vector_tile: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                    shape=[16, 16], dtype=pl.FP32, split=0
+                )
                 pl.tfree_to_aic(vector_tile)
 
         @pl.program
@@ -2679,7 +2705,9 @@ class TestAutoPipeSetup:
                     slot_size=1024,
                     slot_num=2,
                 )
-                received: pl.Tile[[16, 16], pl.FP16, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=1)
+                received: pl.Tile[[16, 16], pl.FP16, pl.Mem.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP16, split=0, id=1
+                )
                 # The alias binding survives the split; only its tfree use is retargeted.
                 alias: pl.Tile[[16, 16], pl.FP16, pl.Mem.Mat] = received  # noqa: F841
                 # Retargeted onto `received`, and still `id=0`, not the tpop's `id=1`.
@@ -2700,7 +2728,9 @@ class TestAutoPipeSetup:
                     slot_size=1024,
                     slot_num=2,
                 )
-                vector_tile: pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec] = pl.tpop_from_aic(split=0)
+                vector_tile: pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec] = pl.tpop_from_aic(
+                    shape=[16, 16], dtype=pl.FP32, split=0
+                )
                 pl.tfree_to_aic(vector_tile)
 
             @pl.function(type=pl.FunctionType.Group)
@@ -2899,7 +2929,7 @@ class TestNestedStructures:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 for i in pl.range(4):
                     z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                        split=0
+                        shape=[16, 128], dtype=pl.FP32, split=0
                     )
                     out_0: pl.Tensor[[16, 128], pl.FP32] = pl.store(z_vec, [0, 0], out_0)
                 return out_0
@@ -2970,7 +3000,7 @@ class TestNestedStructures:
                         pl.BF16,
                         pl.MemorySpace.Mat,
                         pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                    ] = pl.tpop_from_aiv(split=0)
+                    ] = pl.tpop_from_aiv(shape=[16, 128], dtype=pl.BF16, split=0)
                     x_sum_left = pl.move(x_sum_mat, target_memory=pl.MemorySpace.Left)
                     y_mat = pl.load(y, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                     y_right = pl.move(y_mat, target_memory=pl.MemorySpace.Right)
@@ -2997,7 +3027,7 @@ class TestNestedStructures:
                     )
                     pl.tpush_to_aic(x_sum_nz, split=0)
                     z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                        split=0
+                        shape=[16, 64], dtype=pl.FP32, split=0
                     )
                     w_tile = pl.exp(z_vec)
                     out_0: pl.Tensor[[16, 64], pl.FP32] = pl.store(w_tile, [0, 0], out_0)
@@ -3068,7 +3098,7 @@ class TestNestedStructures:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 for i in pl.range(2):
                     z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                        split=0
+                        shape=[16, 128], dtype=pl.FP32, split=0
                     )
                     out_0: pl.Tensor[[16, 128], pl.FP32] = pl.store(z_vec, [0, 0], out_0)
                 return out_0
@@ -3151,7 +3181,7 @@ class TestEdgeCases:
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 out_0_store = pl.store(z_vec, [0, 0], out_0)
                 return out_0_store
@@ -3223,14 +3253,16 @@ class TestDCERegression:
                 y: pl.Tensor[[128, 128], pl.BF16],
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ):
-                for i, (out_0_iter,) in pl.range(2, init_values=(out_0,)):
+                (out_0_iter,) = pl.intrin.carry(out_0)
+                for i in pl.range(2):
                     x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                     x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                     y_mat = pl.load(y, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
                     y_right = pl.move(y_mat, target_memory=pl.MemorySpace.Right)
                     z_tile = pl.matmul(x_left, y_right)
                     out_0_new = pl.store(z_tile, [0, 0], out_0_iter)
-                    _ = pl.yield_(out_0_new)
+                    pl.intrin.yield_(out_0_new)
+                (_,) = pl.intrin.leak()
 
         @pl.program
         class ExpAIV:
@@ -3267,7 +3299,8 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 acc_0 = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                     x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                     w_mat = pl.load(w, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
@@ -3280,7 +3313,8 @@ class TestDCERegression:
                         slayout=pl.TileLayout.none_box,
                     )
                     acc_new = pl.tile.add(acc_iter, z_vec)
-                    acc_out = pl.yield_(acc_new)
+                    pl.intrin.yield_(acc_new)
+                (acc_out,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 128], pl.FP32] = pl.store(acc_out, [0, 0], out_0)
                 return out_0
 
@@ -3312,12 +3346,14 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 acc_0 = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                        split=0
+                        shape=[16, 128], dtype=pl.FP32, split=0
                     )
                     acc_new = pl.tile.add(acc_iter, z_vec)
-                    acc_out = pl.yield_(acc_new)
+                    pl.intrin.yield_(acc_new)
+                (acc_out,) = pl.intrin.leak()
                 out_0_store = pl.store(acc_out, [0, 0], out_0)
                 return out_0_store
 
@@ -3351,7 +3387,8 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 64], pl.FP32]:
                 acc_0 = pl.tile.create([16, 64], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     x_tile = pl.load(x, [0, 0], [16, 128])
                     x_sum = pl.add(x_tile, x_tile)
                     x_mat = pl.move(
@@ -3371,7 +3408,8 @@ class TestDCERegression:
                         slayout=pl.TileLayout.none_box,
                     )
                     acc_new = pl.tile.add(acc_iter, z_vec)
-                    acc_out = pl.yield_(acc_new)
+                    pl.intrin.yield_(acc_new)
+                (acc_out,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 64], pl.FP32] = pl.store(acc_out, [0, 0], out_0)
                 return out_0
 
@@ -3392,7 +3430,7 @@ class TestDCERegression:
                         pl.BF16,
                         pl.MemorySpace.Mat,
                         pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                    ] = pl.tpop_from_aiv(split=0)
+                    ] = pl.tpop_from_aiv(shape=[16, 128], dtype=pl.BF16, split=0)
                     x_left = pl.move(x_sum_mat, target_memory=pl.MemorySpace.Left)
                     w_mat = pl.load(w, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                     w_right = pl.move(w_mat, target_memory=pl.MemorySpace.Right)
@@ -3408,7 +3446,8 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 64], pl.FP32]:
                 acc_0 = pl.tile.create([16, 64], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     x_tile = pl.load(x, [0, 0], [16, 128], target_memory=pl.Mem.Vec)
                     x_sum = pl.add(x_tile, x_tile)
                     x_sum_nz = pl.move(
@@ -3419,10 +3458,11 @@ class TestDCERegression:
                     )
                     pl.tpush_to_aic(x_sum_nz, split=0)
                     z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                        split=0
+                        shape=[16, 64], dtype=pl.FP32, split=0
                     )
                     acc_new = pl.tile.add(acc_iter, z_vec)
-                    acc_out = pl.yield_(acc_new)
+                    pl.intrin.yield_(acc_new)
+                (acc_out,) = pl.intrin.leak()
                 out_0_store = pl.store(acc_out, [0, 0], out_0)
                 return out_0_store
 
@@ -3499,7 +3539,7 @@ class TestDCERegression:
                 out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 _z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 x_tile = pl.load(x, [0, 0], [16, 128], target_memory=pl.Mem.Vec)
                 x_fp32 = pl.tile.cast(x_tile, target_type=pl.FP32, mode="round")
@@ -3539,7 +3579,8 @@ class TestDCERegression:
                 up_0 = pl.tile.create([4, 32], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 gate_1 = pl.tile.muls(gate_0, 0.0)
                 up_1 = pl.tile.muls(up_0, 0.0)
-                for i, (gate_iter, up_iter) in pl.range(2, init_values=(gate_1, up_1)):
+                (gate_iter, up_iter) = pl.intrin.carry(gate_1, up_1)
+                for i in pl.range(2):
                     x_mat = pl.load(x, [0, 0], [4, 256], target_memory=pl.MemorySpace.Mat)
                     x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                     wg_mat = pl.load(wg, [0, 0], [256, 32], target_memory=pl.MemorySpace.Mat)
@@ -3552,7 +3593,8 @@ class TestDCERegression:
                     u_vec = pl.move(u_tile, target_memory=pl.MemorySpace.Vec)
                     gate_new = pl.tile.add(gate_iter, g_vec)
                     up_new = pl.tile.add(up_iter, u_vec)
-                    gate_out, up_out = pl.yield_(gate_new, up_new)
+                    pl.intrin.yield_(gate_new, up_new)
+                (gate_out, up_out) = pl.intrin.leak()
                 result = pl.tile.add(gate_out, up_out)
                 out_0: pl.Tensor[[4, 32], pl.FP32] = pl.store(result, [0, 0], out_0)
                 return out_0
@@ -3574,22 +3616,30 @@ class TestDCERegression:
                 up_0 = pl.tile.create([4, 32], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 gate_1 = pl.tile.muls(gate_0, 0.0)
                 up_1 = pl.tile.muls(up_0, 0.0)
-                for i, (gate_iter, up_iter) in pl.range(2, init_values=(gate_1, up_1)):
-                    g_vec: pl.Tile[
-                        [4, 32],
-                        pl.FP32,
-                        pl.Mem.Vec,
-                        pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                    ] = pl.tpop_from_aic(shape=[4, 32], dtype=pl.FP32, split=0)
-                    u_vec: pl.Tile[
-                        [4, 32],
-                        pl.FP32,
-                        pl.Mem.Vec,
-                        pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                    ] = pl.tpop_from_aic(shape=[4, 32], dtype=pl.FP32, split=0)
+                (gate_iter, up_iter) = pl.intrin.carry(gate_1, up_1)
+                for i in pl.range(2):
+                    g_vec = pl.intrin.transmute(
+                        pl.tpop_from_aic(shape=[4, 32], dtype=pl.FP32, split=0),
+                        pl.Tile[
+                            [4, 32],
+                            pl.FP32,
+                            pl.Mem.Vec,
+                            pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
+                        ],
+                    )
+                    u_vec = pl.intrin.transmute(
+                        pl.tpop_from_aic(shape=[4, 32], dtype=pl.FP32, split=0),
+                        pl.Tile[
+                            [4, 32],
+                            pl.FP32,
+                            pl.Mem.Vec,
+                            pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
+                        ],
+                    )
                     gate_new = pl.tile.add(gate_iter, g_vec)
                     up_new = pl.tile.add(up_iter, u_vec)
-                    gate_out, up_out = pl.yield_(gate_new, up_new)
+                    pl.intrin.yield_(gate_new, up_new)
+                (gate_out, up_out) = pl.intrin.leak()
                 result = pl.tile.add(gate_out, up_out)
                 out_0_store = pl.store(result, [0, 0], out_0)
                 return out_0_store
@@ -3647,10 +3697,8 @@ class TestDCERegression:
                 # Vec init for VECTOR iter_arg
                 vec_init = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 vec_zero = pl.tile.muls(vec_init, 0.0)
-                for i, (vec_acc, cube_carry) in pl.range(
-                    4,
-                    init_values=(vec_zero, cube_init),
-                ):
+                (vec_acc, cube_carry) = pl.intrin.carry(vec_zero, cube_init)
+                for i in pl.range(4):
                     a_mat = pl.load(a, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                     a_left = pl.move(a_mat, target_memory=pl.MemorySpace.Left)
                     b_mat = pl.load(b, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
@@ -3660,7 +3708,8 @@ class TestDCERegression:
                     z_vec = pl.move(z, target_memory=pl.MemorySpace.Vec)
                     # VECTOR: accumulate in Vec
                     vec_new = pl.tile.add(vec_acc, z_vec)
-                    vec_out, cube_out = pl.yield_(vec_new, z)
+                    pl.intrin.yield_(vec_new, z)
+                (vec_out, cube_out) = pl.intrin.leak()
                 # After loop: BOUNDARY move uses cube return_var
                 final_vec = pl.move(cube_out, target_memory=pl.MemorySpace.Vec)
                 result = pl.tile.add(vec_out, final_vec)
@@ -3685,14 +3734,16 @@ class TestDCERegression:
                 b_mat_0 = pl.load(b, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
                 b_right_0 = pl.move(b_mat_0, target_memory=pl.MemorySpace.Right)
                 cube_init = pl.matmul(a_left_0, b_right_0)
-                for i, (cube_carry,) in pl.range(4, init_values=(cube_init,)):
+                (cube_carry,) = pl.intrin.carry(cube_init)
+                for i in pl.range(4):
                     a_mat = pl.load(a, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                     a_left = pl.move(a_mat, target_memory=pl.MemorySpace.Left)
                     b_mat = pl.load(b, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
                     b_right = pl.move(b_mat, target_memory=pl.MemorySpace.Right)
                     z = pl.matmul_acc(cube_carry, a_left, b_right)
                     pl.tpush_to_aiv(z, split=0)
-                    cube_out = pl.yield_(z)
+                    pl.intrin.yield_(z)
+                (cube_out,) = pl.intrin.leak()
                 pl.tpush_to_aiv(cube_out, split=0)
 
         # AIV: vec_acc alive, cube_carry dead → stripped. The pass-emitted
@@ -3709,21 +3760,29 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 vec_init = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 vec_zero = pl.tile.muls(vec_init, 0.0)
-                for i, (vec_acc,) in pl.range(4, init_values=(vec_zero,)):
-                    z_vec: pl.Tile[
+                (vec_acc,) = pl.intrin.carry(vec_zero)
+                for i in pl.range(4):
+                    z_vec = pl.intrin.transmute(
+                        pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0),
+                        pl.Tile[
+                            [16, 128],
+                            pl.FP32,
+                            pl.Mem.Vec,
+                            pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
+                        ],
+                    )
+                    vec_new = pl.tile.add(vec_acc, z_vec)
+                    pl.intrin.yield_(vec_new)
+                (vec_out,) = pl.intrin.leak()
+                final_vec = pl.intrin.transmute(
+                    pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0),
+                    pl.Tile[
                         [16, 128],
                         pl.FP32,
                         pl.Mem.Vec,
                         pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                    ] = pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0)
-                    vec_new = pl.tile.add(vec_acc, z_vec)
-                    vec_out = pl.yield_(vec_new)
-                final_vec: pl.Tile[
-                    [16, 128],
-                    pl.FP32,
-                    pl.Mem.Vec,
-                    pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-                ] = pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0)
+                    ],
+                )
                 result = pl.tile.add(vec_out, final_vec)
                 out_0 = pl.store(result, [0, 0], out_0)
                 return out_0
@@ -3750,7 +3809,8 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 acc_0 = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     if i == 0:
                         x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
@@ -3764,10 +3824,12 @@ class TestDCERegression:
                             slayout=pl.TileLayout.none_box,
                         )
                         acc_then = pl.tile.add(acc_iter, z_vec)
-                        branch_out = pl.yield_(acc_then)
+                        pl.intrin.yield_(acc_then)
                     else:
-                        branch_out = pl.yield_(acc_iter)
-                    acc_out = pl.yield_(branch_out)
+                        pl.intrin.yield_(acc_iter)
+                    (branch_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(branch_out)
+                (acc_out,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 128], pl.FP32] = pl.store(acc_out, [0, 0], out_0)
                 return out_0
 
@@ -3784,7 +3846,8 @@ class TestDCERegression:
             ):
                 acc_0 = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     if i == 0:
                         x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
@@ -3792,12 +3855,12 @@ class TestDCERegression:
                         w_right = pl.move(w_mat, target_memory=pl.MemorySpace.Right)
                         z = pl.matmul(x_left, w_right)
                         pl.tpush_to_aiv(z, split=0)
-                        branch_out = pl.yield_(acc_iter)
+                        pl.intrin.yield_(acc_iter)
                     else:
-                        branch_out = pl.yield_(acc_iter)
-                    acc_out = pl.yield_(  # noqa: F841
-                        branch_out
-                    )
+                        pl.intrin.yield_(acc_iter)
+                    (branch_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(branch_out)
+                (acc_out,) = pl.intrin.leak()
 
             @pl.function(type=pl.FunctionType.AIV)
             def main_incore_0_aiv(
@@ -3808,16 +3871,19 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 acc_0 = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     if i == 0:
                         z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = (
-                            pl.tpop_from_aic(split=0)
+                            pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0)
                         )
                         acc_then = pl.tile.add(acc_iter, z_vec)
-                        branch_out = pl.yield_(acc_then)
+                        pl.intrin.yield_(acc_then)
                     else:
-                        branch_out = pl.yield_(acc_iter)
-                    acc_out = pl.yield_(branch_out)
+                        pl.intrin.yield_(acc_iter)
+                    (branch_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(branch_out)
+                (acc_out,) = pl.intrin.leak()
                 out_0_store = pl.store(acc_out, [0, 0], out_0)
                 return out_0_store
 
@@ -3865,7 +3931,8 @@ class TestDCERegression:
                 p_out: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
                 q_out: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
-                for i, (p_iter, q_iter) in pl.range(4, init_values=(p_out, q_out)):
+                (p_iter, q_iter) = pl.intrin.carry(p_out, q_out)
+                for i in pl.range(4):
                     if i == 0:
                         x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
@@ -3879,9 +3946,10 @@ class TestDCERegression:
                             slayout=pl.TileLayout.none_box,
                         )
                         p_then = pl.store(z_vec, [0, 0], p_iter)
-                        p_phi = pl.yield_(p_then)
+                        pl.intrin.yield_(p_then)
                     else:
-                        p_phi = pl.yield_(p_iter)
+                        pl.intrin.yield_(p_iter)
+                    (p_phi,) = pl.intrin.leak()
                     if i == 1:
                         x_mat_1 = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left_1 = pl.move(x_mat_1, target_memory=pl.MemorySpace.Left)
@@ -3895,10 +3963,12 @@ class TestDCERegression:
                             slayout=pl.TileLayout.none_box,
                         )
                         q_then = pl.store(z_vec_1, [0, 0], q_iter)
-                        q_phi = pl.yield_(q_then)
+                        pl.intrin.yield_(q_then)
                     else:
-                        q_phi = pl.yield_(q_iter)
-                    p_rv, q_rv = pl.yield_(p_phi, q_phi)
+                        pl.intrin.yield_(q_iter)
+                    (q_phi,) = pl.intrin.leak()
+                    pl.intrin.yield_(p_phi, q_phi)
+                (p_rv, q_rv) = pl.intrin.leak()
                 return p_rv
 
         After = _expand(Before)
@@ -3913,7 +3983,8 @@ class TestDCERegression:
                 p_out: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
                 q_out: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ):
-                for i, (p_iter, q_iter) in pl.range(4, init_values=(p_out, q_out)):
+                (p_iter, q_iter) = pl.intrin.carry(p_out, q_out)
+                for i in pl.range(4):
                     if i == 0:
                         x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
@@ -3921,9 +3992,10 @@ class TestDCERegression:
                         w_right = pl.move(w_mat, target_memory=pl.MemorySpace.Right)
                         z = pl.matmul(x_left, w_right)
                         pl.tpush_to_aiv(z, split=0)
-                        p_phi = pl.yield_(p_iter)
+                        pl.intrin.yield_(p_iter)
                     else:
-                        p_phi = pl.yield_(p_iter)
+                        pl.intrin.yield_(p_iter)
+                    (p_phi,) = pl.intrin.leak()
                     if i == 1:
                         x_mat_1 = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left_1 = pl.move(x_mat_1, target_memory=pl.MemorySpace.Left)
@@ -3932,10 +4004,12 @@ class TestDCERegression:
                         z_1 = pl.matmul(x_left_1, w_right_1)
                         pl.tpush_to_aiv(z_1, split=0)
                         # The fix: q_phi falls back to q_iter, not to iter_args[0].
-                        q_phi = pl.yield_(q_iter)
+                        pl.intrin.yield_(q_iter)
                     else:
-                        q_phi = pl.yield_(q_iter)
-                    p_rv, q_rv = pl.yield_(p_phi, q_phi)
+                        pl.intrin.yield_(q_iter)
+                    (q_phi,) = pl.intrin.leak()
+                    pl.intrin.yield_(p_phi, q_phi)
+                (p_rv, q_rv) = pl.intrin.leak()
 
             @pl.function(type=pl.FunctionType.AIV)
             def main_incore_0_aiv(
@@ -3945,26 +4019,30 @@ class TestDCERegression:
                 p_out: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
                 q_out: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
-                for i, (p_iter, q_iter) in pl.range(4, init_values=(p_out, q_out)):
+                (p_iter, q_iter) = pl.intrin.carry(p_out, q_out)
+                for i in pl.range(4):
                     if i == 0:
                         z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = (
-                            pl.tpop_from_aic(split=0)
+                            pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0)
                         )
                         p_then = pl.store(z_vec, [0, 0], p_iter)
-                        p_phi = pl.yield_(p_then)
+                        pl.intrin.yield_(p_then)
                     else:
-                        p_phi = pl.yield_(p_iter)
+                        pl.intrin.yield_(p_iter)
+                    (p_phi,) = pl.intrin.leak()
                     if i == 1:
                         z_vec_1: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = (
-                            pl.tpop_from_aic(split=0)
+                            pl.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0)
                         )
                         q_then = pl.store(z_vec_1, [0, 0], q_iter)
-                        q_phi = pl.yield_(q_then)
+                        pl.intrin.yield_(q_then)
                     else:
                         # Pre-fix this arm yielded p_iter, so q_phi merged two
                         # different tensors and PTO codegen aborted.
-                        q_phi = pl.yield_(q_iter)
-                    p_rv, q_rv = pl.yield_(p_phi, q_phi)
+                        pl.intrin.yield_(q_iter)
+                    (q_phi,) = pl.intrin.leak()
+                    pl.intrin.yield_(p_phi, q_phi)
+                (p_rv, q_rv) = pl.intrin.leak()
                 return p_rv
 
             @pl.function(type=pl.FunctionType.Group)
@@ -4004,7 +4082,8 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 vec_init = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_init = pl.tile.muls(vec_init, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_init,)):
+                (acc_iter,) = pl.intrin.carry(acc_init)
+                for i in pl.range(4):
                     x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                     x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                     w_mat = pl.load(w, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
@@ -4017,7 +4096,8 @@ class TestDCERegression:
                         slayout=pl.TileLayout.none_box,
                     )
                     carried_next = pl.tile.add(tmp, tmp)
-                    acc_out = pl.yield_(carried_next)
+                    pl.intrin.yield_(carried_next)
+                (acc_out,) = pl.intrin.leak()
                 carried = acc_out
                 out_0: pl.Tensor[[16, 128], pl.FP32] = pl.store(carried, [0, 0], out_0)
                 return out_0
@@ -4050,12 +4130,14 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 vec_init = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_init = pl.tile.muls(vec_init, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_init,)):
+                (acc_iter,) = pl.intrin.carry(acc_init)
+                for i in pl.range(4):
                     tmp: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                        split=0
+                        shape=[16, 128], dtype=pl.FP32, split=0
                     )
                     carried_next = pl.tile.add(tmp, tmp)
-                    acc_out = pl.yield_(carried_next)
+                    pl.intrin.yield_(carried_next)
+                (acc_out,) = pl.intrin.leak()
                 carried = acc_out
                 out_0_store = pl.store(carried, [0, 0], out_0)
                 return out_0_store
@@ -4093,7 +4175,8 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 acc_0 = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                     x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                     w_mat = pl.load(w, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
@@ -4102,10 +4185,12 @@ class TestDCERegression:
                     # Conditional branch references z (source tile), not z_vec (dest)
                     if i == 0:
                         acc_then = pl.tile.add(acc_iter, z)
-                        branch_out = pl.yield_(acc_then)
+                        pl.intrin.yield_(acc_then)
                     else:
-                        branch_out = pl.yield_(acc_iter)
-                    acc_out = pl.yield_(branch_out)
+                        pl.intrin.yield_(acc_iter)
+                    (branch_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(branch_out)
+                (acc_out,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 128], pl.FP32] = pl.store(acc_out, [0, 0], out_0)
                 return out_0
 
@@ -4122,7 +4207,8 @@ class TestDCERegression:
             ):
                 acc_0 = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                     x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                     w_mat = pl.load(w, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat)
@@ -4130,10 +4216,12 @@ class TestDCERegression:
                     z = pl.matmul(x_left, w_right)
                     if i == 0:
                         pl.tpush_to_aiv(z, split=0)
-                        branch_out = pl.yield_(acc_iter)
+                        pl.intrin.yield_(acc_iter)
                     else:
-                        branch_out = pl.yield_(acc_iter)
-                    _ = pl.yield_(branch_out)
+                        pl.intrin.yield_(acc_iter)
+                    (branch_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(branch_out)
+                (_,) = pl.intrin.leak()
 
         @pl.program
         class ExpAIV:
@@ -4146,16 +4234,19 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 128], pl.FP32]:
                 acc_0 = pl.tile.create([16, 128], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
                 acc_1 = pl.tile.muls(acc_0, 0.0)
-                for i, (acc_iter,) in pl.range(4, init_values=(acc_1,)):
+                (acc_iter,) = pl.intrin.carry(acc_1)
+                for i in pl.range(4):
                     if i == 0:
                         z_vec: pl.Tile[[16, 128], pl.FP32, pl.Mem.Vec, pl.TileView()] = pl.tpop_from_aic(
                             shape=[16, 128], dtype=pl.FP32, split=0
                         )
                         acc_then = pl.tile.add(acc_iter, z_vec)
-                        branch_out = pl.yield_(acc_then)
+                        pl.intrin.yield_(acc_then)
                     else:
-                        branch_out = pl.yield_(acc_iter)
-                    acc_out = pl.yield_(branch_out)
+                        pl.intrin.yield_(acc_iter)
+                    (branch_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(branch_out)
+                (acc_out,) = pl.intrin.leak()
 
                 out_0_store = pl.store(acc_out, [0, 0], out_0)
                 return out_0_store
@@ -4188,13 +4279,15 @@ class TestDCERegression:
                     w_seed_mat = pl.load(w, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                     w_seed_right = pl.move(w_seed_mat, target_memory=pl.MemorySpace.Right)
                     acc_init = pl.matmul(seed_left, w_seed_right)
-                    for kb, (acc_iter,) in pl.range(2, init_values=(acc_init,)):
+                    (acc_iter,) = pl.intrin.carry(acc_init)
+                    for kb in pl.range(2):
                         x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                         w_mat = pl.load(w, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                         w_right = pl.move(w_mat, target_memory=pl.MemorySpace.Right)
                         acc_next = pl.matmul_acc(acc_iter, x_left, w_right)
-                        acc_out = pl.yield_(acc_next)
+                        pl.intrin.yield_(acc_next)
+                    (acc_out,) = pl.intrin.leak()
                     acc_vec = pl.move(
                         acc_out,
                         target_memory=pl.MemorySpace.Vec,
@@ -4221,13 +4314,15 @@ class TestDCERegression:
                     w_seed_mat = pl.load(w, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                     w_seed_right = pl.move(w_seed_mat, target_memory=pl.MemorySpace.Right)
                     acc_init = pl.matmul(seed_left, w_seed_right)
-                    for kb, (acc_iter,) in pl.range(2, init_values=(acc_init,)):
+                    (acc_iter,) = pl.intrin.carry(acc_init)
+                    for kb in pl.range(2):
                         x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                         w_mat = pl.load(w, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                         w_right = pl.move(w_mat, target_memory=pl.MemorySpace.Right)
                         acc_next = pl.matmul_acc(acc_iter, x_left, w_right)
-                        acc_out = pl.yield_(acc_next)
+                        pl.intrin.yield_(acc_next)
+                    (acc_out,) = pl.intrin.leak()
                     pl.tpush_to_aiv(acc_out, split=0)
 
         _assert_function_equal(After, ExpectedAIC, "main_incore_0_aic")
@@ -4271,13 +4366,15 @@ class TestDCERegression:
             ) -> pl.Tensor[[16, 64], pl.FP32]:
                 for ob in pl.range(2):
                     acc_init = pl.tile.create([16, 64], dtype=pl.FP32)
-                    for kb, (acc_iter,) in pl.range(2, init_values=(acc_init,)):
+                    (acc_iter,) = pl.intrin.carry(acc_init)
+                    for kb in pl.range(2):
                         x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                         w_mat = pl.load(w, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                         w_right = pl.move(w_mat, target_memory=pl.MemorySpace.Right)
                         acc_next = pl.matmul_acc(acc_iter, x_left, w_right)
-                        acc_out = pl.yield_(acc_next)
+                        pl.intrin.yield_(acc_next)
+                    (acc_out,) = pl.intrin.leak()
                     acc_vec = pl.move(
                         acc_out,
                         target_memory=pl.MemorySpace.Vec,
@@ -4302,13 +4399,15 @@ class TestDCERegression:
                     acc_init: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Acc] = pl.tile.create(
                         [16, 64], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc
                     )
-                    for kb, (acc_iter,) in pl.range(2, init_values=(acc_init,)):
+                    (acc_iter,) = pl.intrin.carry(acc_init)
+                    for kb in pl.range(2):
                         x_mat = pl.load(x, [0, 0], [16, 128], target_memory=pl.MemorySpace.Mat)
                         x_left = pl.move(x_mat, target_memory=pl.MemorySpace.Left)
                         w_mat = pl.load(w, [0, 0], [128, 64], target_memory=pl.MemorySpace.Mat)
                         w_right = pl.move(w_mat, target_memory=pl.MemorySpace.Right)
                         acc_next = pl.matmul_acc(acc_iter, x_left, w_right)
-                        acc_out = pl.yield_(acc_next)
+                        pl.intrin.yield_(acc_next)
+                    (acc_out,) = pl.intrin.leak()
                     pl.tpush_to_aiv(acc_out, split=0)
 
             @pl.function(type=pl.FunctionType.AIV)
@@ -4318,12 +4417,14 @@ class TestDCERegression:
                 w: pl.Tensor[[128, 64], pl.BF16],
                 out_0: pl.Out[pl.Tensor[[16, 64], pl.FP32]],
             ) -> pl.Tensor[[16, 64], pl.FP32]:
-                for ob, (out_0_iter,) in pl.range(2, init_values=(out_0,)):
+                (out_0_iter,) = pl.intrin.carry(out_0)
+                for ob in pl.range(2):
                     acc_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                        split=0
+                        shape=[16, 64], dtype=pl.FP32, split=0
                     )
                     out_0_store = pl.store(acc_vec, [0, 0], out_0_iter)
-                    out_0_rv = pl.yield_(out_0_store)
+                    pl.intrin.yield_(out_0_store)
+                (out_0_rv,) = pl.intrin.leak()
                 return out_0_rv
 
             @pl.function(type=pl.FunctionType.Group, attrs={"split": pl.SplitMode.UP_DOWN})
@@ -4503,7 +4604,9 @@ class TestManualPipeVtoCFractalAdapt:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 v2c = pl.reserve_buffer(name="v2c_slot_buffer", size=8192, base=pl.AUTO)
                 pl.aic_initialize_pipe(pl.const(0, pl.INT32), v2c, dir_mask=2, slot_size=1024, id=1)
-                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=1)
+                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP32, split=0, id=1
+                )
                 lhs_left = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
                 rhs_mat = pl.load(a, [0, 0], [16, 16], target_memory=pl.MemorySpace.Mat)
                 rhs_right = pl.move(rhs_mat, target_memory=pl.MemorySpace.Right)
@@ -4544,7 +4647,9 @@ class TestManualPipeVtoCFractalAdapt:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 v2c = pl.reserve_buffer(name="v2c_slot_buffer", size=8192, base=pl.AUTO)
                 pl.aic_initialize_pipe(pl.const(0, pl.INT32), v2c, dir_mask=2, slot_size=1024, id=1)
-                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=1)
+                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP32, split=0, id=1
+                )
                 lhs_left = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
                 rhs_mat = pl.load(a, [0, 0], [16, 16], target_memory=pl.MemorySpace.Mat)
                 rhs_right = pl.move(rhs_mat, target_memory=pl.MemorySpace.Right)
@@ -4601,7 +4706,9 @@ class TestManualPipeVtoCFractalAdapt:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 v2c = pl.reserve_buffer(name="v2c_slot_buffer", size=8192, base=pl.AUTO)
                 pl.aic_initialize_pipe(pl.const(0, pl.INT32), v2c, dir_mask=2, slot_size=1024, id=1)
-                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=1)
+                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP32, split=0, id=1
+                )
                 lhs_left = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
                 rhs_mat = pl.load(a, [0, 0], [16, 16], target_memory=pl.MemorySpace.Mat)
                 rhs_right = pl.move(rhs_mat, target_memory=pl.MemorySpace.Right)
@@ -4642,7 +4749,9 @@ class TestManualPipeVtoCFractalAdapt:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 v2c = pl.reserve_buffer(name="v2c_slot_buffer", size=8192, base=pl.AUTO)
                 pl.aic_initialize_pipe(pl.const(0, pl.INT32), v2c, dir_mask=2, slot_size=1024, id=1)
-                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=1)
+                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP32, split=0, id=1
+                )
                 lhs_left = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
                 rhs_mat = pl.load(a, [0, 0], [16, 16], target_memory=pl.MemorySpace.Mat)
                 rhs_right = pl.move(rhs_mat, target_memory=pl.MemorySpace.Right)
@@ -4702,7 +4811,9 @@ class TestManualPipeVtoCFractalAdapt:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 v2c = pl.reserve_buffer(name="v2c_slot_buffer", size=8192, base=pl.AUTO)
                 pl.aic_initialize_pipe(pl.const(0, pl.INT32), v2c, dir_mask=2, slot_size=1024, id=1)
-                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=1)
+                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP32, split=0, id=1
+                )
                 lhs_left = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
                 rhs_mat = pl.load(a, [0, 0], [16, 16], target_memory=pl.MemorySpace.Mat)
                 rhs_right = pl.move(rhs_mat, target_memory=pl.MemorySpace.Right)
@@ -4743,7 +4854,9 @@ class TestManualPipeVtoCFractalAdapt:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 v2c: pl.Scalar[pl.INT32] = pl.reserve_buffer(name="v2c_slot_buffer", size=8192, base=pl.AUTO)
                 pl.aic_initialize_pipe(pl.const(0, pl.INT32), v2c, dir_mask=2, slot_size=1024, id=1)
-                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=1)
+                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP32, split=0, id=1
+                )
                 lhs_left: pl.Tile[[16, 16], pl.FP32, pl.Mem.Left] = pl.tile.move(
                     lhs_mat, target_memory=pl.Mem.Left
                 )
@@ -4812,7 +4925,9 @@ class TestManualPipeVtoCFractalAdapt:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 v2c = pl.reserve_buffer(name="v2c_slot_buffer", size=8192, base=pl.AUTO)
                 pl.aic_initialize_pipe(pl.const(0, pl.INT32), v2c, dir_mask=2, slot_size=1024, id=1)
-                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=1)
+                lhs_mat: pl.Tile[[16, 16], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP32, split=0, id=1
+                )
                 lhs_left = pl.move(lhs_mat, target_memory=pl.MemorySpace.Left)
                 rhs_mat = pl.load(a, [0, 0], [16, 16], target_memory=pl.MemorySpace.Mat)
                 rhs_right = pl.move(rhs_mat, target_memory=pl.MemorySpace.Right)
