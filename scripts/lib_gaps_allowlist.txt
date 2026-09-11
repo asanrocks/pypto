@@ -1,0 +1,21 @@
+# Allowlist for scripts/report_lib_gaps.py: error kinds that are known false
+# positives of the DSL surface, not gaps and not kernel bugs.
+#
+# Format (one entry per line, `#` starts a comment line):
+#
+#     rule : message-regex
+#
+# The regex is matched (unanchored search) against the first line of the
+# pyright diagnostic message. Entries are collapsed to one summary line in
+# the report. Remove an entry when its root cause is fixed or understood to
+# be signal; then its findings reappear for triage.
+
+# @pl.jit materializes @pl.program methods onto the enclosing module, so
+# module-level `self` inside spmd_submit bodies is a deliberate idiom
+# (noqa'd at runtime); pyright cannot know the materialization.
+reportUndefinedVariable : ^"self" is not defined$
+
+# Uppercase module-level rebind is the preset-switching pattern in variant
+# configs and kernels (MAX_SEQ_LEN, HC_PRE_IMPL, TP_SIZE); the redefinition
+# is intended, the naming convention is not worth breaking.
+reportConstantRedefinition : .

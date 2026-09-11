@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    echo "Usage: scripts/type-audit [--help]"
+    echo "Runs the focused Scalar literal audit with Pyright (64 threads by default)."
+    exit 0
+fi
+
+root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+report_file="${PYPTO_TYPE_AUDIT_REPORT:-$root_dir/.cache/type-audit.log}"
+threads="${PYPTO_TYPE_AUDIT_THREADS:-64}"
+
+mkdir -p "$(dirname -- "$report_file")"
+cd "$root_dir"
+
+pyright_status=0
+uv run pyright \
+    -p scripts/type-audit-pyright.json \
+    --threads "$threads" \
+    >"$report_file" 2>&1 || pyright_status=$?
+
+# Keep all Pyright output in the report. The focused gate selects only numeric
+# literals assigned to Scalar annotations; other assignment debt remains
+# searchable without blocking this survey.
+scalar_literal='Literal\[-?[0-9.]+\].*declared type "Scalar"'
+if rg -q "$scalar_literal" "$report_file"; then
+    rg -n -B 2 "$scalar_literal" "$report_file"
+    echo "type-audit: scalar literal findings; report saved to $report_file" >&2
+    exit 1
+fi
+
+if [[ "$pyright_status" -ne 0 ]]; then
+    echo "type-audit: no scalar literal findings; Pyright returned $pyright_status" >&2
+else
+    echo "type-audit: no scalar literal findings" >&2
+fi
+echo "type-audit: report saved to $report_file" >&2
+exit 0

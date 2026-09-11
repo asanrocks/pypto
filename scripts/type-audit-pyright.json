@@ -1,0 +1,23 @@
+{
+  "include": ["../tests/ut", "../examples"],
+  "exclude": [
+    "../tests/ut/ir/parser/**",
+    "../tests/ut/language/parser/**",
+    "../tests/st/**",
+    "../build/**",
+    "../dist/**"
+  ],
+  "extraPaths": ["../python", ".."],
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.10",
+  "reportAssignmentType": "error",
+  "reportAttributeAccessIssue": "none",
+  "reportArgumentType": "none",
+  "reportCallIssue": "none",
+  "reportOperatorIssue": "none",
+  "reportGeneralTypeIssues": "none",
+  "reportInvalidTypeForm": "none",
+  "reportUndefinedVariable": "none",
+  "reportMissingTypeStubs": "none",
+  "reportMissingModuleSource": "none"
+}
