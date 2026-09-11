@@ -103,6 +103,8 @@ fixable = ["ALL"]
 "tests/ut/ir/transforms/test_optimize_orch_tensors.py" = ["F841"]
 "tests/ut/ir/transforms/test_outline_incore_interleaved_ops.py" = ["E501"]
 "tests/ut/ir/transforms/test_outline_incore_scopes.py" = ["F841"]
+# Snippet-corpus entries embed one-line kernel sources as \n-escaped strings.
+"tests/ut/language/tracer/collector/test_rewriter_snippets.py" = ["E501"]
 "tests/ut/ir/transforms/test_outline_cluster_scopes.py" = ["F841"]
 "tests/ut/ir/transforms/test_legalize_pto_buffer_reuse.py" = ["E501", "F841"]
 "tests/ut/ir/transforms/test_ctrl_flow_transform.py" = ["F841"]
