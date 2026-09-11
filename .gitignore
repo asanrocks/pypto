@@ -213,3 +213,6 @@ coverage.xml
 dist/
 wheelhouse/
 undiscovered_cases.txt
+
+# Migration gate run log
+run-log
