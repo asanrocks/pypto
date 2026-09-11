@@ -11,6 +11,7 @@
 
 import importlib
 import os
+import pathlib
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Final
@@ -88,6 +89,72 @@ def stub_device_runner():
     stub._execute_on_device = MagicMock(name="_execute_on_device", return_value=None)  # type: ignore[attr-defined]
     with patch.dict(sys.modules, {"pypto.runtime.device_runner": stub}):
         yield stub
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_logreport(report):
+    """Keep expected-failure tracebacks in the gate log.
+
+    Pytest normally displays only ``XFAIL`` for an expected failure. The
+    migration gate needs the original exception in the same run so an xfail
+    can be investigated without rerunning it with ``--runxfail``.
+    """
+    reason = getattr(report, "wasxfail", None)
+    if reason is None:
+        return
+
+    print(f"\n=== XFAIL DETAIL ({report.when}): {report.nodeid} ===")
+    print(f"reason: {reason}")
+    longrepr = getattr(report, "longreprtext", "")
+    if longrepr:
+        print(longrepr)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    """Apply strict xfails to tracked frontend migration regressions.
+
+    The manifest keeps expected tracing gaps visible in test output and turns
+    them into XPASS when the corresponding frontend support lands.
+    """
+    xfail_path = pathlib.Path(__file__).parent / "_migration_xfail.txt"
+    if not xfail_path.exists():
+        return
+
+    entries = [
+        line.strip()
+        for line in xfail_path.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    known: set[str] = set()
+    duplicate_entries: set[str] = set()
+    for entry in entries:
+        if entry in known:
+            duplicate_entries.add(entry)
+        known.add(entry)
+    exact_node_selection = any("::" in str(arg) for arg in config.args)
+    collected_files = {item.nodeid.split("::", 1)[0] for item in items}
+    collected_nodeids = {item.nodeid for item in items}
+    unmatched = sorted(
+        nodeid
+        for nodeid in known
+        if nodeid.split("::", 1)[0] in collected_files and nodeid not in collected_nodeids
+    )
+    if duplicate_entries or (not exact_node_selection and unmatched):
+        problems = []
+        if duplicate_entries:
+            problems.append("duplicate xfail nodeids: " + ", ".join(duplicate_entries))
+        if unmatched:
+            problems.append("unmatched xfail nodeids: " + ", ".join(unmatched))
+        raise pytest.UsageError("; ".join(problems))
+
+    marker = pytest.mark.xfail(
+        reason="tracked tracing frontend migration gap",
+        strict=True,
+    )
+    for item in items:
+        if item.nodeid in known:
+            item.add_marker(marker)
 
 
 @pytest.fixture

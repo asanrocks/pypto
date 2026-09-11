@@ -4,7 +4,6 @@ set -uo pipefail
 # Keep the gate orchestration deliberately small. Each tool owns its diagnostics;
 # this script only configures the frontend, records one complete run, and
 # propagates failures.
-
 log_file="${PYPTO_GATE_LOG:-run-log}"
 : > "$log_file"
 
@@ -18,6 +17,9 @@ run_logged() {
     return "${pipeline_status[0]}"
 }
 
+# Gate for the tracing migration. The unsuffixed frontend is tracing and the
+# explicit parser suffix is reserved for parser-owned tests.
+
 if ! uv run python -m pytest --version >/dev/null 2>&1; then
     echo "ERROR: pytest not found. Run: uv sync --extra dev" >&2
     exit 1
@@ -26,6 +28,10 @@ fi
 pytest_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --collector|--round-trip|--roundtrip)
+            echo "ERROR: frontend selection is fixed; tracing collection and parser-owned round-trip verification are always enabled" >&2
+            exit 1
+            ;;
         --)
             shift
             pytest_args+=("$@")
@@ -42,9 +48,14 @@ if [ "${#pytest_args[@]}" -eq 0 ]; then
     pytest_args=(tests/ut/)
 fi
 
-log_message "=== Gate (pyright + ruff + typing-debt + pytest) ==="
+log_message "=== Gate (collector=tracing, roundtrip=parser) ==="
 
+# Round-trip verification is always parser-owned. The collection frontend is
+# tracing for unsuffixed decorators; parser suffixes are explicit in parser tests.
+export PYPTO_VERIFY_LEVEL=roundtrip
+export PYPTO_COLLECT=tracing
 export OPENBLAS_NUM_THREADS=1
+export PYPTO_GATE=1
 
 pytest_options=(-n auto --maxprocesses 64 --timeout=10 --tb=short -rA --color=no)
 

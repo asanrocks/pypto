@@ -179,22 +179,22 @@ const IRPropertySet& GetVerifiedProperties() {
 }
 
 VerificationLevel GetDefaultVerificationLevel() {
-  // C++17: static local initialization is thread-safe and runs exactly once
-  static const VerificationLevel level = [] {
-    const char* env = std::getenv("PYPTO_VERIFY_LEVEL");
-    if (env == nullptr) {
-      return VerificationLevel::Basic;
-    }
-    std::string val(env);
-    if (val == "none") {
-      return VerificationLevel::None;
-    }
-    if (val == "roundtrip") {
-      return VerificationLevel::Roundtrip;
-    }
+  // Read per call — not cached in a static — so tests can monkeypatch the
+  // environment (the same convention as the Python-side
+  // ``emit_source_loc_default``). The getenv cost only lands on the
+  // no-PassContext fallback path, never on a per-pass hot loop.
+  const char* env = std::getenv("PYPTO_VERIFY_LEVEL");
+  if (env == nullptr) {
     return VerificationLevel::Basic;
-  }();
-  return level;
+  }
+  std::string val(env);
+  if (val == "none") {
+    return VerificationLevel::None;
+  }
+  if (val == "roundtrip") {
+    return VerificationLevel::Roundtrip;
+  }
+  return VerificationLevel::Basic;
 }
 
 const IRPropertySet& GetStructuralProperties() {

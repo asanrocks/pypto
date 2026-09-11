@@ -22,10 +22,10 @@ import pathlib
 import pypto.language as pl
 from pypto.ir.utils import current_pinned_span
 from pypto.language.tracer import semantics
-from pypto.language.tracer.decorators.function import function_mark, function_trace
+from pypto.language.tracer.decorators.function import function_trace
 
 
-@function_mark
+@pl.function
 def _spanned(x: pl.Tensor[[8], pl.FP32]) -> pl.Tensor[[8], pl.FP32]:
     acc = x
     for i in range(4):

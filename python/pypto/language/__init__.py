@@ -15,7 +15,7 @@ This module provides:
 - Tensor type for tensor annotations and runtime wrapping
 - Tile type for tile annotations and runtime wrapping
 - Type-safe operation wrappers (tensor.*, tile.*, system.*, and unified ops)
-- DSL helpers (range, yield_)
+- DSL helpers (range) and the deprecated yield_ proxy (use pl.intrin.yield_)
 - DataType constants
 
 Typical usage:
@@ -36,6 +36,12 @@ Typical usage:
     def scalar_func(x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
         return x
 """
+
+import os as _os
+import warnings as _warnings
+from importlib import import_module as _import_module
+from typing import TYPE_CHECKING, Any, TypeVar
+from typing import cast as _typing_cast
 
 from pypto.ir import TensorView, TileView
 from pypto.jit import JITFunction
@@ -241,10 +247,8 @@ from .op.unified_ops import (
 )
 from .parser.decorator import (
     InlineFunction,
-    function,
     function_parser,
     inline,
-    program,
     program_parser,
 )
 from .parser.text_parser import loads, loads_program, parse, parse_program
@@ -267,9 +271,82 @@ from .typing import (
     Tile,
     Tuple,
     dynamic,
+    runtime,
 )
 from .typing import arg_direction as adir
 from .typing.const import const
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from pypto.language.parser.decorator import DSLFunction
+    from pypto.pypto_core import ir
+
+_R_co = TypeVar("_R_co", covariant=True)
+
+
+def _tracing_function(
+    func: "Callable[..., _R_co] | None" = None,
+    *,
+    type: FunctionType = FunctionType.Opaque,
+    level: "Level | None" = None,
+    role: "Role | None" = None,
+    attrs: "dict[str, Any] | None" = None,
+    auto_scope: bool = True,
+    strict_ssa: bool = False,
+    external_source: "str | Path | None" = None,
+    **unknown: Any,
+) -> "DSLFunction[_R_co] | Callable[[Callable[..., _R_co]], DSLFunction[_R_co]]":
+    """Load the tracing decorator selected for unsuffixed functions.
+
+    The return type mirrors the parser frontend's ``DSLFunction`` typing
+    view: the decorated value is an ``ir.Function`` at module scope and a
+    callable ``Marker`` inside a ``@pl.program`` class, and ``DSLFunction``'s
+    descriptor models both for type checkers (see
+    ``language/parser/decorator.pyi``).
+    """
+    if unknown:
+        raise TypeError(f"pl.function: unsupported kwargs {sorted(unknown)}")
+    tracing = _import_module("pypto.language.tracer.decorators.function")
+
+    def deco(kernel: "Callable[..., _R_co]") -> "DSLFunction[_R_co]":
+        return _typing_cast(
+            "DSLFunction[_R_co]",
+            tracing.function_mark(
+                kernel,
+                function_type=type,
+                level=level,
+                role=role,
+                attrs=attrs,
+                auto_scope=auto_scope,
+                strict_ssa=strict_ssa,
+                external_source=external_source,
+            ),
+        )
+
+    return deco if func is None else deco(func)
+
+
+def _tracing_program(
+    cls: "type[Any] | None" = None, *, strict_ssa: bool = False, **unknown: Any
+) -> "ir.Program | Callable[[type[Any]], ir.Program]":
+    """Load the tracing program decorator selected for unsuffixed programs."""
+    if unknown:
+        raise TypeError(f"pl.program: unsupported kwargs {sorted(unknown)}")
+    tracing = _import_module("pypto.language.tracer.decorators.function")
+    if cls is None:
+        return lambda decorated: tracing.trace_program(decorated, strict_ssa=strict_ssa)
+    return tracing.trace_program(cls, strict_ssa=strict_ssa)
+
+
+_collector = _os.environ.get("PYPTO_COLLECT", "tracing").lower()
+if _collector in ("tracing", "ir"):
+    function = _tracing_function
+    program = _tracing_program
+else:
+    function = function_parser
+    program = program_parser
 
 # Short alias for MemorySpace (pl.Mem.Vec instead of pl.MemorySpace.Vec)
 Mem = MemorySpace
@@ -311,6 +388,21 @@ TaskId = Scalar[TASK_ID]
 
 intrin = _intrin_module
 
+
+def yield_(*values: Any) -> Any:
+    """Deprecated alias of :func:`pypto.language.intrin.yield_`.
+
+    Kept so existing ``pl.yield_(...)`` sites keep working; new code should
+    call ``pl.intrin.yield_(...)`` directly.
+    """
+    _warnings.warn(
+        "pl.yield_ is deprecated; call pl.intrin.yield_ instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _intrin_module.yield_(*values)
+
+
 __all__ = [
     "intrin",
     "jit",
@@ -322,6 +414,7 @@ __all__ = [
     "program",
     "program_parser",
     "InlineFunction",
+    "expand",
     "parse",
     "parser",
     "loads",
@@ -338,12 +431,13 @@ __all__ = [
     "Out",
     "RUNTIME",
     "dynamic",
-    "expand",
+    "runtime",
     "const",
     "range",
     "parallel",
     "unroll",
     "pipeline",
+    "yield_",
     "static_print",
     "static_assert",
     "func_attr",

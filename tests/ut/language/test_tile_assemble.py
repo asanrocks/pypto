@@ -45,6 +45,42 @@ class TestTileAssemble:
         reparsed = pl.parse(printed)
         ir.assert_structural_equal(original, reparsed)
 
+    def test_setitem_sugar_matches_explicit_assemble(self):
+        """``tile[0:16, 64:128] = src`` lowers to the same IR as tile.assemble."""
+
+        @pl.function
+        def sugared(x: pl.Tensor[[16, 128], pl.FP32]) -> pl.Tensor[[16, 128], pl.FP32]:
+            target: pl.Tile[[16, 128], pl.FP32] = pl.load(x, [0, 0], [16, 128])
+            source: pl.Tile[[16, 64], pl.FP32] = pl.load(x, [0, 64], [16, 64])
+            target[0:16, 64:128] = source
+            return pl.store(target, [0, 0], x)
+
+        @pl.function
+        def explicit(x: pl.Tensor[[16, 128], pl.FP32]) -> pl.Tensor[[16, 128], pl.FP32]:
+            target: pl.Tile[[16, 128], pl.FP32] = pl.load(x, [0, 0], [16, 128])
+            source: pl.Tile[[16, 64], pl.FP32] = pl.load(x, [0, 64], [16, 64])
+            target = pl.tile.assemble(target, source, [0, 64])
+            return pl.store(target, [0, 0], x)
+
+        ir.assert_structural_equal(sugared, explicit)
+
+    def test_setitem_outside_kernel_raises(self):
+        """Tile item assignment without an active frame is a loud error."""
+        tile = pl.create_tile([4, 4], dtype=pl.FP32)
+        with pytest.raises(TypeError, match="only supported inside a traced kernel"):
+            tile[0:1, :] = tile
+
+    def test_setitem_scalar_index_rejected(self):
+        """Scalar (rank-reducing) indices are rejected loudly, like Tensor's."""
+        with pytest.raises(TypeError, match="scalar indices"):
+
+            @pl.function
+            def kernel(x: pl.Tensor[[8, 8], pl.FP32]) -> pl.Tensor[[8, 8], pl.FP32]:
+                target: pl.Tile[[8, 8], pl.FP32] = pl.load(x, [0, 0], [8, 8])
+                source: pl.Tile[[1, 8], pl.FP32] = pl.load(x, [0, 0], [1, 8])
+                target[0, :] = source
+                return pl.store(target, [0, 0], x)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

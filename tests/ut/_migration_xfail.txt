@@ -1,0 +1,17 @@
+# PyPTO tracing frontend migration xfail manifest
+#
+# Each non-comment line is an exact pytest nodeid. These tests still execute
+# under normal pytest; the manifest only records tracked expected failures.
+# Remove an entry when its test passes so strict xfail reports an XPASS.
+#
+# PYPTO_VERIFY_LEVEL=none is triage-only. The final acceptance check is always
+# ./scripts/gate, which restores BEFORE_AND_AFTER verification and parser-owned
+# print/parse round-trip checking.
+
+# tests/ut/jit/test_corpus_gaps.py — the pypto-lib corpus conformance pins
+# (the deepseek_v4_pro / qwen3_14b import probe, 2026-09). Each entry is a
+# documented frontend gap; the test docstring names the owning surface.
+
+# CADENCE PINS — upstream surfaces this repo has not adopted. The fix is a
+# rebase/adopt (2e54cd660, #2142, #2089, #2369), never a test or corpus edit.
+tests/ut/jit/test_corpus_gaps.py::TestCadenceUpstreamSurface::test_cadence_prefetch_context_traces
