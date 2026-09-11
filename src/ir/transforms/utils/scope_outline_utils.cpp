@@ -118,13 +118,21 @@ class ScopeKindPresenceChecker : public IRVisitor {
 class StoreTargetCollector : public IRVisitor {
  public:
   std::unordered_set<const Var*> store_targets;
+  // store_targets is pointer-keyed; its iteration order would follow heap
+  // addresses (ASLR), so consumers whose iteration order becomes output
+  // order — the outlined function's result-tuple layout — must walk
+  // store_targets_ordered (first-encounter order) instead. Membership tests
+  // keep using store_targets.
+  std::vector<const Var*> store_targets_ordered;
 
  protected:
   void VisitExpr_(const CallPtr& op) override {
     auto opnode = std::dynamic_pointer_cast<const Op>(op->op_);
     if (opnode && IsOp(opnode, "tile.store") && op->args_.size() >= 3) {
       if (auto var = As<Var>(op->args_[2])) {
-        store_targets.insert(var.get());
+        if (store_targets.insert(var.get()).second) {
+          store_targets_ordered.push_back(var.get());
+        }
       }
     }
     IRVisitor::VisitExpr_(op);
@@ -1628,7 +1636,7 @@ StmtPtr ScopeOutliner::OutlineScope(const ScopeStmtPtr& op,
   // still caller-owned, and dropping it here is what left the read dangling.
   std::unordered_map<const Var*, const Var*> store_body_ptrs;
   if (op->GetScopeKind() != ScopeKind::Hierarchy) {
-    for (const Var* var_ptr : store_collector.store_targets) {
+    for (const Var* var_ptr : store_collector.store_targets_ordered) {
       if (live_in.IsExternal(var_ptr)) {
         auto ext_it = var_objects_.find(var_ptr);
         CHECK(ext_it != var_objects_.end())

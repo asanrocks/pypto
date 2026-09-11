@@ -121,31 +121,46 @@ void DetectInlineCycles(const std::unordered_map<std::string, FunctionPtr>& inli
 // later overwrites/erases, leading to inconsistent def-use after the splice.
 class DefVarCollector : public IRVisitor {
  public:
+  // defs is pointer-keyed; its iteration order would follow heap addresses
+  // (ASLR), so consumers that mint names or emit IR in iteration order must
+  // walk defs_ordered (first-encounter order) instead — output stays
+  // process-stable.
   std::unordered_set<const Var*> defs;
+  std::vector<const Var*> defs_ordered;
 
   void VisitStmt_(const AssignStmtPtr& op) override {
-    if (op->var_) defs.insert(op->var_.get());
+    if (op->var_ && defs.insert(op->var_.get()).second) {
+      defs_ordered.push_back(op->var_.get());
+    }
     IRVisitor::VisitStmt_(op);
   }
 
   void VisitStmt_(const ForStmtPtr& op) override {
-    if (op->loop_var_) defs.insert(op->loop_var_.get());
+    if (op->loop_var_ && defs.insert(op->loop_var_.get()).second) {
+      defs_ordered.push_back(op->loop_var_.get());
+    }
     for (const auto& v : op->return_vars_) {
-      if (v) defs.insert(v.get());
+      if (v && defs.insert(v.get()).second) {
+        defs_ordered.push_back(v.get());
+      }
     }
     IRVisitor::VisitStmt_(op);
   }
 
   void VisitStmt_(const WhileStmtPtr& op) override {
     for (const auto& v : op->return_vars_) {
-      if (v) defs.insert(v.get());
+      if (v && defs.insert(v.get()).second) {
+        defs_ordered.push_back(v.get());
+      }
     }
     IRVisitor::VisitStmt_(op);
   }
 
   void VisitStmt_(const IfStmtPtr& op) override {
     for (const auto& v : op->return_vars_) {
-      if (v) defs.insert(v.get());
+      if (v && defs.insert(v.get()).second) {
+        defs_ordered.push_back(v.get());
+      }
     }
     IRVisitor::VisitStmt_(op);
   }
@@ -275,7 +290,7 @@ SplicedInlineBody CloneInlineBody(const FunctionPtr& callee, const std::vector<E
   }
   DefVarCollector def_collector;
   def_collector.VisitStmt(callee->body_);
-  for (const Var* v : def_collector.defs) {
+  for (const Var* v : def_collector.defs_ordered) {
     if (seed.count(v) > 0) continue;  // param — already seeded with actual arg
     auto fresh = std::make_shared<Var>(FreshName(v->name_hint_), v->GetType(), v->span_);
     seed[v] = fresh;
