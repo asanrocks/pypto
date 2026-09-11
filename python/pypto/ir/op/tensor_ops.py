@@ -37,7 +37,7 @@ from ..utils import (
     resolve_saturation_deviation,
 )
 from ._pad_value import normalize_pad_value
-from .tile_ops import resolve_gather_compare_cmp_mode
+from .tile_ops import _normalize_axis_const, resolve_gather_compare_cmp_mode
 
 
 def create(
@@ -1674,7 +1674,7 @@ def rsqrt(input: Expr, high_precision: bool = False, span: Span | None = None) -
         Call expression for element-wise reciprocal square root
     """
     actual_span = _get_span_or_capture(span)
-    kwargs: dict = {"high_precision": high_precision} if high_precision else {}
+    kwargs: dict[str, Any] = {"high_precision": high_precision} if high_precision else {}
     return _ir_core.create_op_call("tensor.rsqrt", [input], kwargs, actual_span)
 
 
@@ -1847,19 +1847,8 @@ def transpose(
         Call expression for tensor transpose
     """
     actual_span = _get_span_or_capture(span)
-    if isinstance(axis1, ConstInt):
-        axis1_expr = axis1
-    elif isinstance(axis1, int):
-        axis1_expr = ConstInt(axis1, DataType.INDEX, actual_span)
-    else:
-        raise TypeError(f"axis1 must be int or ConstInt, got {type(axis1)}")
-
-    if isinstance(axis2, ConstInt):
-        axis2_expr = axis2
-    elif isinstance(axis2, int):
-        axis2_expr = ConstInt(axis2, DataType.INDEX, actual_span)
-    else:
-        raise TypeError(f"axis2 must be int or ConstInt, got {type(axis2)}")
+    axis1_expr = _normalize_axis_const(axis1, actual_span, "axis1")
+    axis2_expr = _normalize_axis_const(axis2, actual_span, "axis2")
 
     args = [tensor, axis1_expr, axis2_expr]
     if valid_shape is not None:
@@ -1977,8 +1966,8 @@ def scatter_update(
     input: Expr,
     *args: Expr | int,
     dim: int | Expr | None = None,
-    index: Expr | None = None,
-    src: Expr | None = None,
+    index: Expr | int | None = None,
+    src: Expr | int | None = None,
     span: Span | None = None,
 ) -> Call:
     """Update input tensor rows at positions specified by 2D index with values from src.
@@ -2282,9 +2271,7 @@ def gather(  # noqa: PLR0913
         raise ValueError("gather() output_dtype is only valid for the mask form; use mask_pattern=<int>")
     if dim is None:
         return _ir_core.create_op_call("tensor.gather", [input, index], {}, actual_span)
-    if not isinstance(dim, (int, _ir_core.ConstInt)):
-        raise TypeError(f"dim must be int or ConstInt, got {type(dim)}")
-    dim_val = int(dim.value) if isinstance(dim, _ir_core.ConstInt) else dim
+    dim_val = int(_normalize_axis_const(dim, actual_span, "dim").value)
     return _ir_core.create_op_call("tensor.gather", [input, index], {"dim": dim_val}, actual_span)
 
 
@@ -2402,7 +2389,7 @@ def create_l1(
 ) -> Call:
     """Create an on-chip (L1/Mat) accumulator tensor (tensor-level).
 
-    Companion of :func:`gather_row`: seeds the loop-carried accumulator that a
+    Companion of :func:`gather_row`: creates the loop-carried accumulator that a
     kernel-driven paged gather fills row by row. Deduces a ``TensorType`` so the
     gathered result composes with tensor-level ``matmul`` / softmax; lowered by
     ``ConvertTensorToTileOps`` to ``tile.create(target_memory=Mat)``.

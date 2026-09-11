@@ -25,7 +25,7 @@ import pypto.language as pl
 import pypto.language.op as language_op
 import pytest
 from pypto import DataType, ir, pypto_core
-from pypto.language.op import tile_ops, unified_ops
+from pypto.language.op import unified_ops
 from pypto.language.typing import Scalar, Tensor, Tile
 
 
@@ -171,6 +171,19 @@ class TestUnifiedTensorDispatch:
         @pl.function
         def explicit(a: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             c: pl.Tensor[[64], pl.FP32] = pl.tensor.exp(a)
+            return c
+
+        ir.assert_structural_equal(unified, explicit)
+
+    def test_log(self):
+        @pl.function
+        def unified(a: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+            c: pl.Tensor[[64], pl.FP32] = pl.log(a)
+            return c
+
+        @pl.function
+        def explicit(a: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+            c: pl.Tensor[[64], pl.FP32] = pl.tensor.log(a)
             return c
 
         ir.assert_structural_equal(unified, explicit)
@@ -1123,12 +1136,6 @@ class TestPromotedOps:
         duplicates = sorted({name for name in module.__all__ if module.__all__.count(name) > 1})
         assert not duplicates, f"{module.__name__}.__all__ lists these names more than once: {duplicates}"
 
-    def test_create_tile_single_binding(self):
-        """``create_tile`` is the ``tile_ops.create`` alias in both namespaces."""
-        assert pl.create_tile is language_op.create_tile is tile_ops.create
-        assert "create_tile" in pl.__all__
-        assert "create_tile" in language_op.__all__
-
     def test_promoted_create_tile_transpose(self):
         """``pl.create_tile(..., transpose=True)`` matches the explicit form.
 
@@ -1180,6 +1187,45 @@ class TestPromotedOps:
         # The kwarg must take effect, not merely be accepted: flat_layout drops
         # the fractal sub-block boxing.
         assert "slayout=pl.TileLayout.none_box" in unified.as_python()
+
+    def test_log_exports_unified_dispatch(self):
+        """pl.log is the unified dispatcher, not the tile-only wrapper.
+
+        Regression: the top-level ``log`` import used to bind
+        ``tile_ops.log`` (Tile-only) while ``op.log`` held the unified
+        dispatcher — ``pl.log(Tensor)`` crashed at trace time with
+        "tile.log requires argument to be a TileType".
+        """
+        assert pl.log is unified_ops.log
+        assert language_op.log is unified_ops.log
+        assert "log" in pl.__all__
+        assert "log" in language_op.__all__
+
+    def test_create_tile_exports_unified_dispatch(self):
+        """pl.create_tile is the same callable as op.create_tile."""
+        assert pl.create_tile is unified_ops.create_tile
+        assert language_op.create_tile is unified_ops.create_tile
+        assert "create_tile" in pl.__all__
+        assert "create_tile" in language_op.__all__
+
+    def test_promoted_create_tile(self):
+        @pl.function
+        def unified(
+            t: pl.Tensor[[64, 64], pl.FP32], out: pl.Tensor[[64, 64], pl.FP32]
+        ) -> pl.Tensor[[64, 64], pl.FP32]:
+            a: pl.Tile[[64, 64], pl.FP32] = pl.create_tile([64, 64], dtype=pl.FP32)
+            result: pl.Tensor[[64, 64], pl.FP32] = pl.store(a, offsets=[0, 0], output_tensor=out)
+            return result
+
+        @pl.function
+        def explicit(
+            t: pl.Tensor[[64, 64], pl.FP32], out: pl.Tensor[[64, 64], pl.FP32]
+        ) -> pl.Tensor[[64, 64], pl.FP32]:
+            a: pl.Tile[[64, 64], pl.FP32] = pl.tile.create([64, 64], dtype=pl.FP32)
+            result: pl.Tensor[[64, 64], pl.FP32] = pl.store(a, offsets=[0, 0], output_tensor=out)
+            return result
+
+        ir.assert_structural_equal(unified, explicit)
 
     def test_promoted_create(self):
         @pl.function
@@ -1345,6 +1391,68 @@ class TestPromotedTileSinCos:
             pl.tile.cos(t)
 
 
+class TestHostLiteralOperands:
+    """Host int/float literals flow through cast/write like parser constants.
+
+    The operand boundary (``_host.coerce_host_scalar``) is the only
+    automatic host-literal lifting in the dialect — these tests pin the
+    public overloads to that runtime contract.
+    """
+
+    def test_cast_float_literal_matches_pl_const(self):
+        @pl.function
+        def literal(x: pl.Tensor[[4], pl.FP32]) -> pl.Tensor[[4], pl.FP32]:
+            pl.write(x, [0], pl.cast(0.5, pl.FP32))
+            return x
+
+        @pl.function
+        def canonical(x: pl.Tensor[[4], pl.FP32]) -> pl.Tensor[[4], pl.FP32]:
+            pl.write(x, [0], pl.cast(pl.const(0.5, pl.FP32), pl.FP32))
+            return x
+
+        ir.assert_structural_equal(literal, canonical)
+
+    def test_write_float_literal_matches_pl_const(self):
+        @pl.function
+        def literal(x: pl.Tensor[[4], pl.FP32]) -> pl.Tensor[[4], pl.FP32]:
+            pl.write(x, [0], 0.5)
+            return x
+
+        @pl.function
+        def canonical(x: pl.Tensor[[4], pl.FP32]) -> pl.Tensor[[4], pl.FP32]:
+            pl.write(x, [0], pl.const(0.5, pl.FP32))
+            return x
+
+        ir.assert_structural_equal(literal, canonical)
+
+    def test_scalar_min_max_float_literal_matches_pl_const(self):
+        """``pl.min``/``pl.max`` lift float literals like parser constants.
+
+        The annotations accept ``float`` (the pypto-lib amax-quant kernels
+        seed an accumulator with a module-level float constant), so the
+        operand boundary must lift it to ``ConstFloat(DEFAULT_CONST_FLOAT)``
+        — same node ``pl.const`` builds — not mis-type it as a ConstInt.
+        """
+
+        @pl.function
+        def literal(x: pl.Tensor[[4], pl.FP32]) -> pl.Tensor[[4], pl.FP32]:
+            a: pl.Scalar[pl.FP32] = pl.tensor.read(x, [0])
+            hi: pl.Scalar[pl.FP32] = pl.max(a, 0.5)
+            lo: pl.Scalar[pl.FP32] = pl.min(hi, 0.25)
+            pl.write(x, [0], lo)
+            return x
+
+        @pl.function
+        def canonical(x: pl.Tensor[[4], pl.FP32]) -> pl.Tensor[[4], pl.FP32]:
+            a: pl.Scalar[pl.FP32] = pl.tensor.read(x, [0])
+            hi: pl.Scalar[pl.FP32] = pl.max(a, pl.const(0.5, pl.FP32))
+            lo: pl.Scalar[pl.FP32] = pl.min(hi, pl.const(0.25, pl.FP32))
+            pl.write(x, [0], lo)
+            return x
+
+        ir.assert_structural_equal(literal, canonical)
+
+
 class TestUnifiedOpsTypeErrors:
     """Passing invalid types to unified_ops raises TypeError."""
 
@@ -1359,26 +1467,6 @@ class TestUnifiedOpsTypeErrors:
         # type slips in.
         with pytest.raises(TypeError, match="expected Tensor or Tile operands"):
             unified_ops.mul("not_a_number", 2)  # type: ignore
-
-    def test_exp_invalid_input(self):
-        with pytest.raises(TypeError, match="expected Tensor or Tile"):
-            unified_ops.exp("bad")  # type: ignore
-
-    def test_neg_invalid_input(self):
-        with pytest.raises(TypeError, match="expected Tensor or Tile"):
-            unified_ops.neg("bad")  # type: ignore
-
-    def test_recip_invalid_input(self):
-        with pytest.raises(TypeError, match="expected Tensor or Tile"):
-            unified_ops.recip("bad")  # type: ignore
-
-    def test_reshape_invalid_input(self):
-        with pytest.raises(TypeError, match="expected Tensor or Tile"):
-            unified_ops.reshape(123, [4, 4])  # type: ignore
-
-    def test_reinterpret_view_invalid_input(self):
-        with pytest.raises(TypeError, match="expected Tensor or Tile"):
-            unified_ops.reinterpret_view(123, DataType.INT16)  # type: ignore
 
     def test_row_expand_add_rejects_tmp_for_tensor_inputs(self):
         span = ir.Span.unknown()
@@ -1486,19 +1574,6 @@ class TestUnifiedOpsTypeErrors:
             unified_ops.add(t, ti)  # type: ignore[arg-type]
         with pytest.raises(TypeError, match="cannot mix Tensor and Tile"):
             unified_ops.add(ti, t)  # type: ignore[arg-type]
-
-    def test_batch_matmul_tensor_inputs(self):
-        """batch_matmul is tile-only; passing Tensors raises TypeError."""
-        span = ir.Span.unknown()
-        t1 = Tensor(expr=ir.Var("a", ir.TensorType([2, 64, 64], DataType.FP16), span))
-        t2 = Tensor(expr=ir.Var("b", ir.TensorType([2, 64, 64], DataType.FP16), span))
-        with pytest.raises(TypeError, match="expected Tensor or Tile operands"):
-            unified_ops.batch_matmul(t1, t2)  # type: ignore[arg-type]
-
-    def test_batch_matmul_invalid_lhs(self):
-        """batch_matmul with non-Tensor/Tile input raises TypeError."""
-        with pytest.raises(TypeError, match="expected Tensor or Tile operands"):
-            unified_ops.batch_matmul(1, 2)  # type: ignore
 
 
 # The unified wrappers accept the union of both levels' kwargs. A kwarg only the

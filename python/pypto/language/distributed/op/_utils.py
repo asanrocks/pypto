@@ -12,7 +12,7 @@
 from collections.abc import Sequence
 from typing import Any, overload
 
-from pypto.language.typing import IntLike, Scalar
+from pypto.language.typing import IntLike, to_expr
 from pypto.pypto_core import ir as _ir
 from pypto.pypto_core.ir import Expr
 
@@ -31,7 +31,7 @@ def _unwrap(value: Any) -> Any:
 
 def _normalize_intlike(seq: Sequence[IntLike]) -> list[int | Expr]:
     """Unwrap Scalar elements to Expr so the sequence matches C++ binding types."""
-    return [elem.unwrap() if isinstance(elem, Scalar) else elem for elem in seq]
+    return [to_expr(elem) for elem in seq]
 
 
 @overload

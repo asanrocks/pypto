@@ -19,7 +19,18 @@ Exposes:
 Mirrors :mod:`pypto.language.typing` for the single-device DSL.
 """
 
+from pypto.language.typing.type_utils import register_facade
+from pypto.pypto_core import ir as _ir
+
 from .comm_ctx import CommCtx
 from .distributed_tensor import DistributedTensor
+
+# Register the distributed type→facade mappings in the funnel's MRO-sorted
+# registry. ``DistributedTensorType`` is a pybind subclass of
+# ``TensorType``; it must be matched first or the plain ``TensorType``
+# branch swallows it — the silent-downgrade failure mode the live
+# ``_call_facade`` chain had. Idempotent; runs at package import.
+register_facade(_ir.DistributedTensorType, lambda e: DistributedTensor(expr=e))
+register_facade(_ir.CommCtxType, lambda e: CommCtx(expr=e))
 
 __all__ = ["CommCtx", "DistributedTensor"]

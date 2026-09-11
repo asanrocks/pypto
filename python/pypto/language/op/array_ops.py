@@ -82,3 +82,10 @@ def update_element(array: Array, index: IntLike, value: IntLike) -> Array:
         value_expr = ConstInt(value_expr, wrap_dtype, Span.unknown())
     call_expr = _ir_ops.update_element(array.unwrap(), _unwrap_intlike(index), value_expr)
     return Array(expr=call_expr)
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see _validation.py).
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

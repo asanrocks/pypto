@@ -13,9 +13,9 @@ Thin subclass of ``ir.MemRef`` that widens the accepted ``base`` and
 ``byte_offset`` parameters so that pyright accepts the ``pl.MemRef(...)``
 forms emitted by the IR printer inside ``@pl.program`` code:
 
-* ``base`` also accepts the ``pl.Ptr`` wrapper — for
-  ``pl.MemRef(ptr_var, offset, size)`` where ``ptr_var`` is annotated as
-  ``pl.Ptr`` (what ``pl.tile.alloc`` / ``pld.alloc_window_buffer`` return).
+* ``base`` also accepts the DSL ``Ptr`` facade — for ``pl.MemRef(ptr_var, offset, size)``
+  where ``ptr_var`` is annotated as ``pl.Ptr`` (the printer's spelling; the
+  facade is unwrapped to its bound base ``Var`` here).
 * ``byte_offset`` also accepts ``Scalar`` — the printer renders a non-constant
   offset as a ``Scalar`` arithmetic expression (e.g. ``pos * 128 * 4``), and a
   constant offset as ``pl.const(0, pl.INT64)``, which is statically a ``Scalar``.
@@ -24,6 +24,8 @@ forms emitted by the IR printer inside ``@pl.program`` code:
 from typing import Any, overload
 
 from pypto.pypto_core.ir import (
+    ConstFloat,
+    ConstInt,
     Expr,
     MemorySpace,
     PtrType,
@@ -43,9 +45,27 @@ from .scalar import Scalar
 # ``int`` stays for MemRefs built programmatically with a plain offset literal.
 _ByteOffset = int | Expr | Scalar
 
+# Allocation-identity interning for string bases: ``pl.MemRef("buf", ...)``
+# evaluated in two annotations creates a fresh base Var per call, but
+# ``MemRef::MayAlias``/``SameAllocation`` compare the base *pointer*
+# identity — two params of the same base name must share the Var or the
+# aliasing passes silently miss the alias (the WAW auto-derive edge). The
+# AST parser interns per-parse (``type_resolver._intern_base_ptr``); the
+# tracing frontend's annotations are plain Python values, so the intern
+# lives here (the only place that sees the string base). Sharing the Var
+# across programs is benign: it is a symbolic allocation name, and the
+# structural-compare passes map vars by ``name_hint``.
+_base_ptr_cache: dict[str, Var] = {}
+
+
+def _intern_base(name: str) -> Var:
+    if name not in _base_ptr_cache:
+        _base_ptr_cache[name] = Var(name, PtrType(), Span.unknown())
+    return _base_ptr_cache[name]
+
 
 class MemRef(_IrMemRef):
-    """DSL-level memory reference accepting ``pl.Ptr`` bases and Scalar offsets.
+    """DSL-level memory reference accepting Ptr bases and Scalar offsets.
 
     Identical to ``ir.MemRef`` at runtime. The overloads only widen what
     pyright accepts so that printed IR — which uses ``pl.Ptr``-annotated
@@ -168,6 +188,31 @@ class MemRef(_IrMemRef):
         self, memory_space: MemorySpace, addr: Expr | int, size: int, id: int, span: Span = ...
     ) -> None: ...
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # ``pl.const(...)`` reifies to a Scalar — a printed MemRef's
+        # ``pl.const(0, pl.INT64)`` offset is a live Scalar here (the text
+        # parser execs the printed annotation). Unwrap it to what the
+        # underlying constructor takes: a constant offset passes its Python
+        # value (the pre-reification behavior), a non-const offset its Expr.
+        if len(args) > 1 and isinstance(args[1], Scalar):
+            inner = args[1].unwrap()
+            if isinstance(inner, (ConstInt, ConstFloat)):
+                args = (args[0], inner.value, *args[2:])
+            else:
+                args = (args[0], inner, *args[2:])
+        if len(args) >= 3 and isinstance(args[0], str):
+            # intern the string base (allocation identity, see above) — but only
+            # for the resolved print form ``MemRef(base, offset, size)``. The
+            # one-argument declared form ``MemRef(name, slots=...)`` must reach
+            # the core's declared-allocation overloads with the string intact
+            # (they own is_pinned=True and the slots>=1 check); interning it
+            # here turns ``(name, slots)`` into ``(Var, slots)``, which matches
+            # no core overload.
+            args = (_intern_base(args[0]), *args[1:])
+        if len(args) >= 1 and isinstance(args[0], Ptr):
+            # unwrap the Ptr facade to its base Var (a bound alloc facade
+            # wraps the let-minted Var; an unbound one is rejected by the
+            # underlying constructor, loudly)
+            args = (args[0].unwrap(), *args[1:])
         super().__init__(*args, **kwargs)
 
 

@@ -11,7 +11,7 @@
 from collections.abc import Callable
 from enum import Enum
 from types import TracebackType
-from typing import overload
+from typing import Any, overload
 
 from pypto.pypto_core.ir import Function, Program, Span, Stmt
 
@@ -821,6 +821,17 @@ def stamp_tfree_split() -> Pass:
     AIC/AIV tfrees. Runs late, before codegen.
     """
 
+def materialize_entry_returns() -> Pass:
+    """Promote a dispatch entry's return-style outputs to Out parameters.
+
+    A dispatch entry (an Orchestration function nothing else calls) owns an
+    artifact calling convention, so a value it returns has nowhere to live on
+    the host. The pass promotes the fresh ``tensor.create`` holding each
+    returned value into an appended Out parameter, so codegen binds it to an
+    external orch_args slot and the artifact's dispatch metadata can
+    auto-allocate it.
+    """
+
 def materialize_runtime_scopes() -> Pass:
     """Materialize implicit orchestration scopes as explicit RuntimeScopeStmt nodes.
 
@@ -1057,6 +1068,7 @@ __all__ = [
     "fuse_create_assemble_to_slice",
     "fold_no_op_reshape",
     "stamp_tfree_split",
+    "materialize_entry_returns",
     "VerificationError",
     "SSAErrorType",
     "TypeCheckErrorType",
@@ -1127,7 +1139,7 @@ class PassProperties:
         produced: IRPropertySet,
         invalidated: IRPropertySet,
     ) -> None: ...
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Create pass properties, optionally with required/produced/invalidated sets."""
 
 def create_function_pass(

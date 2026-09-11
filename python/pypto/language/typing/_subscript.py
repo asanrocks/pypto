@@ -283,6 +283,44 @@ def _warn_tile_promotion(shape: Sequence[int | _ir.Expr], drop_dims: list[int], 
         )
 
 
+def subscript_write_offsets(
+    expr: _ir.Expr,
+    indices: _SubscriptAxis | tuple[_SubscriptAxis, ...],
+    *,
+    kind: str,
+) -> list[int | Scalar | _ir.Expr]:
+    """The subscript-write offsets (the AST's ``_parse_subscript_assignment``
+    numpy rule): a bare key is axis 0, and dims past the written indices are
+    implicit full slices — the offsets are always full-rank, so a bare ``t[:]``
+    covers every axis of the target.
+
+    The rank is read from the resolved IR expr's type at trace time (the
+    facade itself may be unranked ``pl.Tensor``); a target whose type carries
+    no shape is loud, as is a key with more indices than the rank.
+    """
+    seq = _normalize_seq(indices)
+    typ = expr.type
+    if not isinstance(typ, _ir.ShapedType):
+        raise TypeError(
+            f"{kind} item-assignment target has a non-shaped type "
+            f"({type(typ).__name__}) — the write's axis count cannot be derived"
+        )
+    rank = len(typ.shape)
+    if len(seq) > rank:
+        raise TypeError(f"{kind} item assignment has {len(seq)} indices but the target is {rank}D")
+    padded = list(seq) + [slice(None)] * (rank - len(seq))
+    offsets: list[int | Scalar | _ir.Expr] = []
+    for axis, idx in enumerate(padded):
+        if not isinstance(idx, slice):
+            raise TypeError(
+                f"{kind} item assignment on axis {axis}: scalar indices "
+                "(rank-reducing writes) are not supported by the traced "
+                "frontend; use slice indices on every axis or pl.store"
+            )
+        offsets.append(idx.start if idx.start is not None else 0)
+    return offsets
+
+
 @overload
 def subscript_read(
     facade: Tensor, indices: _SubscriptAxis | tuple[_SubscriptAxis, ...], *, tile: Literal[False]

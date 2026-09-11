@@ -56,8 +56,11 @@ class TestWrapperErrorsThroughParser:
                 return out
 
         msg = exc_info.value.message  # type: ignore[attr-defined]
-        assert "pl.exp" in msg
-        assert "Scalar" in msg
+        # The dispatch trusts its annotations, so a Scalar falls through to the
+        # tile path and the IR-level validator rejects it; the parser's
+        # catch-all still names the op and attaches the Python-operators hint.
+        assert "exp" in msg
+        assert "ScalarType" in msg
         assert "Python operators" in (exc_info.value.hint or "")  # type: ignore[attr-defined]
 
     def test_invalid_value_in_wrapper_names_op(self):
@@ -88,7 +91,7 @@ class TestWrapperErrorsThroughParser:
         """
         with pytest.raises(InvalidOperationError) as exc_info:
 
-            @pl.function(auto_scope=False)
+            @pl.function_parser(auto_scope=False)
             def main(
                 a: pl.Tensor[[32, 128], pl.BF16],
                 b: pl.Tensor[[128, 128], pl.BF16],

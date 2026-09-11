@@ -42,6 +42,7 @@ from pypto.language.typing import (
     Scalar,
     Tensor,
     Tile,
+    Tuple,
 )
 from pypto.pypto_core import ir
 
@@ -108,16 +109,19 @@ def _wrap_arg(arg: Any) -> Any:
 def _unwrap_result(value: Any) -> Any:
     """Unwrap a DSL return value to an ``ir.Expr`` for the parser to consume.
 
-    Multi-output DSL wrappers (e.g. ``pl.tile.gather_compare``) return a
-    ``tuple`` of DSL objects whose underlying expressions are
-    ``TupleGetItemExpr(call, 0)``, ``TupleGetItemExpr(call, 1)``, ... all
-    referencing the same tuple-typed Call. The parser's tuple-unpacking path
-    expects the bare Call so it can rebind ``_tuple_tmp`` and re-emit the
-    ``TupleGetItemExpr``s; here we recover that Call.
+    Multi-output DSL wrappers (e.g. ``pl.tile.gather_compare``) return the
+    staged ``pl.Tuple`` facade over the tuple-typed Call (the shared
+    multi-result value). The parser's tuple-unpacking path expects the bare
+    Call so it can rebind ``_tuple_tmp`` and re-emit the ``TupleGetItemExpr``s;
+    the facade unwraps to exactly that Call.
     """
     if isinstance(
         value, (Tensor, Tile, Scalar, Array, Ptr, CommCtx, PrefetchAsyncContext, AsyncEvent, AsyncSession)
     ):
+        return value.unwrap()
+    if isinstance(value, Tuple) and not value._annotation_only:
+        # The runtime staged multi-result value (pl.Tuple(a, b) or a
+        # multi-output op result) — its underlying MakeTuple/Call.
         return value.unwrap()
     if isinstance(value, tuple) and value and all(isinstance(v, (Tensor, Tile, Scalar)) for v in value):
         unwrapped = tuple(v.unwrap() for v in value)

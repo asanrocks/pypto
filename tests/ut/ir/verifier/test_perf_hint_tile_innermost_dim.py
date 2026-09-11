@@ -371,13 +371,35 @@ def test_span_propagates_to_tile_op():
     """Diagnostic span resolves to a valid source location, not Span::unknown."""
     _activate_a5()
     program = _make_load_program(16, pl.FP32)
+    function = program.get_function("kernel")
+    assert function is not None
+    assert function.span.filename == __file__
+    assert function.span.begin_line > 0
+    assert program.span.filename == __file__
+    assert program.span.begin_line > 0
     diags = _run_perf_hint_check(program)
     perf_hints = [d for d in diags if d.severity == passes.DiagnosticSeverity.PerfHint]
     assert len(perf_hints) >= 1
-    # At least one diagnostic must have a real source location: the @pl.program
-    # parser attaches spans to every Call expression.
+    # At least one diagnostic must have a real source location: tracing keeps
+    # operation spans and now supplies the enclosing function span used by
+    # pipeline-generated operations.
     spans_with_loc = [d.span for d in perf_hints if d.span.is_valid()]
     assert len(spans_with_loc) >= 1
+    load_spans = [d.span for d in perf_hints if d.message.startswith("tile.load")]
+    assert any(span.filename == __file__ for span in load_spans)
+
+
+def test_standalone_traced_function_has_source_span():
+    """Standalone tracing supplies the function definition span as well."""
+
+    @pl.function(type=pl.FunctionType.InCore)
+    def kernel(
+        x: pl.Tensor[[16, 16], pl.FP32],
+    ) -> pl.Tensor[[16, 16], pl.FP32]:
+        return x
+
+    assert kernel.span.filename == __file__
+    assert kernel.span.begin_line > 0
 
 
 # ---------------------------------------------------------------------------

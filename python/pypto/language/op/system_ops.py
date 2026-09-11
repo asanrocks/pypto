@@ -15,7 +15,7 @@ tpop ops accept optional shape/dtype kwargs to create typed results.
 """
 
 from collections.abc import Sequence
-from typing import overload
+from typing import Any, overload
 
 from pypto.ir.op import system_ops as _ir_ops
 from pypto.ir.op.system_ops import (
@@ -37,9 +37,10 @@ from pypto.ir.op.system_ops import (
 )
 from pypto.ir.utils import _get_span_or_capture
 from pypto.pypto_core import DataType
+from pypto.pypto_core import ir as _ir_core
 from pypto.pypto_core.ir import Call, ConstInt, Expr, PipeType, Span
 
-from ..typing import Array, IntLike, Scalar, Tensor, Tile
+from ..typing import Array, IntLike, Scalar, Tensor, Tile, to_expr
 
 __all__ = [
     "AUTO",
@@ -109,7 +110,7 @@ def sync_set(
             wants.
         span: Optional source span
     """
-    event_expr = event_id.unwrap() if isinstance(event_id, Scalar) else event_id
+    event_expr = to_expr(event_id)
     kernel = _kernel_or_none(core_type, "sync_set")
     return _ir_ops.sync_set(event_expr, pipe=pipe, ffts_mode=ffts_mode, core_type=kernel, span=span)
 
@@ -132,15 +133,13 @@ def sync_wait(
             wants.
         span: Optional source span
     """
-    event_expr = event_id.unwrap() if isinstance(event_id, Scalar) else event_id
+    event_expr = to_expr(event_id)
     kernel = _kernel_or_none(core_type, "sync_wait")
     return _ir_ops.sync_wait(event_expr, pipe=pipe, core_type=kernel, span=span)
 
 
 def set_ffts(workspace: Tensor, *, span: Span | None = None) -> Call:
     """Declare the A3 FFTS setup operand for explicit cross-core synchronization."""
-    if not isinstance(workspace, Tensor):
-        raise TypeError(f"set_ffts workspace must be a Tensor, got {type(workspace).__name__}")
     return _ir_ops.set_ffts(workspace.unwrap(), span=span)
 
 
@@ -291,8 +290,8 @@ def cacheinvalid(
             "system.cacheinvalid region form requires both shapes and offsets "
             "(or pass no arguments for the whole-GM form)"
         )
-    shp = [s.unwrap() if isinstance(s, Scalar) else s for s in shapes]
-    off = [o.unwrap() if isinstance(o, Scalar) else o for o in offsets]
+    shp = [to_expr(s) for s in shapes]
+    off = [to_expr(o) for o in offsets]
     return _ir_ops.cacheinvalid(tensor.unwrap(), shp, off, span=span)
 
 
@@ -477,30 +476,6 @@ def task_invalid(*, span: Span | None = None) -> Scalar:
     return Scalar(DataType.TASK_ID, call)
 
 
-def task_dummy(*, deps: Sequence[Scalar | Array | None]) -> Scalar:
-    """Dependency-only dummy TaskId barrier.
-
-    This is a parser construct: ``pl.system.task_dummy(deps=[...])`` is
-    intercepted syntactically and lowered to ``system.task_dummy`` with manual
-    dep edges. The body exists so the public DSL name resolves for static
-    checkers and imports.
-
-    Args:
-        deps: TaskIds the barrier waits on -- each a ``pl.Scalar[pl.TASK_ID]``
-            returned by ``pl.submit``, or a ``pl.array`` of them for fan-in.
-            ``None`` entries are skipped, so a conditionally-produced TaskId needs
-            no branch at the call site.
-
-    Returns:
-        A ``pl.Scalar[pl.TASK_ID]`` that becomes ready once every dep has. Depend on
-        it instead of listing all of `deps` again at each consumer.
-    """
-    raise RuntimeError(
-        "pl.system.task_dummy is a DSL parser construct and cannot be called directly; "
-        "use it as `barrier = pl.system.task_dummy(deps=[task_id])` inside a @pl.function body."
-    )
-
-
 def available_cluster_count(*, span: Span | None = None) -> Scalar:
     """This run's MIX cluster (= AIC) count, as reported by the runtime.
 
@@ -554,3 +529,30 @@ def available_aiv_count(*, span: Span | None = None) -> Scalar:
     """
     call = _ir_ops.available_aiv_count(span=span)
     return Scalar(DataType.INT32, call)
+
+
+def task_dummy(*, deps: Sequence[Scalar | Array | None]) -> Scalar:
+    """Dependency-only dummy TaskId barrier.
+
+    ``pl.system.task_dummy(deps=[...])`` builds the ``system.task_dummy``
+    call with the ``dummy_task``/``manual_dep_edges`` attrs. Codegen lowers it
+    to a phase-fence dummy submit whose ``manual_dep_edges`` are packed into
+    ``Arg::set_dependencies`` (per-edge ``is_valid()`` guards) before
+    ``rt_submit_dummy_task`` — the runtime dep-edge semantic is realized, so
+    this is a full facade (retired by the same evidence as
+    ``pl.submit``)."""
+    actual_span = _get_span_or_capture(None, frame_offset=1)
+    base = _ir_core.create_op_call("system.task_dummy", [], {}, actual_span)
+    dep_exprs = [d.unwrap() for d in deps if d is not None]  # type: ignore[union-attr]
+    attrs: list[tuple[str, Any]] = [("dummy_task", True)]
+    if dep_exprs:
+        attrs.append(("manual_dep_edges", dep_exprs))
+    call = _ir_core.Call(base.op, base.args, base.kwargs, attrs, base.type, base.span)
+    return Scalar(DataType.TASK_ID, call)
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see _validation.py).
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

@@ -113,6 +113,8 @@ __all__ = [
     "set_validshape",
     "sort32",
     "mrgsort",
+    "mrgsort_format1",
+    "mrgsort_format2",
     "gather",
     "paged_gather",
     "create_l1",
@@ -122,15 +124,30 @@ __all__ = [
     "get_block_idx",
     "get_subblock_idx",
     "get_block_num",
+    "aiv_shard",
+    "aic_gather",
 ]
 
 from pypto.ir.op import tensor_ops as _ir_ops
-from pypto.ir.utils import _normalize_expr, caller_warning_stacklevel, has_partial_valid_region
+from pypto.ir.utils import (
+    _get_span_or_capture,
+    _normalize_expr,
+    caller_warning_stacklevel,
+    has_partial_valid_region,
+)
 from pypto.pypto_core import DataType
 from pypto.pypto_core import ir as _ir_core
-from pypto.pypto_core.ir import AtomicType, CachePolicy, Expr, MemorySpace, PadValue, TensorLayout
+from pypto.pypto_core.ir import AtomicType, CachePolicy, Expr, MemorySpace, PadValue, Span, TensorLayout
 
-from ..typing import BoolLike, IntLike, Ptr, Scalar, Tensor, Tile, predicate_to_expr
+from ..ambient import active_frame
+from ..typing import BoolLike, IntLike, Ptr, Scalar, Tensor, Tile, Tuple, predicate_to_expr, to_expr
+from ..typing._host import coerce_host_scalar, wrap_output_like
+from ..typing.tensor import CachePolicyDecl, DumpTagMarker, NoDepMarker
+from ._validation import normalize_fillpad_pad_value
+from .tile_ops import (
+    aic_gather as _tile_aic_gather,  # noqa: F401 - re-exported below (the split-transfer facade)
+)
+from .tile_ops import aiv_shard as _tile_aiv_shard  # noqa: F401 - re-exported below
 
 # Bound TypeVar lets slice / assemble propagate the caller's concrete tensor
 # class (Tensor or its DistributedTensor subclass) through to the return type.
@@ -151,15 +168,22 @@ def _unwrap_rhs(rhs: "_RhsT | Tensor | Scalar") -> "_RhsT | Expr":
     ``int | Expr``, which is what ``pypto.ir.op.tensor_ops`` declares for them, so
     a float mask or shift count is a type error at the call site rather than a
     runtime rejection from type deduction.
+
+    A raw host scalar is reified at the operand boundary via the canonical
+    rule (``coerce_host_scalar`` - int to INDEX, float to FP32, bool to
+    ConstBool), so the traced frontend builds the same Const the AST
+    parser builds for the same source and the printer's bare-INDEX elision
+    round-trips (a C++-pass-substituted INDEX const printed as a
+    bare ``0`` must reparse to INDEX, not the IR-layer's contextual FP32).
     """
     if isinstance(rhs, (Tensor, Scalar)):
         return rhs.unwrap()
-    return rhs
+    return coerce_host_scalar(rhs, "tensor op", "rhs")
 
 
 def _normalize_intlike(seq: Sequence[IntLike]) -> list[int | Expr]:
     """Unwrap Scalar elements to Expr so the sequence matches C++ binding types."""
-    return [elem.unwrap() if isinstance(elem, Scalar) else elem for elem in seq]
+    return [to_expr(elem) for elem in seq]
 
 
 def create(
@@ -221,11 +245,13 @@ create_tensor = create
 def no_dep(tensor: Tensor) -> Tensor:
     """Mark a kernel-call argument as no-dependency (caller-site override).
 
-    This is a parser-recognized marker — at runtime it returns the wrapped
-    tensor unchanged. The parser detects ``pl.no_dep(t)`` at kernel call
-    arg positions and threads the per-arg ``ArgDirection.NoDep`` override
-    into the IR Call's attrs. ``DeriveCallDirections`` then overwrites the
-    auto-derived direction at that slot to NoDep.
+    A parser-recognized marker. The AST parser detects ``pl.no_dep(t)`` at
+    kernel call arg positions and threads the per-arg ``ArgDirection.NoDep``
+    override into the IR Call's attrs; the tracing frontend routes the same
+    override at trace time (``Marker.__call__`` unwraps the ``NoDepMarker``
+    and records the slot in ``arg_direction_overrides``).
+    ``DeriveCallDirections`` then overwrites the auto-derived direction at
+    that slot to NoDep.
 
     Effect at runtime: the simpler runtime skips both the OverlapMap
     dependency lookup *and* the producer insert for this argument. The
@@ -247,17 +273,20 @@ def no_dep(tensor: Tensor) -> Tensor:
         # offsets are disjoint across the parallel fan-out.
         self.rope_kv_cache(q_proj, pl.no_dep(k_cache), pl.no_dep(v_cache))
 
-    Outside a kernel call argument list it is a no-op (returns ``tensor``
-    unchanged); the parser only injects the override at recognized call
-    sites.
+    Outside a kernel call argument list it is a no-op (the marker behaves
+    as the wrapped tensor); the override is only injected at recognized
+    call sites.
 
     Args:
         tensor: The tensor to pass through. Must be a ``Tensor`` value.
 
     Returns:
-        The tensor unchanged. The marker is consumed at parse time.
+        The ``NoDepMarker`` (a ``Tensor`` subclass wrapping the same
+        expr) — consumed by the traced call path / AST parser.
     """
-    return tensor
+    if isinstance(tensor, NoDepMarker):
+        return tensor
+    return NoDepMarker(expr=tensor.unwrap())
 
 
 def dump_tag(tensor: Tensor) -> Tensor:
@@ -352,12 +381,15 @@ def dump_tag(tensor: Tensor) -> Tensor:
             the enclosing orchestration's scope.
 
     Returns:
-        The tensor unchanged. The marker is consumed at parse time.
+        The ``DumpTagMarker`` (a ``Tensor`` subclass wrapping the
+        same expr) — consumed by the traced ``bare_stmt`` / AST parser.
     """
-    return tensor
+    if isinstance(tensor, DumpTagMarker):
+        return tensor
+    return DumpTagMarker(expr=tensor.unwrap())
 
 
-def set_cache_policy(tensor: Tensor, policy: CachePolicy) -> None:
+def set_cache_policy(tensor: Tensor, policy: CachePolicy) -> CachePolicyDecl | None:
     """Declare the GM cache-access policy for every read of ``tensor`` in this scope.
 
     The scope-level surface of the cache policy, for tensor programming — where
@@ -417,6 +449,29 @@ def set_cache_policy(tensor: Tensor, policy: CachePolicy) -> None:
         ...     c = pl.matmul(a, b, out_dtype=pl.FP32)
         ...     out = pl.assemble(out, c, [0, 0])
     """
+    if active_frame() is None:
+        # Outside a trace (module import, plain host call) the marker is a
+        # no-op: the AST parser owns recognition on its frontend, and a host
+        # execution has no scope to declare into.
+        return None
+    if not isinstance(tensor, Tensor):
+        raise ValueError(f"pl.set_cache_policy() argument must be a tensor, got {type(tensor).__name__}")
+    expr = tensor.unwrap()
+    # Tracked by Var identity (the parser resolves the bare name to its
+    # binding); an expression that names no binding cannot be declared.
+    if not isinstance(expr, _ir_core.Var):
+        raise ValueError(
+            "pl.set_cache_policy() names a bound tensor variable — pass the "
+            "variable itself, not an attribute, subscript, or call expression"
+        )
+    if not isinstance(expr.type, _ir_core.TensorType):
+        raise ValueError(
+            f"pl.set_cache_policy() argument is not a tensor (got {type(expr.type).__name__}) "
+            "— a cache-access policy only applies to a tensor read from global memory"
+        )
+    if not isinstance(policy, CachePolicy):
+        raise ValueError(f"pl.set_cache_policy() policy must be a pl.CachePolicy member, got {policy!r}")
+    return CachePolicyDecl(expr, int(policy))
 
 
 def read(tensor: Tensor, indices: IntLike | Sequence[IntLike]) -> Scalar:
@@ -437,7 +492,9 @@ def read(tensor: Tensor, indices: IntLike | Sequence[IntLike]) -> Scalar:
     return Scalar(expr=call_expr)
 
 
-def write(tensor: Tensor, indices: IntLike | Sequence[IntLike], value: Scalar | Expr) -> Expr:
+def write(
+    tensor: _TensorT, indices: IntLike | Sequence[IntLike], value: Scalar | Expr | int | float
+) -> _TensorT:
     """Write a scalar value into a tensor at given indices.
 
     Args:
@@ -447,13 +504,52 @@ def write(tensor: Tensor, indices: IntLike | Sequence[IntLike], value: Scalar | 
         value: Scalar value to write (DSL Scalar or raw Expr)
 
     Returns:
-        The underlying ``tensor.write`` call expression. Direct callers
-        typically ignore it; the DSL parser surfaces it as an ``EvalStmt``.
+        The destination tensor facade wrapping the ``tensor.write`` call. The
+        result can be chained or carried; bare callers still lower it as an
+        ``EvalStmt``.
     """
     # Allow a bare IntLike as a flat 1-D index for backwards compatibility
     indices_seq: Sequence[IntLike] = [indices] if not isinstance(indices, Sequence) else indices
-    value_expr = value.unwrap() if isinstance(value, Scalar) else value
-    return _ir_ops.write(tensor.unwrap(), _normalize_intlike(indices_seq), value_expr)
+    value_expr = (
+        value.unwrap() if isinstance(value, Scalar) else coerce_host_scalar(value, "tensor.write", "value")
+    )
+    call_expr = _ir_ops.write(tensor.unwrap(), _normalize_intlike(indices_seq), value_expr)
+    return wrap_output_like(tensor, call_expr)
+
+
+def _make_dim_fold(tensor_expr: _ir_core.Expr, axis: int) -> Any:
+    """The ``pl.tensor.dim`` extent-symbol fold bind hook.
+
+    In an Orchestration body, if ``tensor_expr``'s ``axis``-th shape dim
+    is a param-declared extent symbol, bind the name straight to the
+    symbol (no Let, no copy — the AST's ``_assign_or_let`` alias; one
+    runtime extent, one IR name). Returns the symbol ``Var``
+    or ``None`` (emit ``tensor.dim`` as a runtime read). Reaches the
+    Sema's scope facts through the lent ``ctx`` (``is_orchestration`` /
+    ``param_extent_symbol``) — pure-tier, no ambient access.
+    """
+
+    def _dim_bind(ctx: Any, name: str) -> Any:
+        del name  # the fold names the symbol, not the bind target
+        if not ctx.is_orchestration():
+            return None  # Inline/InCore: the callee's placeholder is not the caller's
+        if not isinstance(tensor_expr, _ir_core.Var):
+            return None  # a complex expr is not an extent the fold may name
+        tensor_type = tensor_expr.type
+        if not isinstance(tensor_type, _ir_core.TensorType):
+            return None
+        a = axis
+        shape = tensor_type.shape
+        if a < 0:
+            a += len(shape)
+        if not 0 <= a < len(shape):
+            return None
+        extent = shape[a]
+        if isinstance(extent, _ir_core.Var) and ctx.param_extent_symbol(id(extent)):
+            return extent
+        return None
+
+    return _dim_bind
 
 
 def dim(tensor: Tensor, axis: int | _ir_core.ConstInt) -> Scalar:
@@ -471,7 +567,17 @@ def dim(tensor: Tensor, axis: int | _ir_core.ConstInt) -> Scalar:
         axis = int(axis.value)
     tensor_expr = tensor.unwrap()
     call_expr = _ir_ops.dim(tensor_expr, axis)
-    return Scalar(expr=call_expr)
+    facade = Scalar(expr=call_expr)
+    # The extent-symbol fold: in an Orchestration body, bind
+    # ``n = pl.tensor.dim(x, i)`` straight to the param-declared extent
+    # symbol when ``x``'s ``i``-th shape dim is one (the AST's
+    # ``_assign_or_let`` alias — one runtime extent, one IR name). The
+    # fold is a bind-time scope-property read through the Sema-lent ctx
+    # (the op's own ``__trace_bind__`` hook; pure-tier,
+    # like the loop-target binding proxy: it uses the lent ctx, no ambient
+    # access).
+    facade.__trace_bind__ = _make_dim_fold(tensor_expr, axis)  # type: ignore[attr-defined]
+    return facade
 
 
 def slice(
@@ -551,7 +657,7 @@ def slice(
         pad_value=pad_value,
         clamp=clamp,
     )
-    return tensor.__class__(expr=call_expr)
+    return wrap_output_like(tensor, call_expr)
 
 
 def fillpad(tensor: Tensor, pad_value: PadValue | int | float = PadValue.zero) -> Tensor:
@@ -567,7 +673,7 @@ def fillpad(tensor: Tensor, pad_value: PadValue | int | float = PadValue.zero) -
     Returns:
         Tensor wrapping the fillpad operation
     """
-    call_expr = _ir_ops.fillpad(tensor.unwrap(), pad_value=pad_value)
+    call_expr = _ir_ops.fillpad(tensor.unwrap(), pad_value=normalize_fillpad_pad_value(pad_value))
     return Tensor(expr=call_expr)
 
 
@@ -592,7 +698,11 @@ def fillpad_expand(
     Returns:
         Tensor wrapping the fillpad_expand operation (a new, larger tensor).
     """
-    call_expr = _ir_ops.fillpad_expand(tensor.unwrap(), _normalize_intlike(shape), pad_value=pad_value)
+    call_expr = _ir_ops.fillpad_expand(
+        tensor.unwrap(),
+        _normalize_intlike(shape),
+        pad_value=normalize_fillpad_pad_value(pad_value),
+    )
     return Tensor(expr=call_expr)
 
 
@@ -613,24 +723,34 @@ def set_validshape(tensor: Tensor, valid_rows: IntLike, valid_cols: IntLike) -> 
         Tensor with updated valid_shape metadata
     """
     tensor_expr = tensor.unwrap()
-    vr = valid_rows.unwrap() if isinstance(valid_rows, Scalar) else valid_rows
-    vc = valid_cols.unwrap() if isinstance(valid_cols, Scalar) else valid_cols
+    vr = to_expr(valid_rows)
+    vc = to_expr(valid_cols)
     call_expr = _ir_ops.set_validshape(tensor_expr, vr, vc)
     return Tensor(expr=call_expr)
 
 
-def full(shape: Sequence[IntLike], dtype: DataType, value: int | float) -> Tensor:
+def full(
+    shape: Sequence[IntLike],
+    dtype: DataType,
+    value: int | float,
+    *,
+    attrs: dict[str, Any] | None = None,
+) -> Tensor:
     """Create a tensor of specified shape filled with a constant value.
 
     Args:
         shape: Shape of the tensor
         dtype: Data type of tensor elements
         value: Filling scalar value (int or float)
+        attrs: Machine-only call attrs round-tripped through the printer
+            — re-attached to the Call.
 
     Returns:
         Tensor wrapping the full operation
     """
     call_expr = _ir_ops.full(_normalize_intlike(shape), dtype, value)
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tensor(expr=call_expr)
 
 
@@ -657,7 +777,7 @@ def ci(
     Returns:
         Tensor wrapping the ci operation.
     """
-    start_expr = start.unwrap() if isinstance(start, Scalar) else start
+    start_expr = to_expr(start)
     call_expr = _ir_ops.ci(start_expr, _normalize_intlike(shape), dtype=dtype, descending=descending)
     return Tensor(expr=call_expr)
 
@@ -697,8 +817,17 @@ def random(
     Returns:
         Tensor wrapping the random operation.
     """
-    raw_seeds = (key0, key1, counter0, counter1, counter2, counter3)
-    seeds = [v.unwrap() if isinstance(v, Scalar) else v for v in raw_seeds]
+    # A fixed-length tuple splat keeps the call statically 7-positional;
+    # a variable-length ``*list`` splat defeats pyright's arity matching
+    # for the trailing shape argument.
+    seeds = (
+        to_expr(key0),
+        to_expr(key1),
+        to_expr(counter0),
+        to_expr(counter1),
+        to_expr(counter2),
+        to_expr(counter3),
+    )
     call_expr = _ir_ops.random(*seeds, _normalize_intlike(shape), dtype=dtype, rounds=rounds)
     return Tensor(expr=call_expr)
 
@@ -1737,7 +1866,7 @@ def expands(target: Tensor, scalar: int | float | Scalar) -> Tensor:
         Tensor wrapping the expands operation
     """
     target_expr = target.unwrap()
-    scalar_expr = scalar.unwrap() if isinstance(scalar, Scalar) else scalar
+    scalar_expr = to_expr(scalar)
     call_expr = _ir_ops.expands(target_expr, scalar_expr)
     return Tensor(expr=call_expr)
 
@@ -1962,7 +2091,7 @@ def assemble(
     target_expr = target.unwrap()
     source_expr = source.unwrap()
     call_expr = _ir_ops.assemble(target_expr, source_expr, _normalize_intlike(offset), atomic=int(atomic))
-    return target.__class__(expr=call_expr)
+    return wrap_output_like(target, call_expr)
 
 
 def concat(src0: Tensor, src1: Tensor) -> Tensor:
@@ -2010,6 +2139,7 @@ def reinterpret_view(
     dtype: DataType,
     *,
     shape: Sequence[IntLike] | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> Tensor:
     """Reinterpret a tensor over the same bytes with a different dtype.
 
@@ -2019,12 +2149,16 @@ def reinterpret_view(
         shape: Optional byte-equivalent target shape. When omitted, the
             physically contiguous dimension is scaled according to the
             source/target dtype byte ratio.
+        attrs: Machine-only call attrs round-tripped through the printer
+            — re-attached to the Call.
 
     Returns:
         Tensor wrapping the zero-copy reinterpret-view operation.
     """
     normalized_shape = None if shape is None else _normalize_intlike(shape)
     call_expr = _ir_ops.reinterpret_view(data.unwrap(), dtype, shape=normalized_shape)
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tensor(expr=call_expr)
 
 
@@ -2085,7 +2219,7 @@ def view(
         None if valid_shape is None else _normalize_intlike(valid_shape),
         layout=layout,
     )
-    return tensor.__class__(expr=call_expr)
+    return wrap_output_like(tensor, call_expr)
 
 
 def scatter_update(input: Tensor, *args: Any, **kwargs: Any) -> Tensor:
@@ -2111,7 +2245,7 @@ def scatter_update(input: Tensor, *args: Any, **kwargs: Any) -> Tensor:
     """
 
     def _unwrap(v: Any) -> Any:
-        return v.unwrap() if isinstance(v, (Tensor, Scalar)) else v
+        return to_expr(v)
 
     fwd_args = tuple(_unwrap(a) for a in args)
     fwd_kwargs = {k: _unwrap(v) for k, v in kwargs.items()}
@@ -2197,7 +2331,7 @@ def mrgsort(
                 "mrgsort() format1 (block_len=...) and format2 (src1, ...) "
                 "are mutually exclusive; do not pass format2 arguments or exhausted=True with block_len"
             )
-        block_len_expr = block_len.unwrap() if isinstance(block_len, Scalar) else block_len
+        block_len_expr = to_expr(block_len)
         call_expr = _ir_ops.mrgsort(src0.unwrap(), block_len=block_len_expr)
         return Tensor(expr=call_expr)
     # format2: 2-4 way merge
@@ -2212,6 +2346,28 @@ def mrgsort(
         src3.unwrap() if src3 is not None else None,
         exhausted=exhausted,
     )
+    return Tensor(expr=call_expr)
+
+
+def mrgsort_format1(src0: Tensor, block_len: int | Scalar) -> Tensor:
+    """Single-list merge sort (format1) — the parser's roundtrip alias.
+
+    The ``block_len`` is positional (the printer emits it that way).
+    Prefer ``mrgsort(src, block_len=...)`` in user code.
+    """
+    block_len_expr = to_expr(block_len)
+    call_expr = _ir_ops.mrgsort_format1(src0.unwrap(), block_len_expr)
+    return Tensor(expr=call_expr)
+
+
+def mrgsort_format2(*args: Tensor, exhausted: bool = False) -> Tensor:
+    """2-4 way merge sort (format2) — the parser's roundtrip alias.
+
+    Positional args: ``(src0, src1[, src2[, src3]])``.
+
+    Prefer ``mrgsort(src0, src1[, src2[, src3]])`` in user code.
+    """
+    call_expr = _ir_ops.mrgsort_format2(*(a.unwrap() for a in args), exhausted=exhausted)
     return Tensor(expr=call_expr)
 
 
@@ -2240,7 +2396,7 @@ def gather(
     out_cols: int,
     offset: int = 0,
     count_dtype: int | DataType | None = None,
-) -> tuple[Tensor, Tensor]: ...
+) -> Tuple: ...
 
 
 def gather(
@@ -2255,7 +2411,7 @@ def gather(
     out_cols: int | None = None,
     offset: int = 0,
     count_dtype: int | DataType | None = None,
-) -> Tensor | tuple[Tensor, Tensor]:
+) -> Tensor | Tuple:
     """Gather elements of ``input`` — flat / axis / mask / compare form.
 
     The tensor layer exposes a single unified ``gather``. Based on the arguments
@@ -2345,11 +2501,12 @@ def gather(
         count_dtype=count_dtype,
     )
     if isinstance(call_expr.type, _ir_core.TupleType):
-        span = call_expr.span
-        return (
-            Tensor(expr=_ir_core.TupleGetItemExpr(call_expr, 0, span)),
-            Tensor(expr=_ir_core.TupleGetItemExpr(call_expr, 1, span)),
-        )
+        # The staged multi-result value — the operator that yields a
+        # TupleType. Unpacking ``dst, cdst = ...`` iterates the Tuple facade's
+        # projections, which share one _tuple_tmp temp (the parser's
+        # _bind_unpack_target shape); a host (Tensor, Tensor) would re-insert
+        # the call at every element bind instead.
+        return Tuple(expr=call_expr)
     return Tensor(expr=call_expr)
 
 
@@ -2587,7 +2744,10 @@ def alloc(
 
     The result is a base ``Ptr`` (allocation identity token): the printer
     annotates the assignment target as ``pl.Ptr``, matching the IR design
-    where ``tensor.alloc`` Calls carry ``PtrType``.
+    where ``tensor.alloc`` Calls carry ``PtrType``. Like ``pl.tile.alloc``, the
+    tracing frontend needs a real facade so the re-parse bind emits the
+    ``AssignStmt`` (a bare ``PtrType`` sentinel would be dropped as a host
+    value).
 
     Args:
         memory_space: Space the allocation lives in, as resolved by InferTileMemorySpace.
@@ -2596,7 +2756,13 @@ def alloc(
     Returns:
         A ``Ptr`` standing for the allocation, carrying no address of its own.
     """
-    return Ptr()
+    span = _get_span_or_capture()
+    args = [
+        _ir_core.ConstInt(memory_space.value, DataType.INDEX, span),
+        _ir_core.ConstInt(size, DataType.INDEX, span),
+    ]
+    call = _ir_core.create_op_call("tensor.alloc", args, {}, span)
+    return Ptr(expr=call)
 
 
 def get_block_idx() -> Scalar:
@@ -2641,3 +2807,52 @@ def get_block_num() -> Scalar:
     """
     call_expr = _ir_ops.get_block_num()
     return Scalar(expr=call_expr)
+
+
+def aiv_shard(x: Tensor, span: Span | None = None) -> Tensor:
+    """Shard a 2D tensor into half along the split axis (full -> half) — the
+    ``pl.tensor.*`` printed form of :func:`pypto.language.op.tile_ops.aiv_shard`.
+
+    The split mode is inherited from the enclosing
+    ``for aiv_id in pl.split_aiv(mode=...)`` region: the region's
+    trace iterable pushes its mode onto the split_aiv region channel and this
+    facade reads it, emitting ``tensor.aiv_shard`` (lowered 1:1 to
+    ``tile.aiv_shard`` at ConvertTensorToTileOps). Region-only; a
+    distributed tensor operand is rejected.
+
+    Args:
+        x: Input tensor (2D Tensor)
+        span: Optional source span
+
+    Returns:
+        Tensor with the split axis halved.
+    """
+    return _tile_aiv_shard(x, span=span)
+
+
+def aic_gather(x: Tensor, span: Span | None = None) -> Tensor:
+    """Gather a 2D tensor into full along the split axis (half -> full) — the
+    ``pl.tensor.*`` printed form of :func:`pypto.language.op.tile_ops.aic_gather`.
+
+    The split mode is inherited from the enclosing
+    ``for aiv_id in pl.split_aiv(mode=...)`` region: the region's
+    trace iterable pushes its mode onto the split_aiv region channel and this
+    facade reads it, emitting ``tensor.aic_gather`` (lowered 1:1 to
+    ``tile.aic_gather`` at ConvertTensorToTileOps). Region-only; a
+    distributed tensor operand is rejected.
+
+    Args:
+        x: Input tensor (2D Tensor)
+        span: Optional source span
+
+    Returns:
+        Tensor with the split axis doubled.
+    """
+    return _tile_aic_gather(x, span=span)
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see _validation.py).
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

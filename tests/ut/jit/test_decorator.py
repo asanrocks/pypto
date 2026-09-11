@@ -371,18 +371,22 @@ class TestScanDepIo:
 
 
 class TestBindDynamic:
-    def test_bind_dynamic_is_noop(self):
-        """Tensor.bind_dynamic() must not raise at runtime."""
-        # Annotation-only Tensor
-        t = pl.Tensor[[128, 64], pl.FP32]
+    def test_bind_dynamic_on_dynamic_dim_is_noop(self):
+        """bind_dynamic on an already-dynamic dim (the annotation-embedded
+        pl.dynamic form) is a benign no-op — the annotation carries the
+        DynVar, the call is redundant."""
         M = pl.dynamic("M")
-        t.bind_dynamic(0, M)  # should not raise
+        t = pl.Tensor[[M, 64], pl.FP32]
+        assert t.bind_dynamic(0, M) is None
 
-    def test_bind_dynamic_returns_none(self):
+    def test_bind_dynamic_on_static_dim_is_loud(self):
+        """bind_dynamic on a static dim raises: the override form's
+        semantics lived in the AST-era specializer's source scan (retired)
+        — a silent drop is forbidden."""
         t = pl.Tensor[[128, 64], pl.FP32]
         M = pl.dynamic("M")
-        result = t.bind_dynamic(0, M)
-        assert result is None
+        with pytest.raises(NotImplementedError, match="static"):
+            t.bind_dynamic(0, M)
 
 
 # ---------------------------------------------------------------------------

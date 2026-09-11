@@ -16,7 +16,7 @@ or ``pl.tile.add``.
 """
 
 from collections.abc import Sequence
-from typing import Any, Literal, NoReturn, TypeVar, overload
+from typing import Any, Literal, NoReturn, TypeGuard, TypeVar, overload
 
 __all__ = [
     "add",
@@ -105,7 +105,7 @@ __all__ = [
 from pypto.ir.utils import _elem_dtype, _get_span_or_capture, resolve_cast_mode, resolve_saturation_mode
 from pypto.pypto_core import DataType
 from pypto.pypto_core import ir as _ir_core
-from pypto.pypto_core.ir import AtomicType, PadValue
+from pypto.pypto_core.ir import AtomicType, MemorySpace, PadValue
 
 from ..typing import BoolLike, IntLike, Scalar, Tensor, Tile
 from . import tensor_ops as _tensor
@@ -270,7 +270,7 @@ def _check_tile_matmul_out_dtype(result: Tile, out_dtype: int | DataType | None)
         )
 
 
-def _is_scalar_like(v: object) -> bool:
+def _is_scalar_like(v: object) -> TypeGuard[Scalar | int | float | _ir_core.Expr]:
     """True for Scalar, Python int/float, or raw Expr with ScalarType.
 
     Used by the unified arithmetic wrappers so parser-shaped operands
@@ -281,6 +281,36 @@ def _is_scalar_like(v: object) -> bool:
     if isinstance(v, (Scalar, int, float)):
         return True
     return isinstance(v, _ir_core.Expr) and isinstance(v.type, _ir_core.ScalarType)
+
+
+def _int_scalar_like(op_name: str, v: object) -> TypeGuard[int | Scalar | _ir_core.Expr]:
+    """Narrow a scalar-like to the integer ops' operand set.
+
+    The bitwise/shift wrappers route a scalar ``rhs`` to their ``*s`` forms,
+    whose C++ operands are integer scalars — a ``float`` is a bad value, not
+    a missing feature, so it is rejected loudly here (the TypeGuard then
+    narrows to the accepted set for the static surface)."""
+    if isinstance(v, float):
+        raise TypeError(f"pl.{op_name}: bitwise and shift ops take an integer scalar, got a float")
+    return _is_scalar_like(v)
+
+
+def _unify_operand(v: Any) -> Any:
+    """Normalize a facade operand for type dispatch.
+
+    Mirrors the parser frontend, whose parse-time typing flows from the arg
+    exprs, never from a wrapper class. Returns ``v`` unchanged;
+    the round-trip ``_YieldFacade`` (the historical wrapper subclass) is
+    deleted, so there is nothing to unwrap here."""
+    return v
+
+
+# The runtime dispatch surface of the unified wrappers: any facade operand,
+# Python scalar, or raw scalar-typed ``Expr`` (parser-shaped operands — see
+# ``_is_scalar_like``). The overloads advertise the supported pairwise
+# combinations; these implementation annotations state the accepted superset
+# the dispatch branches narrow over, so pyright keeps checking each branch.
+_BinaryOperand = Tensor | Tile | Scalar | int | float | _ir_core.Expr
 
 
 def _to_scalar_expr(v: Any) -> _ir_core.Expr:
@@ -315,8 +345,9 @@ def add(lhs: Tensor, rhs: Tensor | int | float | Scalar) -> Tensor: ...
 def add(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
 @overload
 def add(lhs: Scalar, rhs: Scalar | int | float) -> Scalar: ...
-def add(lhs, rhs):
+def add(lhs: _BinaryOperand, rhs: _BinaryOperand) -> Tensor | Tile | Scalar:
     """Element-wise addition, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.add(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -337,8 +368,9 @@ def sub(lhs: Tensor, rhs: Tensor | int | float | Scalar) -> Tensor: ...
 def sub(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
 @overload
 def sub(lhs: Scalar, rhs: Scalar | int | float) -> Scalar: ...
-def sub(lhs, rhs):
+def sub(lhs: _BinaryOperand, rhs: _BinaryOperand) -> Tensor | Tile | Scalar:
     """Element-wise subtraction, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.sub(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -359,8 +391,9 @@ def mul(lhs: Tensor, rhs: Tensor | int | float | Scalar) -> Tensor: ...
 def mul(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
 @overload
 def mul(lhs: Scalar, rhs: Scalar | int | float) -> Scalar: ...
-def mul(lhs, rhs):
+def mul(lhs: _BinaryOperand, rhs: _BinaryOperand) -> Tensor | Tile | Scalar:
     """Element-wise multiplication, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.mul(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -393,7 +426,7 @@ def div(
     rhs: Scalar | int | float,
     high_precision: bool = False,
 ) -> Scalar: ...
-def div(lhs, rhs, high_precision: bool = False):
+def div(lhs: _BinaryOperand, rhs: _BinaryOperand, high_precision: bool = False) -> Tensor | Tile | Scalar:
     """Element-wise division, dispatched by input type.
 
     A scalar ``rhs`` against a Tile dispatches to ``tile.divs``.
@@ -404,6 +437,7 @@ def div(lhs, rhs, high_precision: bool = False):
             high-precision form, so passing it there raises rather than silently
             falling back.
     """
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.div(lhs, rhs, high_precision=high_precision)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -427,8 +461,9 @@ def div(lhs, rhs, high_precision: bool = False):
 def part_add(lhs: Tensor, rhs: Tensor) -> Tensor: ...
 @overload
 def part_add(lhs: Tile, rhs: Tile) -> Tile: ...
-def part_add(lhs, rhs):
+def part_add(lhs: Tensor | Tile, rhs: Tensor | Tile) -> Tensor | Tile:
     """Partial element-wise add, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, Tensor):
         return _tensor.part_add(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -440,8 +475,9 @@ def part_add(lhs, rhs):
 def part_mul(lhs: Tensor, rhs: Tensor) -> Tensor: ...
 @overload
 def part_mul(lhs: Tile, rhs: Tile) -> Tile: ...
-def part_mul(lhs, rhs):
+def part_mul(lhs: Tensor | Tile, rhs: Tensor | Tile) -> Tensor | Tile:
     """Partial element-wise multiply, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, Tensor):
         return _tensor.part_mul(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -453,8 +489,9 @@ def part_mul(lhs, rhs):
 def part_max(lhs: Tensor, rhs: Tensor) -> Tensor: ...
 @overload
 def part_max(lhs: Tile, rhs: Tile) -> Tile: ...
-def part_max(lhs, rhs):
+def part_max(lhs: Tensor | Tile, rhs: Tensor | Tile) -> Tensor | Tile:
     """Partial element-wise max, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, Tensor):
         return _tensor.part_max(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -466,8 +503,9 @@ def part_max(lhs, rhs):
 def part_min(lhs: Tensor, rhs: Tensor) -> Tensor: ...
 @overload
 def part_min(lhs: Tile, rhs: Tile) -> Tile: ...
-def part_min(lhs, rhs):
+def part_min(lhs: Tensor | Tile, rhs: Tensor | Tile) -> Tensor | Tile:
     """Partial element-wise min, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, Tensor):
         return _tensor.part_min(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -486,12 +524,13 @@ def fmod(
 ) -> Tensor: ...
 @overload
 def fmod(lhs: Tile, rhs: Tile | int | float | Scalar, high_precision: bool = False) -> Tile: ...
-def fmod(lhs, rhs, high_precision: bool = False):
+def fmod(lhs: Tensor | Tile, rhs: _BinaryOperand, high_precision: bool = False) -> Tensor | Tile:
     """Element-wise truncating remainder, dispatched by input type.
 
     Matches ``torch.fmod`` (the remainder takes the sign of the dividend).
     ``high_precision`` is available only for the tile-tile form.
     """
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         if high_precision:
             raise TypeError("pl.fmod: high_precision is supported only for Tile operands")
@@ -512,13 +551,12 @@ def fmod(lhs, rhs, high_precision: bool = False):
 def fmods(lhs: Tensor, rhs: int | float | Scalar) -> Tensor: ...
 @overload
 def fmods(lhs: Tile, rhs: int | float | Scalar) -> Tile: ...
-def fmods(lhs, rhs):
+def fmods(lhs: Tensor | Tile, rhs: int | float | Scalar | _ir_core.Expr) -> Tensor | Tile:
     """Element-wise truncating remainder with a scalar, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor):
         return _tensor.fmods(lhs, rhs)
-    if isinstance(lhs, Tile):
-        return _tile.fmods(lhs, rhs)
-    _raise_type_dispatch_error("fmods", lhs, rhs)
+    return _tile.fmods(lhs, rhs)
 
 
 # ---------------------------------------------------------------------------
@@ -530,8 +568,9 @@ def fmods(lhs, rhs):
 def maximum(lhs: Tensor, rhs: Tensor | int | float | Scalar) -> Tensor: ...
 @overload
 def maximum(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
-def maximum(lhs, rhs):
+def maximum(lhs: Tensor | Tile, rhs: _BinaryOperand) -> Tensor | Tile:
     """Element-wise maximum, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.maximum(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -545,8 +584,9 @@ def maximum(lhs, rhs):
 def minimum(lhs: Tensor, rhs: Tensor | int | float | Scalar) -> Tensor: ...
 @overload
 def minimum(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
-def minimum(lhs, rhs):
+def minimum(lhs: Tensor | Tile, rhs: _BinaryOperand) -> Tensor | Tile:
     """Element-wise minimum, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.minimum(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -558,11 +598,10 @@ def minimum(lhs, rhs):
 
 def exp(input: T) -> T:
     """Element-wise exponential, dispatched by input type."""
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.exp(input)
-    if isinstance(input, Tile):
-        return _tile.exp(input)
-    raise TypeError(f"pl.exp: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.exp(input)
 
 
 def log(input: T, high_precision: bool = False) -> T:
@@ -572,11 +611,10 @@ def log(input: T, high_precision: bool = False) -> T:
         input: Input tensor or tile.
         high_precision: Select PTOAS's high-precision logarithm mode.
     """
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.log(input, high_precision=high_precision)
-    if isinstance(input, Tile):
-        return _tile.log(input, high_precision=high_precision)
-    raise TypeError(f"pl.log: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.log(input, high_precision=high_precision)
 
 
 def sin(input: T) -> T:
@@ -599,20 +637,18 @@ def cos(input: T) -> T:
 
 def neg(input: T) -> T:
     """Element-wise negation, dispatched by input type."""
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.neg(input)
-    if isinstance(input, Tile):
-        return _tile.neg(input)
-    raise TypeError(f"pl.neg: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.neg(input)
 
 
 def abs(input: T) -> T:
     """Element-wise absolute value, dispatched by input type."""
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.abs(input)
-    if isinstance(input, Tile):
-        return _tile.abs(input)
-    raise TypeError(f"pl.abs: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.abs(input)
 
 
 def recip(input: T, high_precision: bool = False) -> T:
@@ -622,20 +658,18 @@ def recip(input: T, high_precision: bool = False) -> T:
         input: Input tensor or tile
         high_precision: Whether to select PTOAS's high-precision reciprocal mode (FP16/FP32 only)
     """
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.recip(input, high_precision=high_precision)
-    if isinstance(input, Tile):
-        return _tile.recip(input, high_precision=high_precision)
-    raise TypeError(f"pl.recip: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.recip(input, high_precision=high_precision)
 
 
 def sqrt(input: T) -> T:
     """Element-wise square root, dispatched by input type."""
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.sqrt(input)
-    if isinstance(input, Tile):
-        return _tile.sqrt(input)
-    raise TypeError(f"pl.sqrt: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.sqrt(input)
 
 
 @overload
@@ -652,12 +686,12 @@ def rsqrt(input, high_precision: bool = False):
     ``high_precision=True`` with a Tile raises rather than silently yielding the
     low-precision path.
     """
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.rsqrt(input, high_precision=high_precision)
     if isinstance(input, Tile):
         _reject_tile_unsupported("rsqrt", high_precision=(high_precision, _TILE_RSQRT_PRECISION_REMEDY))
-        return _tile.rsqrt(input)
-    raise TypeError(f"pl.rsqrt: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.rsqrt(input)
 
 
 def row_expand_mul(lhs: T, rhs: T) -> T:
@@ -809,7 +843,7 @@ def col_expand_expdif(lhs: T, rhs: T) -> T:
     _raise_type_dispatch_error("col_expand_expdif", lhs, rhs)
 
 
-def expands(target: Tensor | Tile, scalar: int | float | Scalar) -> Tensor | Tile:
+def expands(target: T, scalar: int | float | Scalar) -> T:
     """Expand scalar to target shape, dispatched by target type.
 
     Note the argument order: the value being broadcast is the *second* argument.
@@ -821,9 +855,7 @@ def expands(target: Tensor | Tile, scalar: int | float | Scalar) -> Tensor | Til
     """
     if isinstance(target, Tensor):
         return _tensor.expands(target, scalar)
-    if isinstance(target, Tile):
-        return _tile.expands(target, scalar)
-    raise TypeError(f"pl.expands: expected Tensor or Tile, got {type(target).__name__}")
+    return _tile.expands(target, scalar)
 
 
 def reshape(input: T, shape: Sequence[IntLike]) -> T:
@@ -839,9 +871,7 @@ def reshape(input: T, shape: Sequence[IntLike]) -> T:
     """
     if isinstance(input, Tensor):
         return _tensor.reshape(input, shape)
-    if isinstance(input, Tile):
-        return _tile.reshape(input, shape)
-    raise TypeError(f"pl.reshape: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.reshape(input, shape)
 
 
 def reinterpret_view(
@@ -849,6 +879,7 @@ def reinterpret_view(
     dtype: DataType,
     *,
     shape: Sequence[IntLike] | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> T:
     """Reinterpret the same bytes with a different dtype.
 
@@ -858,15 +889,16 @@ def reinterpret_view(
         shape: Optional byte-equivalent target shape. When omitted, the
             physically contiguous dimension is scaled according to the
             source/target dtype byte ratio.
+        attrs: Machine-only call attrs (e.g. ``pipeline_membership``)
+            round-tripped through the printer — forwarded to the
+            tensor/tile facades.
 
     Returns:
         A zero-copy view of the same kind as ``data``.
     """
     if isinstance(data, Tensor):
-        return _tensor.reinterpret_view(data, dtype, shape=shape)
-    if isinstance(data, Tile):
-        return _tile.reinterpret_view(data, dtype, shape=shape)
-    raise TypeError(f"pl.reinterpret_view: expected Tensor or Tile, got {type(data).__name__}")
+        return _tensor.reinterpret_view(data, dtype, shape=shape, attrs=attrs)
+    return _tile.reinterpret_view(data, dtype, shape=shape, attrs=attrs)
 
 
 def transpose(input: T, axis1: int, axis2: int) -> T:
@@ -882,9 +914,7 @@ def transpose(input: T, axis1: int, axis2: int) -> T:
     """
     if isinstance(input, Tensor):
         return _tensor.transpose(input, axis1, axis2)
-    if isinstance(input, Tile):
-        return _tile.transpose(input, axis1, axis2)
-    raise TypeError(f"pl.transpose: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.transpose(input, axis1, axis2)
 
 
 def concat(src0: T, src1: T) -> T:
@@ -951,9 +981,7 @@ def fillpad(value: T, pad_value: PadValue | int | float = PadValue.zero) -> T:
     """
     if isinstance(value, Tensor):
         return _tensor.fillpad(value, pad_value)
-    if isinstance(value, Tile):
-        return _tile.fillpad(value, pad_value)
-    raise TypeError(f"pl.fillpad: expected Tensor or Tile, got {type(value).__name__}")
+    return _tile.fillpad(value, pad_value)
 
 
 def fillpad_expand(
@@ -969,9 +997,7 @@ def fillpad_expand(
     """
     if isinstance(value, Tensor):
         return _tensor.fillpad_expand(value, shape, pad_value)
-    if isinstance(value, Tile):
-        return _tile.fillpad_expand(value, shape, pad_value)
-    raise TypeError(f"pl.fillpad_expand: expected Tensor or Tile, got {type(value).__name__}")
+    return _tile.fillpad_expand(value, shape, pad_value)
 
 
 # ---------------------------------------------------------------------------
@@ -1065,9 +1091,7 @@ def batch_matmul(lhs: Tile, rhs: Tile) -> Tile:
     dispatches to ``tile.batch_matmul`` (and ``FlattenTileNdTo2D`` later
     unrolls it). Use this op only when you are working at the tile level.
     """
-    if isinstance(lhs, Tile) and isinstance(rhs, Tile):
-        return _tile.batch_matmul(lhs, rhs)
-    _raise_type_dispatch_error("batch_matmul", lhs, rhs)
+    return _tile.batch_matmul(lhs, rhs)
 
 
 # ---------------------------------------------------------------------------
@@ -1232,9 +1256,7 @@ def col_sum(input, tmp_tile: Tile | None = None):
     if isinstance(input, Tensor):
         _reject_tmp_for_tensor("col_sum", tmp_tile, "tmp_tile")
         return _tensor.col_sum(input)
-    if isinstance(input, Tile):
-        return _tile.col_sum(input, tmp_tile)
-    _raise_type_dispatch_error("col_sum", input)
+    return _tile.col_sum(input, tmp_tile)
 
 
 def col_max(input: T) -> T:
@@ -1244,9 +1266,7 @@ def col_max(input: T) -> T:
     """
     if isinstance(input, Tensor):
         return _tensor.col_max(input)
-    if isinstance(input, Tile):
-        return _tile.col_max(input)
-    _raise_type_dispatch_error("col_max", input)
+    return _tile.col_max(input)
 
 
 def col_min(input: T) -> T:
@@ -1256,9 +1276,7 @@ def col_min(input: T) -> T:
     """
     if isinstance(input, Tensor):
         return _tensor.col_min(input)
-    if isinstance(input, Tile):
-        return _tile.col_min(input)
-    _raise_type_dispatch_error("col_min", input)
+    return _tile.col_min(input)
 
 
 def col_prod(input: T) -> T:
@@ -1268,9 +1286,7 @@ def col_prod(input: T) -> T:
     """
     if isinstance(input, Tensor):
         return _tensor.col_prod(input)
-    if isinstance(input, Tile):
-        return _tile.col_prod(input)
-    _raise_type_dispatch_error("col_prod", input)
+    return _tile.col_prod(input)
 
 
 @overload
@@ -1379,8 +1395,8 @@ def cast(
 
 @overload
 def cast(
-    input: Scalar,
-    target_type: int | DataType,
+    input: Scalar | int | float,
+    target_type: DataType,
     mode: str | int = "round",
     *,
     saturation_mode: str | int | None = None,
@@ -1388,7 +1404,7 @@ def cast(
 
 
 def cast(
-    input: Tensor | Tile | Scalar,
+    input: Tensor | Tile | Scalar | int | float,
     target_type: int | DataType,
     mode: str | int = "round",
     *,
@@ -1447,7 +1463,7 @@ def cast(
 def cmp(lhs: Tensor, rhs: Tensor | int | float | Scalar, cmp_type: int = 0) -> Tensor: ...
 @overload
 def cmp(lhs: Tile, rhs: Tile | int | float | Scalar, cmp_type: int = 0) -> Tile: ...
-def cmp(lhs, rhs, cmp_type: int = 0):
+def cmp(lhs: Tensor | Tile, rhs: _BinaryOperand, cmp_type: int = 0) -> Tensor | Tile:
     """Element-wise comparison, dispatched by input type.
 
     Comparison type codes: ``0=eq, 1=ne, 2=lt, 3=le, 4=gt, 5=ge``. For Tile
@@ -1484,7 +1500,7 @@ def and_(lhs, rhs):
         return _tensor.and_(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
         return _tile.and_(lhs, rhs)
-    if isinstance(lhs, Tile) and _is_scalar_like(rhs):
+    if isinstance(lhs, Tile) and _int_scalar_like("and_", rhs):
         return _tile.ands(lhs, rhs)
     _raise_type_dispatch_error("and_", lhs, rhs)
 
@@ -1512,7 +1528,7 @@ def or_(lhs, rhs):
         return _tensor.or_(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
         return _tile.or_(lhs, rhs)
-    if isinstance(lhs, Tile) and _is_scalar_like(rhs):
+    if isinstance(lhs, Tile) and _int_scalar_like("or_", rhs):
         return _tile.ors(lhs, rhs)
     _raise_type_dispatch_error("or_", lhs, rhs)
 
@@ -1548,7 +1564,7 @@ def xor(lhs, rhs, tmp=None):
         tmp = _require_tmp_for_tile("xor", tmp, _tmp_scratch_requirement("xor"))
         if isinstance(rhs, Tile):
             return _tile.xor(lhs, rhs, tmp)
-        if _is_scalar_like(rhs):
+        if _int_scalar_like("xor", rhs):
             return _tile.xors(lhs, rhs, tmp)
     _raise_type_dispatch_error("xor", lhs, rhs)
 
@@ -1590,7 +1606,7 @@ def shl(lhs, rhs):
         return _tensor.shl(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
         return _tile.shl(lhs, rhs)
-    if isinstance(lhs, Tile) and _is_scalar_like(rhs):
+    if isinstance(lhs, Tile) and _int_scalar_like("shl", rhs):
         return _tile.shls(lhs, rhs)
     _raise_type_dispatch_error("shl", lhs, rhs)
 
@@ -1618,7 +1634,7 @@ def shr(lhs, rhs):
         return _tensor.shr(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
         return _tile.shr(lhs, rhs)
-    if isinstance(lhs, Tile) and _is_scalar_like(rhs):
+    if isinstance(lhs, Tile) and _int_scalar_like("shr", rhs):
         return _tile.shrs(lhs, rhs)
     _raise_type_dispatch_error("shr", lhs, rhs)
 
@@ -1640,7 +1656,7 @@ def shrs(lhs, rhs):
 def set_validshape(input: Tensor, valid_rows: IntLike, valid_cols: IntLike) -> Tensor: ...
 @overload
 def set_validshape(input: Tile, valid_rows: IntLike, valid_cols: IntLike) -> Tile: ...
-def set_validshape(input, valid_rows, valid_cols):
+def set_validshape(input: Tensor | Tile, valid_rows: IntLike, valid_cols: IntLike) -> Tensor | Tile:
     """Update valid-shape metadata without data movement, dispatched by input type.
 
     .. note::
@@ -1651,9 +1667,30 @@ def set_validshape(input, valid_rows, valid_cols):
     """
     if isinstance(input, Tensor):
         return _tensor.set_validshape(input, valid_rows, valid_cols)
-    if isinstance(input, Tile):
-        return _tile.set_validshape(input, valid_rows, valid_cols)
-    raise TypeError(f"pl.set_validshape: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.set_validshape(input, valid_rows, valid_cols)
+
+
+# ---------------------------------------------------------------------------
+# Tile-only ops promoted to unified namespace
+# ---------------------------------------------------------------------------
+
+
+def create_tile(
+    shape: Sequence[IntLike],
+    dtype: DataType,
+    target_memory: MemorySpace | None = None,
+    transpose: bool | None = None,
+    *,
+    flat_layout: bool | None = None,
+) -> Tile:
+    """Create a tile at specific memory space.
+
+    Signature-transparent promotion of :func:`pypto.language.op.tile_ops.create`
+    (aliased there as ``create_tile``) so ``pl.create_tile`` and
+    ``pypto.language.op.create_tile`` stay the same callable — the
+    ``pl.create_tile(shape, dtype)`` default keeps working.
+    """
+    return _tile.create(shape, dtype, target_memory, transpose, flat_layout=flat_layout)
 
 
 # ---------------------------------------------------------------------------
@@ -1674,16 +1711,30 @@ def read(src: Tensor | Tile, offset: IntLike | Sequence[IntLike]) -> Scalar:
     """
     if isinstance(src, Tensor):
         return _tensor.read(src, offset)
-    if isinstance(src, Tile):
-        return _tile.read(src, offset)
-    raise TypeError(f"pl.read: expected Tensor or Tile, got {type(src).__name__}")
+    return _tile.read(src, offset)
+
+
+@overload
+def write(
+    dst: Tensor,
+    offset: IntLike | Sequence[IntLike],
+    value: Scalar | _ir_core.Expr | int | float,
+) -> Tensor: ...
+
+
+@overload
+def write(
+    dst: Tile,
+    offset: IntLike | Sequence[IntLike],
+    value: Scalar | _ir_core.Expr | int | float,
+) -> Tile: ...
 
 
 def write(
     dst: Tensor | Tile,
     offset: IntLike | Sequence[IntLike],
-    value: Scalar,
-) -> _ir_core.Expr:
+    value: Scalar | _ir_core.Expr | int | float,
+) -> Tensor | Tile:
     """Write a scalar value to a tensor or tile at given indices.
 
     Args:
@@ -1693,8 +1744,9 @@ def write(
         value: Scalar value to write
 
     Returns:
-        Underlying ``tensor.write`` / ``tile.write`` call expression. Direct
-        callers ignore it; the DSL parser surfaces it as an ``EvalStmt``.
+        The destination Tensor or Tile facade wrapping the write call. The
+        result can be chained or carried; bare callers still lower it as an
+        ``EvalStmt``.
     """
     if isinstance(dst, Tensor):
         return _tensor.write(dst, offset, value)
@@ -1817,3 +1869,10 @@ def mrgsort(  # noqa: PLR0913
     if isinstance(src0, Tile):
         return _tile.mrgsort(src0, src1, src2, src3, tmp, exhausted, block_len=block_len)
     raise TypeError(f"pl.mrgsort: expected Tensor or Tile, got {type(src0).__name__}")
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see _validation.py).
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

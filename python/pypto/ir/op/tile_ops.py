@@ -401,8 +401,8 @@ def scatter_update(
     input: Expr,
     *args: Expr | int,
     dim: int | Expr | None = None,
-    index: Expr | None = None,
-    src: Expr | None = None,
+    index: Expr | int | None = None,
+    src: Expr | int | None = None,
     span: Span | None = None,
 ) -> Call:
     """Update tile rows at positions specified by 2D index tile with values from src.
@@ -3052,8 +3052,13 @@ def reinterpret_view(
     return _ir_core.create_op_call("tile.reinterpret_view", args, {"dtype": dtype}, actual_span)
 
 
-def _normalize_axis_const(axis: int | ConstInt, span: Span, name: str) -> ConstInt:
-    """Normalize an axis argument (int or ConstInt) into a ConstInt(INDEX) expression."""
+def _normalize_axis_const(axis: Any, span: Span, name: str) -> ConstInt:
+    """Normalize an axis argument (int or ConstInt) into a ConstInt(INDEX) expression.
+
+    The axis arrives from dynamic callers (op-wrapper boundaries), so the
+    parameter is honestly ``Any`` and the isinstance chain is the contract —
+    anything but int/ConstInt is loud.
+    """
     if isinstance(axis, ConstInt):
         return axis
     if isinstance(axis, int):
@@ -3415,6 +3420,12 @@ def resolve_gather_compare_cmp_mode(cmp_mode: str | int) -> int:
     Accepts either a string in ``{"eq", "ne", "lt", "le", "gt", "ge"}`` or
     an int in ``[0, 5]``. Raises ``ValueError`` on anything else.
     """
+    if not isinstance(cmp_mode, bool) and isinstance(cmp_mode, int):
+        if 0 <= cmp_mode < len(_GATHER_COMPARE_CMP_MODES):
+            return cmp_mode
+        raise ValueError(
+            f"Invalid cmp_mode {cmp_mode}: int must be in [0, {len(_GATHER_COMPARE_CMP_MODES) - 1}]"
+        )
     if isinstance(cmp_mode, str):
         try:
             return _GATHER_COMPARE_CMP_MODES.index(cmp_mode)
@@ -3422,12 +3433,6 @@ def resolve_gather_compare_cmp_mode(cmp_mode: str | int) -> int:
             raise ValueError(
                 f"Invalid cmp_mode {cmp_mode!r}: expected one of {list(_GATHER_COMPARE_CMP_MODES)} or int 0-5"
             ) from e
-    if isinstance(cmp_mode, int) and not isinstance(cmp_mode, bool):
-        if 0 <= cmp_mode < len(_GATHER_COMPARE_CMP_MODES):
-            return cmp_mode
-        raise ValueError(
-            f"Invalid cmp_mode {cmp_mode}: int must be in [0, {len(_GATHER_COMPARE_CMP_MODES) - 1}]"
-        )
     raise ValueError(f"Invalid cmp_mode {cmp_mode!r}: expected str or int 0-5")
 
 

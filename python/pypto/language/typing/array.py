@@ -45,7 +45,7 @@ def _validate_array_meta_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> 
         raise TypeError(f"Array() takes at most 4 positional arguments but {len(args)} were given")
 
     param_names = ("extent", "dtype", "expr", "_annotation_only")
-    for index, name in enumerate(param_names[: len(args)]):
+    for _index, name in enumerate(param_names[: len(args)]):
         if name in kwargs:
             raise TypeError(f"Array() got multiple values for argument '{name}'")
 
@@ -53,8 +53,8 @@ def _validate_array_meta_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> 
 class ArrayMeta(type):
     """Metaclass enabling ``pl.Array[extent, dtype]`` subscript notation."""
 
-    def __getitem__(cls, item: tuple) -> "Array":
-        if not isinstance(item, tuple) or len(item) != 2:
+    def __getitem__(cls, item: tuple[Any, ...]) -> "Array":
+        if len(item) != 2:
             raise TypeError("Array requires [extent, dtype] notation")
         extent, dtype = item
         return cls(extent, dtype, _annotation_only=True)
@@ -122,8 +122,13 @@ class Array(metaclass=ArrayMeta):
 
     @classmethod
     def __class_getitem__(cls, item: tuple[int, DataType]) -> "Array":
-        """Support static type checkers for ``Array[extent, dtype]`` syntax."""
-        return type(cls).__getitem__(cls, item)
+        """The static-checker hook for ``Array[extent, dtype]`` syntax.
+
+        Runtime never calls this — the ``ArrayMeta.__getitem__`` subscript
+        protocol takes precedence — but pyright resolves class subscripts
+        through this signature.
+        """
+        raise NotImplementedError
 
     # --- Indexing sugar -----------------------------------------------------
 
@@ -132,12 +137,37 @@ class Array(metaclass=ArrayMeta):
 
         return _array_dsl.get_element(self, index)
 
-    def __setitem__(self, index: "int | Expr | Scalar", value: "int | Expr | Scalar") -> None:  # noqa: F821
-        # Note: this assigns the result back to self._expr so subsequent reads
-        # see the updated SSA value. The parser's surface-level sugar handles
-        # the variable-name rebinding for code inside @pl.function — this
-        # path is for direct DSL usage (tests, REPL-style construction).
+    def __setitem__(self, index: "int | Expr | Scalar | slice", value: "int | Expr | Scalar") -> None:
+        """``arr[i] = v`` → ``array.update_element(arr, i, v)`` (functional rebind).
+
+        The traced frontend's subscript-write sugar (the AST's
+        ``_parse_subscript_assignment`` surface). The source rewriter
+        leaves ``arr[i] = v`` as a plain Python item assignment on the
+        facade (``_route_target`` preserves Subscript targets), so this
+        hook fires during the trace, asks the active Frame
+        (``active_frame()``) to resolve the target IR variable, and routes
+        the resulting source-name bind through the trace interpreter
+        — no rewriter rewrite. Outside a trace (or on a
+        non-staged target) the write is loud, never silently dropped.
+        """
+        from pypto.language.ambient import active_frame  # noqa: PLC0415
         from pypto.language.op import array as _array_dsl  # noqa: PLC0415
 
-        updated = _array_dsl.update_element(self, index, value)
-        self._expr = updated.unwrap()
+        frame = active_frame()
+        if frame is None:
+            raise TypeError(
+                "Array item assignment is only supported inside a traced kernel (the tracing frontend)"
+            )
+        if isinstance(index, slice):
+            raise TypeError(
+                "Array item assignment takes a scalar index, not a slice; "
+                "use pl.array.update_element for a whole-array update"
+            )
+        new = _array_dsl.update_element(self, index, value)
+        owner, name = frame.resolve_staged_local(self.unwrap())
+        if owner is None:
+            raise TypeError(
+                "Array item-assignment target must be a bound local name, "
+                f"got an expression-backed Array ({self!r})"
+            )
+        owner.rt_bind(name, new, via=frame)

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
+from typing import Any
 
 from pypto.pypto_core.ir import SplitMode
 
@@ -58,8 +59,10 @@ def _validate_slot_num(slot_num: int, api: str) -> None:
     Raises:
         ValueError: If ``slot_num`` is not a positive integer.
     """
-    # bool is a subclass of int — reject it so True/False can't pose as a count.
-    if not isinstance(slot_num, int) or isinstance(slot_num, bool):
+    # bool is a subclass of int — an exact type check rejects it (and any
+    # other int subclass) so True/False can't pose as a count; the strict
+    # overlay reads an isinstance over the int annotation as always-true.
+    if type(slot_num) is not int:
         raise ValueError(f"{api} slot_num must be a positive integer, got {slot_num!r}")
     if slot_num <= 0:
         raise ValueError(f"{api} slot_num must be a positive integer, got {slot_num}")
@@ -90,7 +93,7 @@ class Split(Optimization):
     slot_num: int | None = None
 
 
-def split(mode: SplitMode, *, slot_num: int | None = None) -> Split:
+def split(mode: SplitMode, *, slot_num: Any = None) -> Split:
     """Create a ``Split`` optimization entry.
 
     Args:

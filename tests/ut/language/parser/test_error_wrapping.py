@@ -23,7 +23,6 @@ from pypto.language.op import tensor_ops as _dsl_tensor
 from pypto.language.parser.diagnostics import (
     InvalidOperationError,
     ParserError,
-    ParserTypeError,
 )
 from pypto.language.parser.diagnostics.renderer import ErrorRenderer
 
@@ -120,7 +119,7 @@ class TestBackendCheckMessageSanitized:
         checking of its own, so validation happens in the backend type-deduction function.
         """
 
-        @pl.function
+        @pl.function_parser
         def bad(
             t1: pl.Tensor[[64, 64], pl.FP16],
             t2: pl.Tensor[[64, 64], pl.FP32],
@@ -185,7 +184,7 @@ class TestCheckSpanLocationStrippedFromHeader:
         ``args[1]->span_`` -- the ``tmp`` definition, one line above the failing call.
         """
 
-        @pl.function
+        @pl.function_parser
         def bad(t: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tile[[64, 1], pl.FP32]:
             a: pl.Tile[[64, 64], pl.FP32] = pl.tile.load(t, offsets=[0, 0], shapes=[64, 64])
             tmp: pl.Tile[[64, 64], pl.FP16] = pl.tile.create([64, 64], pl.FP16)
@@ -277,7 +276,10 @@ class TestProgramCatchAll:
 
 
 class TestTypeMismatchReassignment:
-    """Tests for rejecting reassignment with a different type (#642)."""
+    """The relaxed reassignment rule (the #642 rejection is retired): a
+    same-type rebind assigns through the name's mutable Var; a type-changing
+    rebind starts a fresh let. See test_rebind_type_rule.py for the
+    cross-frontend contract."""
 
     def test_reassign_same_type_succeeds(self):
         """Reassigning with the same type is allowed."""
@@ -295,18 +297,20 @@ class TestTypeMismatchReassignment:
         assert isinstance(create_stmt.var.type, ir.TensorType)
         assert ir.structural_equal(mul_stmt.var.type, create_stmt.var.type)
 
-    def test_reassign_different_shape_raises(self):
-        """Reassigning with a different tensor shape raises ParserTypeError."""
+    def test_reassign_different_shape_starts_a_fresh_let(self):
+        """Reassigning with a different tensor shape lets a fresh Var — the
+        name carries the new type instead of raising (the relaxed rule)."""
 
-        with pytest.raises(ParserTypeError, match="Cannot reassign"):
+        @pl.function_parser
+        def func(x: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
+            t = pl.create_tensor([16, 16], dtype=pl.FP32)
+            t = pl.create_tensor([4, 4], dtype=pl.FP32)  # different shape
+            t = pl.mul(t, 2.0)  # the rebind's [4, 4] type flows on
+            return x
 
-            @pl.function_parser
-            def func(  # noqa: F841
-                x: pl.Tensor[[16, 16], pl.FP32],
-            ) -> pl.Tensor[[16, 16], pl.FP32]:
-                t = pl.create_tensor([16, 16], dtype=pl.FP32)  # noqa: F841
-                t = pl.create_tensor([4, 4], dtype=pl.FP32)  # different shape  # noqa: F841
-                return x
+        text = func.as_python().replace("\n", " ")
+        assert "t: pl.Tensor[[16, 16], pl.FP32]" in text
+        assert "t_1: pl.Tensor[[4, 4], pl.FP32]" in text
 
 
 class TestBugClassErrorsAreNotWrapped:
@@ -329,7 +333,7 @@ class TestBugClassErrorsAreNotWrapped:
 
         with pytest.raises(pypto.InternalError, match="synthetic pass bug"):
 
-            @pl.function
+            @pl.function_parser
             def bad_kernel(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                 result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(x, target_type=pl.BF16)
                 return result
@@ -349,7 +353,7 @@ class TestBugClassErrorsAreNotWrapped:
 
         with pytest.raises(AssertionError, match="synthetic failed assertion") as exc_info:
 
-            @pl.function
+            @pl.function_parser
             def bad_kernel(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                 result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(x, target_type=pl.BF16)
                 return result
@@ -362,7 +366,7 @@ class TestBugClassErrorsAreNotWrapped:
 
         with pytest.raises(pypto.InternalError) as exc_info:
 
-            @pl.function
+            @pl.function_parser
             def bad_kernel(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                 result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(x, target_type=pl.BF16)
                 return result
@@ -375,9 +379,9 @@ class TestBugClassErrorsAreNotWrapped:
 
         with pytest.raises(pypto.InternalError, match="synthetic pass bug"):
 
-            @pl.program
+            @pl.program_parser
             class BadProgram:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                     result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(x, target_type=pl.BF16)
                     return result
@@ -399,7 +403,7 @@ class TestBugClassErrorsAreNotWrapped:
 
         with pytest.raises(pypto.InternalError, match="synthetic pass bug"):
 
-            @pl.function
+            @pl.function_parser
             def bad_kernel(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.tensor.adds(x, boom.value)
                 return result
@@ -416,7 +420,7 @@ class TestBugClassErrorsAreNotWrapped:
 
         with pytest.raises(ParserError):
 
-            @pl.function
+            @pl.function_parser
             def bad_kernel(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.tensor.adds(x, bad.value)
                 return result
@@ -431,7 +435,7 @@ class TestBugClassErrorsAreNotWrapped:
 
         with pytest.raises(InvalidOperationError, match="Invalid rounding mode"):
 
-            @pl.function
+            @pl.function_parser
             def bad_kernel(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                 result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(x, target_type=pl.BF16)
                 return result

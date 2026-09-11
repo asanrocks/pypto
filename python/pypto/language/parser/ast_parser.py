@@ -22,15 +22,21 @@ from pypto._function_attrs import AUTO_SCOPE_ATTR, EXTERNAL_SOURCE_ATTR
 from pypto.ir import IRBuilder
 from pypto.ir import op as ir_op
 from pypto.ir.printer import python_print
+from pypto.language.constructs.loops import RangeIterator as _DslRangeIterator
+from pypto.language.constructs.optimizations import SPLIT_SLOT_NUM_DEPRECATION
 from pypto.language.distributed import op as _dsl_pld
-from pypto.language.dsl_api import RangeIterator as _DslRangeIterator
 from pypto.language.op import array_ops as _dsl_array
 from pypto.language.op import prefetch_ops as _dsl_prefetch
 from pypto.language.op import system_ops as _dsl_system
 from pypto.language.op import tensor_ops as _dsl_tensor
 from pypto.language.op import tile_ops as _dsl_tile
-from pypto.language.constructs.optimizations import SPLIT_SLOT_NUM_DEPRECATION
 from pypto.language.typing.dynamic import DynVar
+from pypto.language.typing.type_utils import (  # noqa: PLC2701 — the shared seam (both frontends match identically)
+    _normalize_type_for_syntax_match,
+    _shape_exprs_match,
+    _tile_types_differ_only_by_unset_memory_space,
+    _types_match,
+)
 from pypto.pypto_core import DataType, ir
 from pypto.pypto_core import arith as _arith
 
@@ -60,7 +66,6 @@ from .span_tracker import SpanTracker
 from .type_resolver import (
     TypeResolver,
     _const_int_value,  # noqa: PLC2701
-    _implicit_tile_view_defaults,  # noqa: PLC2701
 )
 
 if TYPE_CHECKING:
@@ -366,145 +371,6 @@ def _collect_type_symbol_ids(param_type: ir.Type) -> set[int]:
     return symbol_ids
 
 
-def _shape_exprs_match(lhs: Sequence[ir.Expr], rhs: Sequence[ir.Expr]) -> bool:
-    """Return whether two shape-like expression lists are statically identical."""
-    if len(lhs) != len(rhs):
-        return False
-    for lhs_dim, rhs_dim in zip(lhs, rhs):
-        if lhs_dim is rhs_dim:
-            continue
-        lhs_value = _const_int_value(lhs_dim)
-        rhs_value = _const_int_value(rhs_dim)
-        if lhs_value is None or rhs_value is None or lhs_value != rhs_value:
-            return False
-    return True
-
-
-def _has_printable_tile_view(
-    tile_view: ir.TileView | None,
-    shape: Sequence[ir.Expr],
-    memory_space: ir.MemorySpace | None = None,
-) -> bool:
-    """Return whether a TileView carries non-default metadata in Python text form."""
-    if tile_view is None:
-        return False
-    if tile_view.valid_shape and not _shape_exprs_match(tile_view.valid_shape, shape):
-        return True
-    if tile_view.stride:
-        return True
-    if tile_view.start_offset is not None:
-        return True
-    default_blayout, default_slayout, default_fractal = _implicit_tile_view_defaults(shape, memory_space)
-    if tile_view.blayout != default_blayout:
-        return True
-    if tile_view.slayout != default_slayout:
-        return True
-    if tile_view.fractal != default_fractal:
-        return True
-    if tile_view.pad != ir.PadValue.null:
-        return True
-    if tile_view.compact != ir.CompactMode.null:
-        return True
-    return False
-
-
-def _normalize_type_for_syntax_match(type_: ir.Type | None) -> ir.Type | None:
-    """Normalize omitted default TileView metadata before syntax-level comparison."""
-    if isinstance(type_, ir.TileType):
-        tile_view = type_.tile_view
-        if tile_view is not None and not _has_printable_tile_view(tile_view, type_.shape, type_.memory_space):
-            tile_view = None
-        if tile_view is type_.tile_view:
-            return type_
-        return ir.TileType(type_.shape, type_.dtype, type_.memref, tile_view, type_.memory_space)
-
-    return type_
-
-
-def _shape_has_symbolic_dim(type_: ir.Type) -> bool:
-    """Return True when *type_* is a shaped type with at least one non-ConstInt dim."""
-    if not isinstance(type_, (ir.TensorType, ir.TileType)):
-        return False
-    return any(not isinstance(d, ir.ConstInt) for d in type_.shape)
-
-
-def _simplify_shape_dims(type_: ir.Type, analyzer: "_arith.Analyzer") -> ir.Type:
-    """Rebuild a TensorType/TileType with each outer shape dim passed through
-    the arithmetic simplifier.
-
-    Needed so that symbolic dims that reduce to the same value — e.g.
-    ``(k + C) - k`` and ``C`` — compare equal under structural ``==``.
-
-    Scope: only the outer ``shape`` is simplified. TileView fields
-    (``valid_shape``, ``stride``, ``start_offset``) and TensorView
-    fields retain their original expressions and still compare structurally.
-    """
-    if not _shape_has_symbolic_dim(type_):
-        return type_
-    assert isinstance(type_, (ir.TensorType, ir.TileType))
-    simplified_shape = [analyzer.simplify(d) if isinstance(d, ir.Expr) else d for d in type_.shape]
-    if isinstance(type_, ir.TensorType):
-        return ir.TensorType(simplified_shape, type_.dtype, type_.memref, type_.tensor_view)
-    return ir.TileType(simplified_shape, type_.dtype, type_.memref, type_.tile_view, type_.memory_space)
-
-
-def _types_match(lhs: ir.Type | None, rhs: ir.Type | None) -> bool:
-    """Return whether two IR types are structurally equal after TileView normalization.
-
-    Uses C++ ``structural_equal`` (via ``==``) instead of comparing printed
-    strings.  Note: ``structural_equal`` intentionally skips the ``memref``
-    field on TileType/TensorType — memref identity is not relevant for
-    parser-level type matching because the Var (not the Call) carries the
-    authoritative memref via ``override_type``.
-
-    Outer shape dimensions are simplified via a shared arithmetic analyzer
-    before comparison so expressions like ``(k + C) - k`` match ``C``.  The
-    analyzer is only constructed when at least one shape actually contains a
-    symbolic dim, keeping the all-static fast path free of arith overhead.
-    """
-    if lhs is rhs:
-        return True
-    if lhs is None or rhs is None:
-        return lhs is rhs
-    lhs = _normalize_type_for_syntax_match(lhs)
-    rhs = _normalize_type_for_syntax_match(rhs)
-    assert lhs is not None
-    assert rhs is not None
-    if type(lhs) is not type(rhs):
-        return False
-    if _shape_has_symbolic_dim(lhs) or _shape_has_symbolic_dim(rhs):
-        analyzer = _arith.Analyzer()
-        lhs = _simplify_shape_dims(lhs, analyzer)
-        rhs = _simplify_shape_dims(rhs, analyzer)
-    return lhs == rhs
-
-
-def _tile_types_differ_only_by_unset_memory_space(lhs: ir.Type | None, rhs: ir.Type | None) -> bool:
-    """Return whether two TileTypes are equal once an unset space is a wildcard.
-
-    ``memory_space=None`` is the IR's "the compiler will place this", not a
-    distinct type. Ops that leave it unset (``pl.load``, ``pl.tile.create``) and
-    ops whose space is fixed by hardware (every vector op, via
-    ``set_output_memory(Vec)``) therefore mix freely in ordinary user code::
-
-        t = pl.load(a, [0, 0], [16, 64])   # unset
-        t = pl.add(t, t)                   # Vec
-
-    Treating that as a type change would reject the most common shape of DSL
-    there is. All other fields still compare exactly.
-
-    Kept separate from ``_types_match``: annotation-vs-inferred comparisons must
-    stay strict, so that a *stated* space which contradicts the producer is
-    still an error.
-    """
-    if not isinstance(lhs, ir.TileType) or not isinstance(rhs, ir.TileType):
-        return False
-    if (lhs.memory_space is None) == (rhs.memory_space is None):
-        return False  # both set or both unset -> plain _types_match already decided
-    unified = ir.TileType(rhs.shape, rhs.dtype, rhs.memref, rhs.tile_view, lhs.memory_space)
-    return _types_match(lhs, unified)
-
-
 def _normalize_inferred_type_for_annotation(
     annotation_type: ir.Type,
     value_expr: ir.Expr,
@@ -610,7 +476,7 @@ class _AtKwargState:
     # ``dumps=[t1, t2]`` AST kept verbatim; resolved into outer-scope Var
     # refs by the caller and written to ScopeStmt.attrs[dump_vars]. The
     # scope-level selective-dump surface, symmetric with ``deps=``: the printer
-    # emits it for any scope carrying ``kAttrDumpVars`` (seeded by ``pl.dump_tag``
+    # emits it for any scope carrying ``kAttrDumpVars`` (populated by ``pl.dump_tag``
     # at parse, by an explicit ``dumps=`` list, and by the inline-call
     # ``dump_vars`` transfer), and the outliner translates it into the
     # synthesised dispatch's ``kAttrDumpVars``.
@@ -1941,38 +1807,26 @@ class ASTParser:
             return self.builder.let(var_name, value_expr, type=override_type, span=span)
 
         if existing_var is not None and type(existing_var) is ir.Var and not self.scope_manager.strict_ssa:
-            # Reject reassignment with a different type (#642).  Same Python
-            # variable maps to the same Var node, so the type must match.
+            # The relaxed reassignment rule: a type-changing rebind starts a
+            # fresh let instead of assigning through the existing Var.
+            # Same Python variable no longer implies the same Var node when
+            # the type changes — assign-through would pin the Var's declared
+            # type to the first binding (the #642 failure mode); a fresh let
+            # carries the new type and shadows the name from here on.
+            # Mirrored exactly by the tracing Sema's ``_default_bind`` (both
+            # compare through the shared typing seam's ``_types_match``).
             value_type = override_type or value_expr.type
             if (
                 not isinstance(value_type, ir.UnknownType)
                 and not isinstance(existing_var.type, ir.UnknownType)
                 and not _types_match(existing_var.type, value_type)
+                # An unset memory_space is a wildcard, not a distinct type:
+                # load-created (unset) and op-produced (Vec) tiles rebind the
+                # same name in ordinary user code, and the loop-carry/SSA
+                # derivation relies on assign-through keeping one Var.
+                and not _tile_types_differ_only_by_unset_memory_space(existing_var.type, value_type)
             ):
-                if not _tile_types_differ_only_by_unset_memory_space(existing_var.type, value_type):
-                    raise ParserTypeError(
-                        f"Cannot reassign '{var_name}' with a different type: "
-                        f"was {ir.python_print_type(existing_var.type)}, "
-                        f"got {ir.python_print_type(value_type)}",
-                        span=span,
-                        hint="Use a different variable name for tensors with different shapes or dtypes",
-                    )
-                # Compatible: one side just has not been placed yet. Keep the
-                # binding on the Var's own type so the AssignStmt stays
-                # symmetric; InferTileMemorySpace resolves both sides together.
-                if (
-                    isinstance(value_expr, ir.Call)
-                    and isinstance(existing_var.type, ir.TileType)
-                    and existing_var.type.memory_space is not None
-                ):
-                    value_expr = ir.Call(
-                        value_expr.op,
-                        value_expr.args,
-                        value_expr.kwargs,
-                        value_expr.attrs,
-                        existing_var.type,
-                        value_expr.span,
-                    )
+                return self.builder.let(var_name, value_expr, type=override_type, span=span)
             self.builder.assign(existing_var, value_expr, span=span)
             return existing_var
         return self.builder.let(var_name, value_expr, type=override_type, span=span)
@@ -4673,7 +4527,7 @@ class ASTParser:
         A cluster body is outlined into one Group task. Calls or plain Submit
         nodes inside that body identify the Group's AIC/AIV callees, but they
         are not dispatched independently, so their task-level controls have no
-        runtime carrier and would otherwise be silently ignored.
+        runtime vehicle and would otherwise be silently ignored.
         """
         if not self._is_inside_scope(ir.ScopeKind.Cluster):
             return
@@ -5463,7 +5317,7 @@ class ASTParser:
     ) -> "list[tuple[str, Any]] | None":
         """Merge forward-sticky ``pl.dump_tag`` tensors into a scope's dump_vars attr.
 
-        The single injection point for the scope-level selective-dump carrier on
+        The single injection point for scope-level selective-dump markers on
         first parse — the explicit / round-trip ``dumps=`` surface is handled
         separately by :meth:`_parse_at_meta`. Both the ``pl.at`` and the
         ``pl.cluster`` paths route through
@@ -5895,7 +5749,7 @@ class ASTParser:
             list into positional indices using the captured-var order and
             writes the result back as ``arg_direction_overrides`` on the Call.
           * ``dump_vars``: ``list[VarPtr]`` — outer-scope tensor Vars to mark for
-            selective tensor dump. Seeded by ``pl.dump_tag`` (forward-sticky,
+            selective tensor dump. Populated by ``pl.dump_tag`` (forward-sticky,
             from :attr:`_dump_tagged_vars`) at parse and from an explicit
             ``dumps=`` kwarg (also the print/reparse roundtrip surface). The
             outliner translates this into the synthesised dispatch's ``kAttrDumpVars``.
@@ -5913,7 +5767,7 @@ class ASTParser:
         """
         # ``dumps=`` is the explicit scope-level dump surface (symmetric with
         # ``deps=``) and also the print/reparse round-trip surface. The
-        # forward-sticky ``pl.dump_tag`` seed is merged in later by
+        # forward-sticky ``pl.dump_tag`` entry is merged in later by
         # :meth:`_parse_scope_body` (the single injection point shared by the
         # ``pl.at`` and ``pl.cluster`` paths), so it is
         # not consulted here.
@@ -6043,7 +5897,7 @@ class ASTParser:
         Name resolving to a Tensor-typed Var. ``dumps=`` is the explicit
         scope-level selective-dump surface (symmetric with ``deps=``) and also
         the print/reparse round-trip surface — the printer emits it for any
-        scope carrying ``kAttrDumpVars`` (seeded by ``pl.dump_tag`` at parse, by
+        scope carrying ``kAttrDumpVars`` (populated by ``pl.dump_tag`` at parse, by
         an explicit ``dumps=`` list, and by the inline-call ``dump_vars``
         transfer). The outliner translates the returned Var list into the
         synthesised dispatch's ``kAttrDumpVars`` by Var identity; entries the
@@ -8514,7 +8368,7 @@ class ASTParser:
 
         This is the machine-only round-trip surface for the Call's ``dump_vars``
         attr: a plain ``self.kernel(...)`` exposes no user-facing ``dumps=``
-        kwarg (the dump targets are seeded by ``pl.dump_tag`` / scope ``dumps=``
+        kwarg (the dump targets are created by ``pl.dump_tag`` / scope ``dumps=``
         and live in IR only), so the printer surfaces them inside the same
         ``attrs={...}`` dict as ``arg_directions``. Each entry must be a bare
         tensor variable that is a positional argument of this call (matched by
@@ -9073,7 +8927,7 @@ class ASTParser:
         """Fold ``pl.tensor.dim(x, i)`` onto the extent ``x``'s type already names.
 
         A tensor's declared extent *is* its runtime extent, so reading it back
-        mints a *second* scalar for the same quantity, which nothing downstream can
+        creates a *second* scalar for the same quantity, which nothing downstream can
         prove equal to the symbol the tensor types carry. Shapes built from the copy
         then disagree structurally with shapes built from the symbol — breaking, for
         one, calls into a callee that declares that same symbol. Fold instead: one
@@ -9493,13 +9347,13 @@ class ASTParser:
         return self._dispatch_op(_pl_op, "pl", op_name, call)
 
     def _parse_typed_constant(self, call: ast.Call) -> ir.Expr:
-        """Parse pl.const(value, dtype) → ConstInt or ConstFloat.
+        """Parse pl.const(value, dtype) into a typed constant node.
 
         Args:
             call: Call AST node for pl.const(value, dtype)
 
         Returns:
-            ConstInt or ConstFloat with the specified dtype
+            ConstBool, ConstInt, or ConstFloat with the specified dtype
         """
         span = self.span_tracker.get_span(call)
 
@@ -9510,31 +9364,38 @@ class ASTParser:
                 hint="Use pl.const(42, pl.INT32) or pl.const(1.0, pl.FP16)",
             )
 
-        # Extract numeric value from first argument (handles Constant and -Constant)
+        # Extract a literal value from the first argument (handles Constant and -Constant).
         value_node = call.args[0]
         negate = False
         if isinstance(value_node, ast.UnaryOp) and isinstance(value_node.op, ast.USub):
             negate = True
             value_node = value_node.operand
 
-        if not isinstance(value_node, ast.Constant) or not isinstance(value_node.value, (int, float)):
+        if not isinstance(value_node, ast.Constant) or not isinstance(value_node.value, (bool, int, float)):
             raise ParserSyntaxError(
-                "pl.const() first argument must be a numeric literal",
+                "pl.const() first argument must be a boolean or numeric literal",
                 span=span,
-                hint="Use an int or float literal: pl.const(42, pl.INT32)",
+                hint="Use pl.const(True, pl.BOOL), pl.const(42, pl.INT32), or pl.const(1.0, pl.FP16)",
             )
 
         value = value_node.value
         if negate:
             value = -value
 
-        # Resolve dtype from second argument
+        # Resolve dtype from second argument.
         dtype = self.type_resolver.resolve_dtype(call.args[1])
 
+        if isinstance(value, bool):
+            if dtype != DataType.BOOL:
+                raise ParserSyntaxError(
+                    "pl.const() boolean values require dtype=pl.BOOL",
+                    span=span,
+                    hint="Use pl.const(True, pl.BOOL) or pl.const(False, pl.BOOL)",
+                )
+            return ir.ConstBool(value, span)
         if isinstance(value, float):
             return ir.ConstFloat(value, dtype, span)
-        else:
-            return ir.ConstInt(value, dtype, span)
+        return ir.ConstInt(value, dtype, span)
 
     def _parse_dtype_get_byte(self, dtype_name: str, call: ast.Call) -> ir.Expr:
         """Parse ``pl.<DataType>.get_byte()`` as a compile-time int constant.

@@ -1772,8 +1772,11 @@ def test_dsl_pipeline_requires_chunk():
 
     with pytest.raises(ValueError, match="must be non-negative"):
         _validate_chunk(-1, 0, "pld.tensor.put")
+    # bool is an int subclass, so the bool rejection is live validation,
+    # not an annotation-violating input (a float now fails in the underlying
+    # op — garbage input is a caller bug per the trust-annotations policy).
     with pytest.raises(TypeError, match="static"):
-        _validate_chunk(1.5, 0, "pld.tensor.put")  # type: ignore[arg-type]
+        _validate_chunk(True, 0, "pld.tensor.put")
 
 
 def test_tile_put_ir_builder_accepts_positional_atomic_compat():

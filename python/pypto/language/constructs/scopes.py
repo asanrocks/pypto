@@ -1288,8 +1288,8 @@ class split_aiv:
 
     The region survives parse -> SSA -> ResolveBackendOpLayouts as a structural
     node (printer emits ``for aiv_id in pl.split_aiv(...):`` so parse->print->parse
-    is a fixpoint), then is consumed and erased by LowerAutoVectorSplit (pass 20);
-    it never reaches ExpandMixedKernel or codegen.
+    is a fixpoint), then is lowered by LowerAutoVectorSplit (pass 20) and erased by
+    ExpandMixedKernel; it never reaches codegen.
 
     Args:
         n: The AIV sub-core count. Positional; hardware-fixed at 2 (the two AIV

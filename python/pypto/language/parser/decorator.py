@@ -108,6 +108,18 @@ class InlineFunction:
     col_offset: int
     closure_vars: dict[str, Any]
 
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        # The parser splices the captured AST at ``helper(...)`` call sites
+        # inside a ``@pl.program`` body — the call is never executed through
+        # Python. A direct call means the surrounding function was not
+        # decorated; raise loudly instead of silently doing nothing.
+        raise RuntimeError(
+            "@pl.inline functions are only callable inside a @pl.program / "
+            "@pl.function body; the parser splices the body at each call "
+            "site. If you're seeing this, the surrounding function was not "
+            "decorated."
+        )
+
 
 def _strip_self_parameter(func_def: ast.FunctionDef) -> ast.FunctionDef:
     """Return a copy of func_def with the leading 'self' parameter removed.

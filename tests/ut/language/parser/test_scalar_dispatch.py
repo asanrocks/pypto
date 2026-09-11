@@ -15,8 +15,36 @@ when called with scalar arguments.
 
 import pypto.language as pl
 import pytest
-from pypto.language.parser.diagnostics import InvalidOperationError
+from pypto.language.parser.diagnostics import InvalidOperationError, ParserSyntaxError
 from pypto.pypto_core import ir
+
+
+def test_typed_bool_constant_builds_const_bool():
+    """pl.const(True, pl.BOOL) must build a ConstBool in both parser paths."""
+
+    value = pl.const(True, pl.BOOL)
+    assert isinstance(value.unwrap(), ir.ConstBool)
+
+    @pl.program_parser
+    class Program:
+        @pl.function_parser
+        def main(self) -> pl.Scalar[pl.BOOL]:
+            return pl.const(True, pl.BOOL)
+
+    func = list(Program.functions.values())[0]
+    assert isinstance(func.body, ir.ReturnStmt)
+    assert isinstance(func.body.value[0], ir.ConstBool)
+
+    with pytest.raises(TypeError, match="boolean constants require"):
+        pl.const(False, pl.INT64)
+
+    with pytest.raises(ParserSyntaxError, match="boolean values require"):
+
+        @pl.program_parser
+        class InvalidProgram:
+            @pl.function_parser
+            def invalid(self) -> pl.Scalar[pl.BOOL]:
+                return pl.const(False, pl.INT64)
 
 
 class TestScalarMin:
@@ -25,9 +53,9 @@ class TestScalarMin:
     def test_scalar_min(self):
         """Test pl.min(scalar, scalar) prints and roundtrips correctly."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -47,9 +75,9 @@ class TestScalarMin:
     def test_scalar_min_with_literal(self):
         """Test pl.min(scalar, int_literal) prints and roundtrips correctly."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -72,9 +100,9 @@ class TestScalarMax:
     def test_scalar_max(self):
         """Test pl.max(scalar, scalar) prints and roundtrips correctly."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -98,9 +126,9 @@ class TestScalarCast:
     def test_scalar_cast(self):
         """Test pl.cast(scalar, dtype) prints and roundtrips correctly."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT32],
@@ -119,9 +147,9 @@ class TestScalarCast:
     def test_scalar_cast_multiple_dtypes(self):
         """Test pl.cast(scalar, dtype) with different target dtypes."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT32],
@@ -146,9 +174,9 @@ class TestScalarNot:
     def test_logical_not_produces_not_node(self):
         """Test `not a` in DSL produces ir.Not and roundtrips correctly."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -172,9 +200,9 @@ class TestScalarNot:
     def test_bitwise_not_produces_bitnot_node(self):
         """Test `~a` in DSL produces ir.BitNot and roundtrips correctly."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -200,9 +228,9 @@ class TestScalarArithmetic:
     """Tests for pl.add/sub/mul/div dispatching on scalar arguments."""
 
     def test_scalar_add(self):
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -220,9 +248,9 @@ class TestScalarArithmetic:
         ir.assert_structural_equal(Before, pl.parse_program(printed))
 
     def test_scalar_sub(self):
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -240,9 +268,9 @@ class TestScalarArithmetic:
         ir.assert_structural_equal(Before, pl.parse_program(printed))
 
     def test_scalar_mul(self):
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -260,9 +288,9 @@ class TestScalarArithmetic:
         ir.assert_structural_equal(Before, pl.parse_program(printed))
 
     def test_scalar_div(self):
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.FP32],
@@ -282,9 +310,9 @@ class TestScalarArithmetic:
     def test_scalar_add_matches_plus_operator(self):
         """`pl.add(a, b)` must produce the same IR as `a + b`."""
 
-        @pl.program
+        @pl.program_parser
         class WithCall:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -296,9 +324,9 @@ class TestScalarArithmetic:
                 _ = c
                 return out
 
-        @pl.program
+        @pl.program_parser
         class WithOperator:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -319,9 +347,9 @@ class TestScalarFloorDivTruediv:
     def test_scalar_floordiv(self):
         """a // b roundtrips through print → parse."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.INT64],
@@ -341,9 +369,9 @@ class TestScalarFloorDivTruediv:
     def test_scalar_truediv(self):
         """a / b roundtrips through print → parse."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.FP32],
@@ -363,9 +391,9 @@ class TestScalarFloorDivTruediv:
     def test_scalar_rfloordiv(self):
         """literal // scalar roundtrips (exercises __rfloordiv__ at runtime)."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[1], pl.INT64],
@@ -384,9 +412,9 @@ class TestScalarFloorDivTruediv:
     def test_scalar_rtruediv(self):
         """literal / scalar roundtrips (exercises __rtruediv__ at runtime)."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[1], pl.FP32],
@@ -405,9 +433,9 @@ class TestScalarFloorDivTruediv:
     def test_floordiv_mixed_literal_positions(self):
         """// with literal on either side roundtrips correctly."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[1], pl.INT64],
@@ -428,9 +456,9 @@ class TestScalarFloorDivTruediv:
     def test_truediv_operator_matches_ir(self):
         """a / b produces the same IR as pl.div(a, b)."""
 
-        @pl.program
+        @pl.program_parser
         class WithCall:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.FP32],
@@ -442,9 +470,9 @@ class TestScalarFloorDivTruediv:
                 _ = c
                 return out
 
-        @pl.program
+        @pl.program_parser
         class WithOperator:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 config: pl.Tensor[[2], pl.FP32],
@@ -463,13 +491,17 @@ class TestScalarUnsupportedOpHint:
     """Verify the catch-all error message points users at Python operators."""
 
     def test_unsupported_op_hint_mentions_python_operators(self):
-        # `pl.exp` is a unified op (tile/tensor) with no scalar dispatch — hits
-        # the catch-all path that surfaces the improved hint.
-        with pytest.raises(InvalidOperationError, match=r"pl\.exp.*expected.*got Scalar") as exc_info:
+        # `pl.exp` is a unified op (tile/tensor) with no scalar dispatch. The
+        # dispatch trusts its annotations, so a Scalar falls through to the
+        # tile path and the IR-level validator rejects it — still wrapped by
+        # the parser's catch-all with the Python-operators hint.
+        with pytest.raises(
+            InvalidOperationError, match=r"pl operation 'exp'.*tile\.exp.*ScalarType"
+        ) as exc_info:
 
-            @pl.program
+            @pl.program_parser
             class Bad:
-                @pl.function
+                @pl.function_parser
                 def main(
                     self,
                     config: pl.Tensor[[1], pl.FP32],

@@ -14,6 +14,7 @@ matching IR builder in :mod:`pypto.ir.op.distributed.tile_ops`.
 """
 
 from collections.abc import Sequence
+from typing import Any, TypeGuard
 
 from pypto.ir.op.distributed import tile_ops as _ir_tile
 from pypto.language.typing import IntLike, Tile
@@ -25,7 +26,7 @@ from ..typing.distributed_tensor import DistributedTensor
 from ._utils import _normalize_intlike, _unwrap
 
 
-def _is_region_arg(x: object) -> bool:
+def _is_region_arg(x: object) -> TypeGuard[Sequence[IntLike]]:
     """True if a positional arg in the ``stage2`` slot is actually a region tuple.
 
     The printer emits ``pld.tile.put`` / ``pld.tile.get`` region args
@@ -93,6 +94,11 @@ def remote_load(
         )
         raise TypeError(f"pld.tile.remote_load expects a DistributedTensor target (window-bound); got {got}")
 
+    if not isinstance(offsets, (list, tuple)):
+        raise TypeError(
+            f"pld.tile.remote_load: offsets must be a list of indices, got {offsets!r} "
+            f"({type(offsets).__name__})"
+        )
     normalized_valid_shape = None if valid_shape is None else _normalize_intlike(valid_shape)
     call = _ir_tile.remote_load(
         target_expr,
@@ -310,3 +316,24 @@ def get(
 
 
 __all__ = ["get", "remote_load", "remote_store", "put"]
+
+
+def __getattr__(name: str) -> Any:
+    """Loud unknown-op error at the 3-segment dispatch surface.
+
+    The traced frontend resolves ``pld.tile.<op>(...)`` by plain attribute
+    access (calls pass through); an unknown subop would otherwise
+    surface as a bare module AttributeError whose message lacks the
+    ``pld.tile.`` namespace the AST parser's dispatch errors carry. Raising
+    a named AttributeError here keeps ``hasattr`` (the AST parser's own
+    dispatch probe) returning False while giving the traced path a message
+    the parser tests' ``match="pld..."`` pins accept.
+    """
+    raise AttributeError(f"pld.tile.{name} is not a known distributed operation")
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see language/op/_validation.py).
+from pypto.language.op._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

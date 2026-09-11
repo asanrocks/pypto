@@ -14,9 +14,9 @@ import linecache
 import sys
 import types
 
+from pypto.language.diagnostics import BUG_CLASS_EXCEPTIONS, ParserError, ParserSyntaxError
 from pypto.pypto_core import ir
 
-from pypto.language.diagnostics import BUG_CLASS_EXCEPTIONS, ParserError, ParserSyntaxError
 from .enum_utils import FUNCTION_TYPE_MAP, LEVEL_MAP, ROLE_MAP
 from .span_tracker import active_source_map, ast_column_to_span_column
 
@@ -98,10 +98,10 @@ def _prevalidate_decorator_args(code: str, filename: str) -> None:
             func = decorator.func
             is_pl_function = (
                 isinstance(func, ast.Attribute)
-                and func.attr == "function"
+                and func.attr in {"function", "function_parser"}
                 and isinstance(func.value, ast.Name)
                 and func.value.id == "pl"
-            ) or (isinstance(func, ast.Name) and func.id == "function")
+            ) or (isinstance(func, ast.Name) and func.id in {"function", "function_parser"})
             if not is_pl_function:
                 continue
             for keyword in decorator.keywords:
@@ -256,6 +256,12 @@ def parse(
     # built by the decorators (which run during exec) can remap spans (#1612).
     exec_ns = _AutoDynVar(temp_module.__dict__)
     map_token = active_source_map.set(source_map)
+    from .decorator import function as parser_function, program as parser_program  # noqa: I001, PLC0415
+
+    saved_function = pl.function
+    saved_program = pl.program
+    pl.function = parser_function
+    pl.program = parser_program
     try:
         _prevalidate_decorator_args(code, filename)
         exec(compiled_code, exec_ns)
@@ -278,6 +284,8 @@ def parse(
             ) from e
         raise RuntimeError(f"Error executing code from {filename}: {e}") from e
     finally:
+        pl.function = saved_function
+        pl.program = saved_program
         active_source_map.reset(map_token)
         # Clean up linecache entry
         if filename in linecache.cache:

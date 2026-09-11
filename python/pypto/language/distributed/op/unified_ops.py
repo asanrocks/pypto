@@ -91,3 +91,10 @@ def remote_store(
     if isinstance(src, Expr) and isinstance(src.type, _ir.TileType):
         return _tile.remote_store(src, target, peer, offsets, atomic=atomic)
     return _tensor.remote_store(src, target, peer, offsets, atomic=atomic)
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see language/op/_validation.py).
+from pypto.language.op._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

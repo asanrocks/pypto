@@ -18,6 +18,7 @@ Accessed as ``pl.tile.*``
 import warnings
 from collections.abc import Sequence
 from typing import Any, Literal, TypeVar, overload
+from typing import cast as _typing_cast
 
 __all__ = [
     "MemRefType",
@@ -164,6 +165,8 @@ __all__ = [
     "mgather",
     "MaskPattern",
     "mrgsort",
+    "mrgsort_format1",
+    "mrgsort_format2",
 ]
 
 from pypto.ir.op import tile_ops as _ir_ops
@@ -173,6 +176,7 @@ from pypto.ir.utils import (
     caller_warning_stacklevel,
     has_partial_valid_region,
 )
+from pypto.language.ambient import active_frame
 from pypto.pypto_core import DataType
 from pypto.pypto_core import ir as _ir_core
 from pypto.pypto_core.ir import (
@@ -187,7 +191,9 @@ from pypto.pypto_core.ir import (
     TileLayout,
 )
 
-from ..typing import BoolLike, IntLike, Ptr, Scalar, Tensor, Tile, predicate_to_expr
+from ..typing import BoolLike, IntLike, Ptr, Scalar, Tensor, Tile, Tuple, predicate_to_expr, to_expr
+from ..typing._host import coerce_host_scalar, wrap_output_like
+from ._validation import normalize_fillpad_pad_value
 from .system_ops import (  # noqa: F401
     tpop_from_aic,
     tpop_from_aiv,
@@ -262,7 +268,14 @@ def alloc(
 
     The result is a base ``Ptr`` (allocation identity token): the printer
     annotates the assignment target as ``pl.Ptr``, matching the IR design
-    where ``tile.alloc`` / ``tensor.alloc`` Calls carry ``PtrType``.
+    where ``tile.alloc`` / ``tensor.alloc`` Calls carry ``PtrType``. The new
+    frontend's collect tier needs a real facade, not a bare ``PtrType``
+    sentinel: the bind of ``buf: pl.Ptr = pl.tile.alloc(...)`` in the
+    re-parse must emit the ``AssignStmt`` (a non-facade RHS is a host bind
+    and is silently dropped, breaking the roundtrip structural equality).
+    The operands mirror the AST parser's ``_parse_printed_alloc_call`` —
+    ``ConstInt``/INDEX for both the memory space (the printer round-trips
+    the enum via ``pl.Mem.X``) and the byte size.
 
     Args:
         memory_space: Target memory space (e.g. ``pl.Mem.Vec``)
@@ -272,30 +285,50 @@ def alloc(
             its membership isolated from other allocations.
 
     Returns:
-        Opaque ``Ptr`` sentinel (unused at runtime — the parser intercepts the
-        call in the AST and never invokes this stub)
+        ``Ptr`` facade wrapping the detached ``tile.alloc`` Call.
     """
-    return Ptr()
+    span = _get_span_or_capture()
+    args = [
+        _ir_core.ConstInt(memory_space.value, DataType.INDEX, span),
+        _ir_core.ConstInt(size, DataType.INDEX, span),
+    ]
+    # ``pinned`` rides only when set: the C++ planners and the printer omit it
+    # for ordinary (unpinned) allocations, and structural comparison treats the
+    # kwarg as significant — emitting ``pinned=False`` unconditionally made every
+    # traced alloc unequal to its C++-synthesized counterpart.
+    alloc_kwargs = {"pinned": True} if pinned else {}
+    call = _ir_core.create_op_call("tile.alloc", args, alloc_kwargs, span)
+    return Ptr(expr=call)
 
 
 def _unwrap_rhs(rhs: int | float | Expr | Tile | Scalar) -> int | float | Expr:
-    """Unwrap rhs operands into the IR-layer representation."""
-    return rhs.unwrap() if isinstance(rhs, (Tile, Scalar)) else rhs
+    """Unwrap rhs operands into the IR-layer representation.
+
+    A raw host scalar is reified at the operand boundary via the canonical
+    rule (``coerce_host_scalar`` — int→INDEX, float→FP32, bool→ConstBool),
+    matching ``_scalar_operand_to_expr`` and the AST
+    parser's plain-int-literal dtype, so round-tripped programs don't
+    sprout spurious casts on otherwise-equivalent constants.
+    """
+    if isinstance(rhs, (Tile, Scalar)):
+        return rhs.unwrap()
+    return coerce_host_scalar(rhs, "tile op", "rhs")
 
 
 def _normalize_intlike(seq: Sequence[IntLike]) -> list[int | Expr]:
     """Unwrap Scalar elements to Expr so the sequence matches C++ binding types."""
-    return [elem.unwrap() if isinstance(elem, Scalar) else elem for elem in seq]
+    return [to_expr(elem) for elem in seq]
 
 
-def _scalar_operand_to_expr(value: int | Scalar | Expr) -> Expr:
+def _scalar_operand_to_expr(value: int | float | Scalar | Expr) -> Expr:
     """Coerce a scalar-binary operand to an ``Expr``.
 
     Used by ``min`` / ``max``: ``Scalar`` is unwrapped to its inner ``Expr``, raw
-    ``Expr`` is forwarded as-is, and a bare ``int`` is materialized as
-    ``ConstInt(.., INDEX)`` with the span pinned by the parser if any (so error
+    ``Expr`` is forwarded as-is, and a bare host literal is materialized as a
+    typed Const with the span pinned by the parser if any (so error
     messages and dumps point at the user's source line, not this wrapper).
-    ``INDEX`` matches the dtype the parser uses for plain int literals, so
+    ``int``→``ConstInt(.., INDEX)`` and ``float``→``ConstFloat(..,
+    DEFAULT_CONST_FLOAT)`` match the parser's ``parse_constant`` rule, so
     round-tripped programs don't sprout spurious casts on otherwise-equivalent
     constants.
     """
@@ -303,7 +336,10 @@ def _scalar_operand_to_expr(value: int | Scalar | Expr) -> Expr:
         return value.unwrap()
     if isinstance(value, Expr):
         return value
-    return _ir_core.ConstInt(value, DataType.INDEX, _get_span_or_capture())
+    span = _get_span_or_capture()
+    if isinstance(value, float):
+        return _ir_core.ConstFloat(value, DataType.DEFAULT_CONST_FLOAT, span)
+    return _ir_core.ConstInt(value, DataType.INDEX, span)
 
 
 def create(
@@ -374,7 +410,7 @@ def read(tile: Tile, indices: IntLike | Sequence[IntLike]) -> Scalar:
     return Scalar(expr=call_expr)
 
 
-def write(tile: Tile, indices: IntLike | Sequence[IntLike], value: Scalar | Expr) -> Expr:
+def write(tile: Tile, indices: IntLike | Sequence[IntLike], value: Scalar | Expr | int | float) -> Tile:
     """Write a scalar value into a tile at given indices.
 
     Args:
@@ -384,13 +420,17 @@ def write(tile: Tile, indices: IntLike | Sequence[IntLike], value: Scalar | Expr
         value: Scalar value to write (DSL Scalar or raw Expr)
 
     Returns:
-        The underlying ``tile.write`` call expression. Direct callers
-        typically ignore it; the DSL parser surfaces it as an ``EvalStmt``.
+        The destination tile facade wrapping the ``tile.write`` call. The
+        result can be chained or carried; bare callers still lower it as an
+        ``EvalStmt``.
     """
     # Allow a bare IntLike as a flat 1-D index for backwards compatibility
     indices_seq: Sequence[IntLike] = [indices] if not isinstance(indices, Sequence) else indices
-    value_expr = value.unwrap() if isinstance(value, Scalar) else value
-    return _ir_ops.write(tile.unwrap(), _normalize_intlike(indices_seq), value_expr)
+    value_expr = (
+        value.unwrap() if isinstance(value, Scalar) else coerce_host_scalar(value, "tile.write", "value")
+    )
+    call_expr = _ir_ops.write(tile.unwrap(), _normalize_intlike(indices_seq), value_expr)
+    return wrap_output_like(tile, call_expr)
 
 
 def load(
@@ -401,6 +441,8 @@ def load(
     target_memory: MemorySpace | None = None,
     clamp: bool = False,
     cache: CachePolicy | None = None,
+    *,
+    attrs: dict[str, Any] | None = None,
 ) -> Tile:
     """Copy data from tensor to unified buffer (tile).
 
@@ -464,6 +506,8 @@ def load(
         clamp=clamp,
         cache=None if cache is None else int(cache),
     )
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -523,11 +567,16 @@ def store(
         atomic=int(atomic),
         st_phase=st_phase,
     )
-    return output_tensor.__class__(expr=call_expr)
+    return wrap_output_like(output_tensor, call_expr)
 
 
 def assemble(target: Tile, source: Tile, offset: Sequence[IntLike]) -> Tile:
     """Write source tile data into target tile at specified offset.
+
+    The source must live in the target's memory space: a cube-produced
+    (``Acc``) source written into a ``Vec`` target needs an explicit
+    ``pl.tile.move`` first. The converting ``Acc`` → ``Mat`` writeback is the
+    one exception and is implemented by this op itself.
 
     Args:
         target: Target tile to update
@@ -647,7 +696,7 @@ def scatter_update(input: Tile, *args: Any, **kwargs: Any) -> Tile:
     """
 
     def _unwrap(v: Any) -> Any:
-        return v.unwrap() if isinstance(v, (Tile, Scalar)) else v
+        return to_expr(v)
 
     fwd_args = tuple(_unwrap(a) for a in args)
     fwd_kwargs = {k: _unwrap(v) for k, v in kwargs.items()}
@@ -673,6 +722,8 @@ def move(
     target_memory: MemorySpace,
     blayout: TileLayout | None = None,
     slayout: TileLayout | None = None,
+    *,
+    attrs: dict[str, Any] | None = None,
 ) -> Tile:
     """Move tile between memory levels.
 
@@ -682,6 +733,9 @@ def move(
             .LeftScale, .RightScale)
         blayout: Optional block layout for the destination tile
         slayout: Optional scatter layout for the destination tile
+        attrs: Machine-only call attrs round-tripped through the printer
+            (e.g. ``pipeline_membership``) — re-attached to the Call via
+            ``ir.set_call_attrs`` (the AST parser's ``_attach_op_attrs``).
 
     Returns:
         Tile wrapping the move operation
@@ -692,10 +746,89 @@ def move(
         blayout=blayout,
         slayout=slayout,
     )
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
-def aiv_shard(x: _SplitOperandT, span: Span | None = None) -> _SplitOperandT:
+def _split_transfer_attrs(
+    op_name: str,
+    x: _SplitOperandT,
+    split: int | None,
+    lane_stride: int | None,
+) -> tuple[str, dict[str, int]]:
+    """The split-transfer authoring contract, mirroring the AST parser's
+    ``_parse_split_transfer_op``: two forms, never mixed.
+
+    * **Region form** — no ``split=``: the mode is inherited from the enclosing
+      ``for aiv_id in pl.split_aiv(mode=...)`` scope (the tracing-side region
+      channel); a ``Tile`` or a high-level ``Tensor`` operand is valid.
+    * **Outlined form** — an explicit integer ``split=``: the printer's
+      spelling for a function already lowered into the explicit form
+      (``LowerAutoVectorSplit`` / ``OutlineIncoreScopes`` output, or a
+      hand-written split_aiv kernel). The split rides on the op itself, so the
+      form round-trips without re-synthesizing the loop wrapper; it is
+      tile-only, and rejected inside a ``split_aiv`` region (the scope owns
+      the mode there).
+
+    Returns the op namespace and the op kwargs to stamp.
+    """
+    from ..distributed.typing import DistributedTensor  # noqa: PLC0415 - the rejection check (AST parity)
+
+    if isinstance(x, DistributedTensor):
+        raise TypeError(f"pl.{op_name} does not support distributed tensors (AIV/AIC split only)")
+    frame = active_frame()
+    region_mode = frame.current_split_aiv_mode() if frame is not None else None
+    if split is not None:
+        if region_mode is not None:
+            raise TypeError(
+                f"pl.{op_name}() does not take a split= argument inside a "
+                "'for ... in pl.split_aiv(...)' loop — the split mode is inherited from that scope"
+            )
+        if isinstance(x, Tensor):
+            raise TypeError(
+                f"pl.{op_name}(x, split=N) does not accept a high-level Tensor operand — "
+                "the outlined split= form is tile-only; wrap the Tensor in a "
+                "'for aiv_id in pl.split_aiv(...)' region instead"
+            )
+        if not isinstance(split, int):
+            raise TypeError(
+                f"pl.{op_name}(..., split=N) requires an integer split (the lowered "
+                f"SplitMode value), got {split!r}"
+            )
+        attrs = {"split": int(split)}
+        if lane_stride is not None:
+            if op_name == "aic_gather":
+                raise TypeError(
+                    "pl.aic_gather() does not take a lane_stride= argument: only the "
+                    "Cube -> Vector shard is ever rebalanced onto a ragged boundary's "
+                    "valid region, so the gather always re-joins the lanes on the box partition"
+                )
+            if not isinstance(lane_stride, int):
+                raise TypeError(
+                    f"pl.{op_name}(..., lane_stride=N) requires an integer partition "
+                    f"stride, got {lane_stride!r}"
+                )
+            attrs["lane_stride"] = int(lane_stride)
+        return "tile", attrs
+    if region_mode is None:
+        raise RuntimeError(
+            f"pl.{op_name}() must be used inside a 'for ... in pl.split_aiv(...)' loop "
+            "(or pass an explicit integer 'split=' in the outlined form)"
+        )
+    if lane_stride is not None:
+        raise TypeError(
+            f"pl.{op_name}() does not take a lane_stride= argument inside a "
+            "'for ... in pl.split_aiv(...)' loop — the partition follows the region's "
+            "own per-lane offsets"
+        )
+    ns = "tensor" if isinstance(x, Tensor) else "tile"
+    return ns, {"split": int(region_mode.value)}
+
+
+def aiv_shard(
+    x: _SplitOperandT, span: Span | None = None, *, split: int | None = None, lane_stride: int | None = None
+) -> _SplitOperandT:
     """Bring a cube-produced operand onto the AIV lane (AIC -> AIV crossing).
 
     In a data-parallel region (``UP_DOWN`` / ``LEFT_RIGHT``) the crossing also
@@ -704,33 +837,46 @@ def aiv_shard(x: _SplitOperandT, span: Span | None = None) -> _SplitOperandT:
     **preserves the shape**. Either way, writing it is how a C->V crossing into a
     region is named — the ``AivSplitValid`` verifier rejects an unnamed one.
 
-    The split mode is **inherited** from the enclosing
-    ``for aiv_id in pl.split_aiv(mode=...)`` scope — it is not passed here.
-    This wrapper therefore only resolves inside a parsed kernel, where the
-    parser intercepts the call and fills the inherited mode. Calling it eagerly
-    (outside a parsed program) raises, since there is no scope to read the mode
-    from.
+    Two authoring forms, never mixed (the contract mirrors the AST parser's
+    ``_parse_split_transfer_op``):
 
-    The operand may be a ``Tile`` (legacy ``@pl.program`` form -> ``tile.aiv_shard``)
-    or a high-level ``Tensor`` (``@pl.jit`` / ``pl.spmd`` form -> ``tensor.aiv_shard``,
-    lowered 1:1 to ``tile.aiv_shard`` at ConvertTensorToTileOps). The Tensor form
-    is region-only. Distributed tensors are not supported.
+    * **Region form** ``pl.aiv_shard(x)`` inside a
+      ``for aiv_id in pl.split_aiv(mode=...)`` loop — the mode is inherited
+      from that scope and never passed here. The region's trace iterable
+      pushes its mode onto the split_aiv region channel and this facade reads
+      it, stamping the ``split`` attr exactly as the parser does. The operand
+      may be a ``Tile`` (``tile.aiv_shard``) or a high-level ``Tensor``
+      (``tensor.aiv_shard``, lowered 1:1 at ConvertTensorToTileOps).
+    * **Outlined form** ``pl.tile.aiv_shard(tile, split=N)`` — the printer's
+      spelling for a function already lowered into the explicit form. The
+      split is stated on the op verbatim; the form is tile-only and rejected
+      inside a ``split_aiv`` region. ``lane_stride=`` (an integer partition
+      stride stamped by ``LowerAutoVectorSplit`` when it balances a ragged
+      boundary) rides only in this form.
+
+    Distributed tensors are not supported.
 
     Args:
         x: Input operand (2D Tile or Tensor)
         span: Optional source span
+        split: Outlined-form only: the lowered integer ``SplitMode`` value
+        lane_stride: Outlined-form only: the integer partition stride
 
     Returns:
         Operand of the same kind: the split axis halved in a data-parallel region,
         the shape unchanged in a ``mode=NONE`` one.
     """
-    raise RuntimeError(
-        "pl.aiv_shard must be used inside a 'for aiv_id in pl.split_aiv(...)' "
-        "loop, which supplies the split mode"
-    )
+    ns, attrs = _split_transfer_attrs("aiv_shard", x, split, lane_stride)
+    actual_span = _get_span_or_capture(span, frame_offset=1)
+    call_expr = _ir_core.create_op_call(f"{ns}.aiv_shard", [x.unwrap()], attrs, actual_span)
+    if isinstance(x, Tensor):
+        return _typing_cast(_SplitOperandT, Tensor(expr=call_expr))
+    return _typing_cast(_SplitOperandT, Tile(expr=call_expr))
 
 
-def aic_gather(x: _SplitOperandT, span: Span | None = None) -> _SplitOperandT:
+def aic_gather(
+    x: _SplitOperandT, span: Span | None = None, *, split: int | None = None, lane_stride: int | None = None
+) -> _SplitOperandT:
     """Hand a vector-produced operand to the cube (AIV -> AIC crossing).
 
     Inverse of [`aiv_shard`][pypto.language.tile.aiv_shard]: in a data-parallel region it **rejoins** the two
@@ -745,42 +891,60 @@ def aic_gather(x: _SplitOperandT, span: Span | None = None) -> _SplitOperandT:
     the push and still sends its own tile. Gather only a value both lanes agree
     on; if they must contribute different data, use a data-parallel region.
 
-    Like [`aiv_shard`][pypto.language.tile.aiv_shard], the split mode is
-    **inherited** from the enclosing ``for aiv_id in pl.split_aiv(mode=...)``
-    scope and must not be passed here. Calling it eagerly (outside a parsed
-    program) raises, since there is no scope to read the mode from.
+    Like [`aiv_shard`][pypto.language.tile.aiv_shard], two authoring forms,
+    never mixed (the contract mirrors the AST parser's
+    ``_parse_split_transfer_op``): the **region form** ``pl.aic_gather(x)``
+    inherits the mode from the enclosing ``for aiv_id in pl.split_aiv(...)``
+    scope (``Tile`` or ``Tensor`` operand), and the **outlined form**
+    ``pl.tile.aic_gather(tile, split=N)`` states the lowered integer split on
+    the op itself — tile-only, rejected inside a region, and never taking
+    ``lane_stride=`` (only the Cube -> Vector shard is ever rebalanced).
 
-    The operand may be a ``Tile`` (legacy ``@pl.program`` form -> ``tile.aic_gather``)
-    or a high-level ``Tensor`` (``@pl.jit`` / ``pl.spmd`` form -> ``tensor.aic_gather``,
-    lowered 1:1 to ``tile.aic_gather`` at ConvertTensorToTileOps). The Tensor form
-    is region-only. Distributed tensors are not supported.
+    The operand may be a ``Tile`` (legacy ``@pl.program`` form ->
+    ``tile.aic_gather``) or a high-level ``Tensor`` (``@pl.jit`` /
+    ``pl.spmd`` form -> ``tensor.aic_gather``, lowered 1:1 to
+    ``tile.aic_gather`` at ConvertTensorToTileOps). The Tensor form is
+    region-only. Distributed tensors are not supported.
 
     Args:
         x: Input operand (2D Tile or Tensor)
         span: Optional source span
+        split: Outlined-form only: the lowered integer ``SplitMode`` value
 
     Returns:
         Operand of the same kind: the split axis doubled in a data-parallel region,
         the shape unchanged in a ``mode=NONE`` one.
     """
-    raise RuntimeError(
-        "pl.aic_gather must be used inside a 'for aiv_id in pl.split_aiv(...)' "
-        "loop, which supplies the split mode"
-    )
+    ns, attrs = _split_transfer_attrs("aic_gather", x, split, lane_stride)
+    actual_span = _get_span_or_capture(span, frame_offset=1)
+    call_expr = _ir_core.create_op_call(f"{ns}.aic_gather", [x.unwrap()], attrs, actual_span)
+    if isinstance(x, Tensor):
+        return _typing_cast(_SplitOperandT, Tensor(expr=call_expr))
+    return _typing_cast(_SplitOperandT, Tile(expr=call_expr))
 
 
-def full(shape: list[int], dtype: DataType, value: int | float) -> Tile:
+def full(
+    shape: list[int],
+    dtype: DataType,
+    value: int | float,
+    *,
+    attrs: dict[str, Any] | None = None,
+) -> Tile:
     """Create a tile from a shape and fill with value in Vec.
 
     Args:
         shape: Shape of the tile
         dtype: Data type of the tile
         value: filling scalar
+        attrs: Machine-only call attrs round-tripped through the printer
+            (e.g. ``pipeline_membership``) — re-attached to the Call.
 
     Returns:
         Tile wrapping the full operation
     """
     call_expr = _ir_ops.full(shape, dtype, value)
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -813,7 +977,7 @@ def ci(
     Returns:
         Tile wrapping the ci operation.
     """
-    start_expr = start.unwrap() if isinstance(start, Scalar) else start
+    start_expr = to_expr(start)
     call_expr = _ir_ops.ci(
         start_expr,
         list(shape),
@@ -900,8 +1064,17 @@ def random(
     Returns:
         Tile wrapping the random operation.
     """
-    raw_seeds = (key0, key1, counter0, counter1, counter2, counter3)
-    seeds = [v.unwrap() if isinstance(v, Scalar) else v for v in raw_seeds]
+    # A fixed-length tuple splat keeps the call statically 7-positional;
+    # a variable-length ``*list`` splat defeats pyright's arity matching
+    # for the trailing shape argument.
+    seeds = (
+        to_expr(key0),
+        to_expr(key1),
+        to_expr(counter0),
+        to_expr(counter1),
+        to_expr(counter2),
+        to_expr(counter3),
+    )
     vshape = list(valid_shape) if valid_shape is not None else None
     call_expr = _ir_ops.random(*seeds, list(shape), valid_shape=vshape, dtype=dtype, rounds=rounds)
     return Tile(expr=call_expr)
@@ -920,7 +1093,7 @@ def fillpad(tile: Tile, pad_value: PadValue | int | float = PadValue.zero) -> Ti
     Returns:
         Tile wrapping the fillpad operation
     """
-    call_expr = _ir_ops.fillpad(tile.unwrap(), pad_value=pad_value)
+    call_expr = _ir_ops.fillpad(tile.unwrap(), pad_value=normalize_fillpad_pad_value(pad_value))
     return Tile(expr=call_expr)
 
 
@@ -941,7 +1114,7 @@ def fillpad_inplace(tile: Tile, pad_value: PadValue | int | float = PadValue.zer
     Returns:
         Tile with padding filled (shares memory with the input tile).
     """
-    call_expr = _ir_ops.fillpad_inplace(tile.unwrap(), pad_value=pad_value)
+    call_expr = _ir_ops.fillpad_inplace(tile.unwrap(), pad_value=normalize_fillpad_pad_value(pad_value))
     return Tile(expr=call_expr)
 
 
@@ -966,7 +1139,11 @@ def fillpad_expand(
     Returns:
         Tile wrapping the fillpad_expand operation (a new, larger tile).
     """
-    call_expr = _ir_ops.fillpad_expand(tile.unwrap(), _normalize_intlike(shape), pad_value=pad_value)
+    call_expr = _ir_ops.fillpad_expand(
+        tile.unwrap(),
+        _normalize_intlike(shape),
+        pad_value=normalize_fillpad_pad_value(pad_value),
+    )
     return Tile(expr=call_expr)
 
 
@@ -1019,7 +1196,12 @@ def get_block_num() -> Scalar:
     return Scalar(expr=call_expr)
 
 
-def add(lhs: Tile, rhs: Tile | int | float | Scalar | Expr) -> Tile:
+def add(
+    lhs: Tile,
+    rhs: Tile | int | float | Scalar | Expr,
+    *,
+    attrs: dict[str, Any] | None = None,
+) -> Tile:
     """Element-wise addition of tile and tile or scalar.
 
     Supports broadcasting when both operands are tiles. A scalar ``rhs``
@@ -1028,11 +1210,16 @@ def add(lhs: Tile, rhs: Tile | int | float | Scalar | Expr) -> Tile:
     Args:
         lhs: Left-hand side tile
         rhs: Right-hand side tile or scalar
+        attrs: Machine-only call attrs round-tripped through the printer
+            (e.g. ``pipeline_membership``) — re-attached to the Call via
+            ``ir.set_call_attrs`` (the AST parser's ``_attach_op_attrs``).
 
     Returns:
         Tile wrapping the add operation
     """
     call_expr = _ir_ops.add(lhs.unwrap(), _unwrap_rhs(rhs))
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -1163,16 +1350,21 @@ def neg(tile: Tile) -> Tile:
     return Tile(expr=call_expr)
 
 
-def exp(tile: Tile) -> Tile:
+def exp(tile: Tile, *, attrs: dict[str, Any] | None = None) -> Tile:
     """Element-wise exponential.
 
     Args:
         tile: Input tile
+        attrs: Machine-only call attrs round-tripped through the printer
+            (e.g. ``pipeline_membership``) — re-attached to the Call via
+            ``ir.set_call_attrs`` (the AST parser's ``_attach_op_attrs``).
 
     Returns:
         Tile wrapping the exp operation
     """
     call_expr = _ir_ops.exp(tile.unwrap())
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -1344,7 +1536,7 @@ def quant_mx(
     *,
     group_axis: int,
     dtype: DataType = DataType.FP8E4M3FN,
-) -> tuple[Tile, Tile]:
+) -> Tuple:
     """MXFP8 block-32 dynamic quantization with PTOAS ``grpAxis`` selection.
 
     ``group_axis`` is required and must be ``0`` or ``1`` (same meaning as
@@ -1378,11 +1570,9 @@ def quant_mx(
     if dtype != DataType.FP8E4M3FN:
         raise ValueError(f"pl.quant_mx supports only FP8E4M3FN (MXFP8), but got {dtype}")
     call_expr = _ir_ops.tquant_mx(src.unwrap(), dtype=dtype, group_axis=group_axis)
-    span = call_expr.span
-    return (
-        Tile(expr=_ir_core.TupleGetItemExpr(call_expr, 0, span)),
-        Tile(expr=_ir_core.TupleGetItemExpr(call_expr, 1, span)),
-    )
+    # The staged multi-result value: unpacking shares one _tuple_tmp temp
+    # (the parser's _bind_unpack_target shape), not a host (Tile, Tile).
+    return Tuple(expr=call_expr)
 
 
 def tmov_x2zz(
@@ -2198,7 +2388,7 @@ def expands(target: Tile, scalar: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the expands operation
     """
-    scalar_expr = scalar.unwrap() if isinstance(scalar, Scalar) else scalar
+    scalar_expr = to_expr(scalar)
     call_expr = _ir_ops.expands(target.unwrap(), scalar_expr)
     return Tile(expr=call_expr)
 
@@ -2245,12 +2435,12 @@ def cmps(lhs: Tile, rhs: int | float | Expr | Scalar, cmp_type: int = 0) -> Tile
     Returns:
         Tile wrapping a packed predicate mask. Use tile.sel with an explicit tmp tile to materialize values.
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.cmps(lhs.unwrap(), rhs_expr, cmp_type)
     return Tile(expr=call_expr)
 
 
-def max(lhs: Scalar | int | Expr, rhs: Scalar | int | Expr) -> Scalar:
+def max(lhs: Scalar | int | float | Expr, rhs: Scalar | int | float | Expr) -> Scalar:
     """Scalar max of two values.
 
     Tile reductions are direction-specific — use [`row_max`][pypto.language.tile.row_max] (collapses the
@@ -2266,7 +2456,7 @@ def max(lhs: Scalar | int | Expr, rhs: Scalar | int | Expr) -> Scalar:
     return Scalar(expr=_ir_core.max_(_scalar_operand_to_expr(lhs), _scalar_operand_to_expr(rhs)))
 
 
-def min(lhs: Scalar | int | Expr, rhs: Scalar | int | Expr) -> Scalar:
+def min(lhs: Scalar | int | float | Expr, rhs: Scalar | int | float | Expr) -> Scalar:
     """Scalar min of two values.
 
     Tile reductions are direction-specific — use [`row_min`][pypto.language.tile.row_min] (collapses the
@@ -2387,6 +2577,7 @@ def reinterpret_view(
     dtype: DataType,
     *,
     shape: Sequence[IntLike] | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> Tile:
     """Reinterpret a tile over the same bytes with a different dtype.
 
@@ -2396,12 +2587,16 @@ def reinterpret_view(
         shape: Optional byte-equivalent target shape. When omitted, the
             physically contiguous dimension is scaled according to the
             source/target dtype byte ratio.
+        attrs: Machine-only call attrs round-tripped through the printer
+            — re-attached to the Call.
 
     Returns:
         Tile wrapping the zero-copy reinterpret-view operation.
     """
     normalized_shape = None if shape is None else _normalize_intlike(shape)
     call_expr = _ir_ops.reinterpret_view(data.unwrap(), dtype, shape=normalized_shape)
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -2464,8 +2659,8 @@ def set_validshape(tile: Tile, valid_rows: IntLike, valid_cols: IntLike) -> Tile
         Tile with updated valid_shape metadata
     """
     tile_expr = tile.unwrap()
-    vr = valid_rows.unwrap() if isinstance(valid_rows, Scalar) else valid_rows
-    vc = valid_cols.unwrap() if isinstance(valid_cols, Scalar) else valid_cols
+    vr = to_expr(valid_rows)
+    vc = to_expr(valid_cols)
     call_expr = _ir_ops.set_validshape(tile_expr, vr, vc)
     return Tile(expr=call_expr)
 
@@ -2509,7 +2704,7 @@ def rems(lhs: Tile, rhs: int | float | Expr | Scalar, tmp: Tile) -> Tile:
     Returns:
         Tile wrapping the rems operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.rems(lhs.unwrap(), rhs_expr, tmp.unwrap())
     return Tile(expr=call_expr)
 
@@ -2615,7 +2810,7 @@ def fmods(lhs: Tile, rhs: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the fmods operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.fmods(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -2648,7 +2843,7 @@ def ands(lhs: Tile, rhs: int | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the ands operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.ands(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -2681,7 +2876,7 @@ def ors(lhs: Tile, rhs: int | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the ors operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.ors(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -2716,7 +2911,7 @@ def xors(lhs: Tile, rhs: int | Expr | Scalar, tmp: Tile) -> Tile:
     Returns:
         Tile wrapping the xors operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.xors(lhs.unwrap(), rhs_expr, tmp.unwrap())
     return Tile(expr=call_expr)
 
@@ -2753,7 +2948,7 @@ def shls(lhs: Tile, rhs: int | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the shls operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.shls(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -2790,7 +2985,7 @@ def shrs(lhs: Tile, rhs: int | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the shrs operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.shrs(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -2807,7 +3002,7 @@ def maximums(lhs: Tile, rhs: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the maximums operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.maximums(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -2824,7 +3019,7 @@ def minimums(lhs: Tile, rhs: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the minimums operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.minimums(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -2908,7 +3103,7 @@ def addsc(lhs: Tile, rhs: int | float | Expr | Scalar, rhs2: Tile) -> Tile:
     Returns:
         Tile wrapping the addsc operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.addsc(lhs.unwrap(), rhs_expr, rhs2.unwrap())
     return Tile(expr=call_expr)
 
@@ -2926,7 +3121,7 @@ def subsc(lhs: Tile, rhs: int | float | Expr | Scalar, rhs2: Tile) -> Tile:
     Returns:
         Tile wrapping the subsc operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.subsc(lhs.unwrap(), rhs_expr, rhs2.unwrap())
     return Tile(expr=call_expr)
 
@@ -2943,7 +3138,7 @@ def lrelu(tile: Tile, slope: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the lrelu operation
     """
-    slope_expr = slope.unwrap() if isinstance(slope, Scalar) else slope
+    slope_expr = to_expr(slope)
     call_expr = _ir_ops.lrelu(tile.unwrap(), slope_expr)
     return Tile(expr=call_expr)
 
@@ -2982,7 +3177,7 @@ def sels(mask: Tile, src: Tile, tmp: Tile, scalar: int | float | Expr | Scalar) 
     Returns:
         Tile wrapping the sels operation
     """
-    scalar_expr = scalar.unwrap() if isinstance(scalar, Scalar) else scalar
+    scalar_expr = to_expr(scalar)
     call_expr = _ir_ops.sels(mask.unwrap(), src.unwrap(), tmp.unwrap(), scalar_expr)
     return Tile(expr=call_expr)
 
@@ -3098,7 +3293,7 @@ def gather_compare(
     offset: int = 0,
     out_cols: int,
     count_dtype: int | DataType | None = None,
-) -> tuple[Tile, Tile]:
+) -> Tuple:
     """Compare-form gather (tile-level): produce (dst, cdst) — gathered indices
     and per-row match counts.
 
@@ -3143,11 +3338,9 @@ def gather_compare(
         out_cols=out_cols,
         count_dtype=count_dtype,
     )
-    span = call_expr.span
-    return (
-        Tile(expr=_ir_core.TupleGetItemExpr(call_expr, 0, span)),
-        Tile(expr=_ir_core.TupleGetItemExpr(call_expr, 1, span)),
-    )
+    # The staged multi-result value: unpacking shares one _tuple_tmp temp
+    # (the parser's _bind_unpack_target shape), not a host (Tile, Tile).
+    return Tuple(expr=call_expr)
 
 
 def scatter(dst: Tile, src: Tile, indexes: Tile) -> Tile:
@@ -3221,7 +3414,7 @@ def mscatter(src: Tile, idx: Tile, output_tensor: _TensorT) -> _TensorT:
         >>> result = pl.tile.mscatter(src_tile, idx_tile, out_tensor)
     """
     call_expr = _ir_ops.mscatter(src.unwrap(), idx.unwrap(), output_tensor.unwrap())
-    return output_tensor.__class__(expr=call_expr)
+    return wrap_output_like(output_tensor, call_expr)
 
 
 @overload
@@ -3395,7 +3588,7 @@ def mrgsort(
                 "mrgsort() format1 (block_len=...) and format2 (src1, ..., tmp) "
                 "are mutually exclusive; do not pass format2 arguments with block_len"
             )
-        block_len_expr = block_len.unwrap() if isinstance(block_len, Scalar) else block_len
+        block_len_expr = to_expr(block_len)
         call_expr = _ir_ops.mrgsort(src0.unwrap(), block_len=block_len_expr)
         return Tile(expr=call_expr)
     # format2: 2-4 way merge
@@ -3417,3 +3610,33 @@ def mrgsort(
         exhausted=exhausted,
     )
     return Tile(expr=call_expr)
+
+
+def mrgsort_format1(src0: Tile, block_len: int | Scalar) -> Tile:
+    """Single-list merge sort (format1) — the parser's roundtrip alias.
+
+    The ``block_len`` is positional (the printer emits it that way).
+    Prefer ``mrgsort(src, block_len=...)`` in user code.
+    """
+    block_len_expr = to_expr(block_len)
+    call_expr = _ir_ops.mrgsort_format1(src0.unwrap(), block_len_expr)
+    return Tile(expr=call_expr)
+
+
+def mrgsort_format2(*args: Tile, exhausted: bool = False) -> Tile:
+    """2-4 way merge sort (format2) — the parser's roundtrip alias.
+
+    Positional args: ``(src0, src1[, src2[, src3]], tmp)`` — the last
+    positional arg is always ``tmp``.
+
+    Prefer ``mrgsort(src0, src1[, src2[, src3]], tmp=<tile>)`` in user code.
+    """
+    call_expr = _ir_ops.mrgsort_format2(*(a.unwrap() for a in args), exhausted=exhausted)
+    return Tile(expr=call_expr)
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see _validation.py).
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

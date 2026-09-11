@@ -45,13 +45,8 @@ class DistributedTensorMeta(TensorMeta):
     ``validate_ir`` relies on (it reloads every dump via ``pl.loads``).
     """
 
-    def __getitem__(cls, item: Any) -> "DistributedTensor":
-        if (
-            isinstance(item, tuple)
-            and item
-            and isinstance(item[-1], str)
-            and item[-1].startswith("window_buffer=")
-        ):
+    def __getitem__(cls, item: tuple[Any, ...]) -> "DistributedTensor":
+        if item and isinstance(item[-1], str) and item[-1].startswith("window_buffer="):
             item = item[:-1]
         return cast("DistributedTensor", super().__getitem__(item))
 
@@ -69,7 +64,13 @@ class DistributedTensor(Tensor, metaclass=DistributedTensorMeta):
 
     @classmethod
     def __class_getitem__(cls, item: tuple[Sequence[Any], Any]) -> "DistributedTensor":
-        return type(cls).__getitem__(cls, item)
+        """The static-checker hook for ``DistributedTensor[...]`` syntax.
+
+        Runtime never calls this — the ``DistributedTensorMeta.__getitem__``
+        subscript protocol takes precedence — but pyright resolves class
+        subscripts through this signature (the ``Tensor`` precedent).
+        """
+        raise NotImplementedError
 
 
 __all__ = ["DistributedTensor"]

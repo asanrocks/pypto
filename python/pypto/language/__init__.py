@@ -58,27 +58,15 @@ from pypto.pypto_core.ir import (
     TileLayout,
 )
 
-from .typing import arg_direction as adir
+from . import intrin as _intrin_module
 from . import parser
+from .compat.diagnostics import static_assert, static_print
 from .constructs import optimizations as optimizations
-from .dsl_api import (
-    at,
-    cluster,
-    cond,
-    const,
-    func_attr,
-    graph,
-    parallel,
-    pipeline,
-    range,
-    split_aiv,
-    spmd,
-    static_assert,
-    static_print,
-    unroll,
-    while_,
-    yield_,
-)
+from .constructs.func_attrs import func_attr
+from .constructs.loops import parallel, pipeline, range, unroll
+from .constructs.optimizations import cross_core_slot, split
+from .constructs.scopes import ScopeMode, at, cluster, graph, manual_scope, scope, split_aiv, spmd
+from .constructs.submit import spmd_submit, submit
 from .op import array_ops as array
 from .op import prefetch_ops as prefetch
 from .op import system_ops as system
@@ -130,7 +118,6 @@ from .op.tile_ops import (
     aic_gather,
     aiv_shard,
     cmps,
-    create_tile,
     gatherb,
     gemv,
     gemv_acc,
@@ -192,6 +179,7 @@ from .op.unified_ops import (
     col_sum,
     concat,
     cos,
+    create_tile,
     div,
     exp,
     expands,
@@ -250,7 +238,6 @@ from .op.unified_ops import (
     xor,
     xors,
 )
-from .constructs.optimizations import cross_core_slot, split
 from .parser.decorator import (
     InlineFunction,
     function,
@@ -260,7 +247,6 @@ from .parser.decorator import (
     program_parser,
 )
 from .parser.text_parser import loads, loads_program, parse, parse_program
-from .scope import ScopeMode, manual_scope, scope, spmd_submit, submit
 from .typing import (
     RUNTIME,
     Array,
@@ -279,6 +265,8 @@ from .typing import (
     Tuple,
     dynamic,
 )
+from .typing import arg_direction as adir
+from .typing.const import const
 
 # Short alias for MemorySpace (pl.Mem.Vec instead of pl.MemorySpace.Vec)
 Mem = MemorySpace
@@ -318,7 +306,10 @@ TASK_ID = DataType.TASK_ID
 # ``pl.TaskId`` is equivalent to ``pl.Scalar[pl.TASK_ID]``.
 TaskId = Scalar[TASK_ID]
 
+intrin = _intrin_module
+
 __all__ = [
+    "intrin",
     "jit",
     "JITFunction",
     "function",
@@ -348,9 +339,6 @@ __all__ = [
     "parallel",
     "unroll",
     "pipeline",
-    "while_",
-    "yield_",
-    "cond",
     "static_print",
     "static_assert",
     "func_attr",

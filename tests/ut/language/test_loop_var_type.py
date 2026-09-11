@@ -19,12 +19,12 @@ run.
 1. Loop variables from pl.range/parallel/unroll are ``Scalar``. If one regresses
    to ``int``, pyright reports "Argument of type 'int' cannot be assigned to
    parameter of type 'Scalar'" on every ``accept_scalar()`` call below.
-2. A loop-carried value keeps its concrete tensor subclass. The carry TypeVars
-   in ``dsl_api`` are *bound*, so they solve to the argument's own type. If one
-   regresses to a constrained ``TypeVar(..., "Tensor", ...)``, the solve
-   collapses the subclass to plain ``Tensor`` and every ``accept_distributed()``
-   call below reports "Argument of type 'Tensor' cannot be assigned to parameter
-   of type 'DistributedTensor'".
+2. A loop-carried value keeps its concrete tensor subclass. The carry
+   TypeVars in ``pl.intrin.carry`` are *bound*, so they solve to the argument's
+   own type. If one regresses to a constrained ``TypeVar(..., "Tensor", ...)``,
+   the solve collapses the subclass to plain ``Tensor`` and every
+   ``accept_distributed()`` call below reports "Argument of type 'Tensor'
+   cannot be assigned to parameter of type 'DistributedTensor'".
 """
 
 import pypto.language as pl
@@ -48,17 +48,9 @@ class TestLoopVarType:
         for i in pl.range(10):
             accept_scalar(i)
 
-    def test_range_loop_var_with_init_values(self):
-        for j, (t,) in pl.range(0, 8, 1, init_values=(pl.Scalar[pl.INDEX],)):
-            accept_scalar(j)
-
     def test_parallel_loop_var(self):
         for k in pl.parallel(4):
             accept_scalar(k)
-
-    def test_parallel_loop_var_with_init_values(self):
-        for m, (t,) in pl.parallel(0, 4, 1, init_values=(pl.Scalar[pl.INDEX],)):
-            accept_scalar(m)
 
     def test_unroll_loop_var(self):
         for n in pl.unroll(3):
@@ -76,21 +68,26 @@ class TestLoopCarrySubclass:
 
     def test_range_carry_keeps_distributed_tensor(self):
         signal = pld.DistributedTensor[[16, 16], pl.INT32]
-        for _i, (carried,) in pl.range(1, init_values=(signal,)):
+        (carried,) = pl.intrin.carry(signal)
+        for _i in pl.range(1):
             accept_distributed(carried)
-            accept_distributed(pl.yield_(carried))
+            pl.intrin.yield_(carried)
 
     def test_while_carry_keeps_distributed_tensor(self):
         signal = pld.DistributedTensor[[16, 16], pl.INT32]
-        for (carried,) in pl.while_(init_values=(signal,)):
+        (carried,) = pl.intrin.carry(signal)
+        host_gate = True
+        while host_gate:  # host predicate: one pass, then stop
             accept_distributed(carried)
-            accept_distributed(pl.yield_(carried))
+            pl.intrin.yield_(carried)
+            host_gate = False
 
     def test_multi_carry_keeps_each_position(self):
         """Each carry slot has its own TypeVar, so the subclass survives per slot."""
         signal = pld.DistributedTensor[[16, 16], pl.INT32]
         plain = pl.Tensor[[16, 16], pl.INT32]
-        for _i, (dist, tensor) in pl.range(1, init_values=(signal, plain)):
+        (dist, tensor) = pl.intrin.carry(signal, plain)
+        for _i in pl.range(1):
             accept_distributed(dist)
             accept_tensor(tensor)
 
