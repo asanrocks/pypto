@@ -24,7 +24,7 @@ import pypto.ir.utils as pypto_ir_utils
 import pypto.language as pl
 import pypto.language.op as language_op
 import pytest
-from pypto import DataType, ir
+from pypto import DataType, ir, pypto_core
 from pypto.language.op import tile_ops, unified_ops
 from pypto.language.typing import Scalar, Tensor, Tile
 
@@ -1762,15 +1762,29 @@ class TestUnifiedOpsCrossPathKwargs:
 # Run in a subprocess with the ``pypto`` package reached through a symlink.
 # ``argv[1]`` is the symlinked sys.path entry the import is expected to use.
 _SYMLINKED_IMPORT_PROBE = """\
+import importlib.util
 import sys
 import warnings
+
+link_root, core_so = sys.argv[1], sys.argv[2]
+
+# An inplace editable install resolves ``pypto`` through a ``sys.meta_path``
+# finder before ``sys.path`` (PYTHONPATH) is consulted, which would bypass the
+# symlink and make the check vacuous — drop it so the symlinked root wins.
+sys.meta_path = [f for f in sys.meta_path if "_editable_" not in type(f).__module__]
+
+# The C++ extension has no Python frames, so it may load from the real
+# checkout; only the *package* must resolve through the symlink.
+spec = importlib.util.spec_from_file_location("pypto.pypto_core", core_so)
+core = importlib.util.module_from_spec(spec)
+sys.modules["pypto.pypto_core"] = core
+spec.loader.exec_module(core)
 
 import pypto
 from pypto import DataType, ir
 from pypto.language.op import unified_ops
 from pypto.language.typing import Tensor
 
-link_root = sys.argv[1]
 # Without this an installed copy or a stray PYTHONPATH would make the whole
 # check vacuous by importing through the real path.
 assert pypto.__file__.startswith(link_root), f"import bypassed the symlink: {pypto.__file__}"
@@ -1980,7 +1994,7 @@ class TestUnifiedSlicePadValue:
         script.write_text(_SYMLINKED_IMPORT_PROBE)
 
         result = subprocess.run(
-            [sys.executable, str(script), str(link_root)],
+            [sys.executable, str(script), str(link_root), str(pypto_core.__file__)],
             capture_output=True,
             text=True,
             env={**os.environ, "PYTHONPATH": str(link_root)},
