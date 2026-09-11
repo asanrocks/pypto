@@ -61,7 +61,7 @@ class TestParse:
         code = """
 import pypto.language as pl
 
-@pl.function
+@pl.function_parser
 def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
     return result
@@ -75,7 +75,7 @@ def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     def test_parse_simple_function_without_import(self):
         """Test parsing simple function without import statement (auto-injected)."""
         code = """
-@pl.function
+@pl.function_parser
 def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
     return result
@@ -89,7 +89,7 @@ def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     def test_parse_multiple_params(self):
         """Test parsing function with multiple parameters."""
         code = """
-@pl.function
+@pl.function_parser
 def add_three(
     x: pl.Tensor[[64], pl.FP32],
     y: pl.Tensor[[64], pl.FP32],
@@ -107,7 +107,7 @@ def add_three(
     def test_parse_with_for_loop(self):
         """Test parsing function with for loop control flow."""
         code = """
-@pl.function
+@pl.function_parser
 def sum_loop(x: pl.Tensor[[10], pl.FP32]) -> pl.Tensor[[10], pl.FP32]:
     init_sum: pl.Tensor[[10], pl.FP32] = pl.create_tensor([10], dtype=pl.FP32)
     for i, (running_sum,) in pl.range(5, init_values=(init_sum,)):
@@ -122,7 +122,7 @@ def sum_loop(x: pl.Tensor[[10], pl.FP32]) -> pl.Tensor[[10], pl.FP32]:
     def test_parse_with_multiple_statements(self):
         """Test parsing function with multiple statements."""
         code = """
-@pl.function
+@pl.function_parser
 def multi_op(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     a: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
     b: pl.Tensor[[64], pl.FP32] = pl.add(a, 1.0)
@@ -145,11 +145,11 @@ y = x + 1
     def test_parse_multiple_functions_error(self):
         """Test that parsing code with multiple functions raises ValueError."""
         code = """
-@pl.function
+@pl.function_parser
 def func1(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 
-@pl.function
+@pl.function_parser
 def func2(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 """
@@ -159,7 +159,7 @@ def func2(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     def test_parse_syntax_error(self):
         """Test that parsing code with syntax error raises SyntaxError."""
         code = """
-@pl.function
+@pl.function_parser
 def bad_syntax(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x +
 """
@@ -169,7 +169,7 @@ def bad_syntax(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     def test_parse_with_custom_filename(self):
         """Test that custom filename is used in error reporting."""
         code = """
-@pl.function
+@pl.function_parser
 def bad_func(x):
     return x
 """
@@ -181,7 +181,7 @@ def bad_func(x):
         code = """
 from pypto import language as pl
 
-@pl.function
+@pl.function_parser
 def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
     return result
@@ -193,7 +193,7 @@ def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     def test_parse_with_different_dtypes(self):
         """Test parsing function with various data types."""
         code = """
-@pl.function
+@pl.function_parser
 def cast_op(
     fp16: pl.Tensor[[64], pl.FP16],
     fp32: pl.Tensor[[64], pl.FP32],
@@ -217,7 +217,7 @@ class TestLoad:
         code = """
 import pypto.language as pl
 
-@pl.function
+@pl.function_parser
 def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
     return result
@@ -239,7 +239,7 @@ def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     def test_load_function_without_import(self):
         """Test loading function without import (auto-injected)."""
         code = """
-@pl.function
+@pl.function_parser
 def multiply(x: pl.Tensor[[32, 32], pl.FP32]) -> pl.Tensor[[32, 32], pl.FP32]:
     result: pl.Tensor[[32, 32], pl.FP32] = pl.mul(x, 2.0)
     return result
@@ -265,7 +265,7 @@ def multiply(x: pl.Tensor[[32, 32], pl.FP32]) -> pl.Tensor[[32, 32], pl.FP32]:
         code = """
 import pypto.language as pl
 
-@pl.function
+@pl.function_parser
 def complex_op(
     x: pl.Tensor[[64, 128], pl.FP16],
     y: pl.Tensor[[64, 128], pl.FP16],
@@ -291,7 +291,7 @@ def complex_op(
     def test_load_preserves_filename_in_errors(self):
         """Test that errors reference the correct file path."""
         code = """
-@pl.function
+@pl.function_parser
 def bad_func(x):
     return x
 """
@@ -311,14 +311,14 @@ class TestIntegration:
         """Test that @pl.function decorator and pl.parse produce equivalent results."""
 
         # Using decorator
-        @pl.function
+        @pl.function_parser
         def func_decorator(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
         # Using parse
         code = """
-@pl.function
+@pl.function_parser
 def func_parse(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
     return result
@@ -334,7 +334,7 @@ def func_parse(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     def test_serialization_of_parsed_function(self):
         """Test that parsed functions can be serialized and deserialized."""
         code = """
-@pl.function
+@pl.function_parser
 def serializable(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 """
@@ -358,9 +358,9 @@ class TestParseProgram:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class SimpleProgram:
-    @pl.function
+    @pl.function_parser
     def add_one(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
         return result
@@ -373,9 +373,9 @@ class SimpleProgram:
     def test_parse_simple_program_without_import(self):
         """Test parsing simple program without import statement (auto-injected)."""
         code = """
-@pl.program
+@pl.program_parser
 class SimpleProgram:
-    @pl.function
+    @pl.function_parser
     def add_one(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
         return result
@@ -388,14 +388,14 @@ class SimpleProgram:
     def test_parse_program_with_multiple_functions(self):
         """Test parsing program with multiple functions."""
         code = """
-@pl.program
+@pl.program_parser
 class MathOps:
-    @pl.function
+    @pl.function_parser
     def square(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
         result: pl.Tensor[[1], pl.INT32] = pl.mul(x, x)
         return result
 
-    @pl.function
+    @pl.function_parser
     def cube(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
         x_sq: pl.Tensor[[1], pl.INT32] = self.square(x)
         result: pl.Tensor[[1], pl.INT32] = pl.mul(x, x_sq)
@@ -409,14 +409,14 @@ class MathOps:
     def test_parse_program_with_cross_function_calls(self):
         """Test parsing program with cross-function calls."""
         code = """
-@pl.program
+@pl.program_parser
 class CallTest:
-    @pl.function
+    @pl.function_parser
     def helper(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
         result: pl.Tensor[[1], pl.INT32] = pl.mul(x, 2)
         return result
 
-    @pl.function
+    @pl.function_parser
     def caller(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
         result: pl.Tensor[[1], pl.INT32] = self.helper(x)
         return result
@@ -434,7 +434,7 @@ class CallTest:
     def test_parse_program_no_program_error(self):
         """Test that code without @pl.program raises error."""
         code = """
-@pl.function
+@pl.function_parser
 def standalone(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 """
@@ -444,15 +444,15 @@ def standalone(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     def test_parse_program_multiple_programs_error(self):
         """Test that multiple @pl.program classes raises error."""
         code = """
-@pl.program
+@pl.program_parser
 class Program1:
-    @pl.function
+    @pl.function_parser
     def func1(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
         return x
 
-@pl.program
+@pl.program_parser
 class Program2:
-    @pl.function
+    @pl.function_parser
     def func2(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
         return x
 """
@@ -462,9 +462,9 @@ class Program2:
     def test_parse_program_syntax_error(self):
         """Test that syntax errors are properly reported."""
         code = """
-@pl.program
+@pl.program_parser
 class BadSyntax:
-    @pl.function
+    @pl.function_parser
     def broken(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
         return x +
 """
@@ -481,9 +481,9 @@ class TestLoadProgram:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class FileProgram:
-    @pl.function
+    @pl.function_parser
     def add(self, x: pl.Tensor[[64], pl.FP32], y: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         result: pl.Tensor[[64], pl.FP32] = pl.add(x, y)
         return result
@@ -509,7 +509,7 @@ class FileProgram:
     def test_parse_function_with_scalar_param(self):
         """Test parsing function with scalar parameter from text."""
         code = """
-@pl.function
+@pl.function_parser
 def add_scalar(x: pl.Tensor[[64], pl.FP32], scalar: pl.Scalar[pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     result: pl.Tensor[[64], pl.FP32] = pl.add(x, scalar)
     return result
@@ -530,7 +530,7 @@ class TestExecErrorDiagnostics:
 
         # pl.FunctionType exists but FunctionType.BadType does not — caught by pre-validator
         code = """
-@pl.function(type=pl.FunctionType.BadType)
+@pl.function_parser(type=pl.FunctionType.BadType)
 def bad(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 """
@@ -545,7 +545,7 @@ def bad(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         from pypto.language.parser.diagnostics import ParserSyntaxError  # noqa: PLC0415
 
         code = """
-@pl.function(type=pl.FunctionType.BadType)
+@pl.function_parser(type=pl.FunctionType.BadType)
 def bad(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 """
@@ -560,7 +560,7 @@ def bad(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         from pypto.language.parser.diagnostics import ParserSyntaxError  # noqa: PLC0415
 
         code = """
-@pl.function(type=pl.FunctionType.BadType)
+@pl.function_parser(type=pl.FunctionType.BadType)
 def bad(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 """
@@ -575,7 +575,7 @@ def bad(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         from pypto.language.parser.diagnostics import ParserSyntaxError  # noqa: PLC0415
 
         code = """
-@pl.function(type=pl.FunctionType.BadType)
+@pl.function_parser(type=pl.FunctionType.BadType)
 def bad(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 """
@@ -614,7 +614,7 @@ def bad(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         from pypto.language.parser.diagnostics import ParserSyntaxError  # noqa: PLC0415
 
         code = """
-@pl.function(type=pl.FunctionType.BadType)
+@pl.function_parser(type=pl.FunctionType.BadType)
 def bad(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 """
@@ -632,9 +632,9 @@ class TestScalarRangeRoundTrip:
     def test_scalar_stop_roundtrip(self):
         """Test round-trip: pl.range(n) where n is Scalar[INT64]."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 for i in pl.range(n):
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
@@ -654,9 +654,9 @@ class TestScalarRangeRoundTrip:
     def test_scalar_start_stop_step_roundtrip(self):
         """Test round-trip: pl.range(0, n, s) where n, s are Scalar[INT64]."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 n: pl.Scalar[pl.INT64],
@@ -679,9 +679,9 @@ class TestScalarRangeRoundTrip:
     def test_scalar_expression_roundtrip(self):
         """Test round-trip: pl.range(n * 2) where n is Scalar[INT64]."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 for i in pl.range(n * 2):
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
@@ -697,9 +697,9 @@ class TestScalarRangeRoundTrip:
     def test_scalar_range_with_iter_args_roundtrip(self):
         """Test round-trip: pl.range(n, init_values=(...)) where n is Scalar[INT64]."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                 for i, (acc,) in pl.range(n, init_values=(init,)):
@@ -718,9 +718,9 @@ class TestScalarRangeRoundTrip:
     def test_scalar_parallel_roundtrip(self):
         """Test round-trip: pl.parallel(n) where n is Scalar[INT64]."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 for i in pl.parallel(n):
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
@@ -736,7 +736,7 @@ class TestScalarRangeRoundTrip:
     def test_scalar_range_text_parse(self):
         """Test parsing Scalar range directly from text string."""
         code = """
-@pl.function
+@pl.function_parser
 def scalar_range_func(
     n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]
 ) -> pl.Tensor[[64], pl.FP32]:
@@ -753,7 +753,7 @@ def scalar_range_func(
     def test_scalar_range_complex_expression_text_parse(self):
         """Test parsing Scalar range with complex expression from text string."""
         code = """
-@pl.function
+@pl.function_parser
 def complex_range(
     n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]
 ) -> pl.Tensor[[64], pl.FP32]:
@@ -784,9 +784,9 @@ class TestErrorCaretAlignment:
         ``@pl.jit``'s ``ast.unparse`` emits it.
         """
         code = """
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(self, x: pl.Tensor[[128], pl.FP16]) -> pl.Tensor[[128], pl.FP32]:
         out = pl.create_tensor([128], dtype=pl.FP32)
         with pl.manual_scope():
@@ -815,9 +815,9 @@ class Prog:
         """A generic parse error in a ``<string>`` program points the caret at the
         real offending line (guards the general renderer alignment bug)."""
         code = """
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(self, x: pl.Tensor[[128], pl.FP16]) -> pl.Tensor[[128], pl.FP32]:
         a = pl.create_tensor([128], dtype=pl.FP32)
         b = pl.create_tensor([128], dtype=pl.FP32)

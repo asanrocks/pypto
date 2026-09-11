@@ -82,9 +82,9 @@ def test_comm_ctx_param_is_spelled_with_the_wrapper_only():
     the parser runs, so the raw name cannot appear in that position at all.
     """
 
-    @pl.program
+    @pl.program_parser
     class Wrapper:
-        @pl.function
+        @pl.function_parser
         def worker(self, data: pld.DistributedTensor[[64], pl.FP32], ctx: pld.CommCtx):
             pld.system.wait(data, offsets=[0], expected=1, cmp=pld.WaitCmp.Eq)
 
@@ -121,9 +121,9 @@ def test_comm_ctx_param_prints_with_the_wrapper_spelling():
     produces — only type checks when the printer uses the wrapper name.
     """
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def worker(self, data: pld.DistributedTensor[[64], pl.FP32], ctx: pld.CommCtx):
             return pld.system.rank(ctx)
 
@@ -140,9 +140,9 @@ def test_comm_ctx_param_feeds_rank_like_a_queried_handle():
     checks with the wrapper spelling — ``pld.system.rank`` takes a ``CommCtx``.
     """
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def worker(self, data: pld.DistributedTensor[[64], pl.FP32], ctx: pld.CommCtx):
             return pld.system.rank(ctx)
 
@@ -154,9 +154,9 @@ def test_comm_ctx_param_feeds_rank_like_a_queried_handle():
 def test_get_comm_ctx_returns_comm_ctx_typed_call():
     """``pld.get_comm_ctx(data)`` parses to a Call of type CommCtxType."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def worker(self, data: pld.DistributedTensor[[64], pl.FP32]):
             ctx = pld.get_comm_ctx(data)
             return ctx
@@ -172,9 +172,9 @@ def test_get_comm_ctx_returns_comm_ctx_typed_call():
 def test_rank_short_form():
     """``pld.rank(ctx)`` (short form) parses to the rank op with a UINT32 result."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def worker(self, data: pld.DistributedTensor[[64], pl.FP32]):
             ctx = pld.get_comm_ctx(data)
             return pld.rank(ctx)
@@ -187,9 +187,9 @@ def test_rank_short_form():
 
 
 def test_nranks_short_form():
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def worker(self, data: pld.DistributedTensor[[64], pl.FP32]):
             ctx = pld.get_comm_ctx(data)
             return pld.nranks(ctx)
@@ -205,9 +205,9 @@ def test_long_form_system_ops():
     """``pld.system.rank`` / ``pld.system.nranks`` (canonical 3-segment) parse
     to the same registered IR op as the short form."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def worker(self, data: pld.DistributedTensor[[64], pl.FP32]):
             ctx = pld.system.get_comm_ctx(data)
             return pld.system.rank(ctx) + pld.system.nranks(ctx)
@@ -221,9 +221,9 @@ def test_long_form_system_ops():
 def test_defer_wait_long_form_parses_and_round_trips():
     """The canonical deferred-wait spelling creates the registered IR op."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def worker(self, signal: pld.DistributedTensor[[4], pl.INT32]):
             pld.system.defer_wait(signal, offsets=[0], expected=1, cmp=pld.WaitCmp.Ge)
 
@@ -240,9 +240,9 @@ def test_defer_wait_long_form_parses_and_round_trips():
 def test_defer_wait_accepts_index_expected_and_round_trips():
     """A ``pl.range`` induction variable is a valid INDEX threshold."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def worker(self, signal: pld.DistributedTensor[[4], pl.INT32]):
             for expected in pl.range(1, 4):
                 pld.system.defer_wait(signal, offsets=[0], expected=expected, cmp=pld.WaitCmp.Ge)
@@ -261,9 +261,9 @@ def test_defer_wait_rejects_float_offset():
     """The parser surfaces the integer/index coordinate contract."""
     with pytest.raises(InvalidOperationError, match="offset 0 must be an integer or index scalar"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def worker(self, signal: pld.DistributedTensor[[4], pl.INT32]):
                 pld.system.defer_wait(
                     signal,
@@ -277,9 +277,9 @@ def test_defer_wait_rejects_float_expected():
     """The parser rejects a non-integer dynamic threshold before lowering."""
     with pytest.raises(InvalidOperationError, match="expected must be an integer or index scalar"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def worker(
                 self,
                 signal: pld.DistributedTensor[[4], pl.INT32],
@@ -292,9 +292,9 @@ def test_defer_wait_rejects_eq_comparison():
     """The parser surfaces the verifier's monotonic-comparison contract."""
     with pytest.raises(InvalidOperationError, match=r"only supports WaitCmp\.Ge"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def worker(self, signal: pld.DistributedTensor[[4], pl.INT32]):
                 pld.system.defer_wait(signal, offsets=[0], expected=1, cmp=pld.WaitCmp.Eq)
 
@@ -302,9 +302,9 @@ def test_defer_wait_rejects_eq_comparison():
 def test_rank_inline_nested_get_comm_ctx():
     """``pld.rank(pld.get_comm_ctx(data))`` parses to the nested Call form."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def worker(self, data: pld.DistributedTensor[[64], pl.FP32]):
             return pld.rank(pld.get_comm_ctx(data))
 
@@ -316,9 +316,9 @@ def test_rank_inline_nested_get_comm_ctx():
 def test_rank_and_nranks_compose_in_expression():
     """rank + nranks composes through arithmetic; both Calls survive in IR."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def worker(self, data: pld.DistributedTensor[[64], pl.FP32]):
             ctx = pld.get_comm_ctx(data)
             return pld.rank(ctx) + pld.nranks(ctx)
@@ -332,9 +332,9 @@ def test_get_comm_ctx_rejects_plain_tensor():
     """The C++ verifier refuses a plain ``pl.Tensor`` — precise ObjectKind match."""
     with pytest.raises(InvalidOperationError, match="DistributedTensor"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def worker(self, x: pl.Tensor[[64], pl.FP32]):
                 return pld.get_comm_ctx(x)  # type: ignore[arg-type]
 
@@ -343,9 +343,9 @@ def test_rank_rejects_non_comm_ctx_arg():
     """The C++ verifier refuses any non-CommCtx argument to pld.system.rank."""
     with pytest.raises(InvalidOperationError, match="CommCtx"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def worker(self, data: pld.DistributedTensor[[64], pl.FP32]):
                 return pld.rank(data)  # type: ignore[arg-type]
 
@@ -354,9 +354,9 @@ def test_unknown_system_op_rejected():
     """Unknown 3-segment ``pld.system.<foo>`` produces a clear parser error."""
     with pytest.raises(InvalidOperationError, match=r"pld\.system\.foo"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def worker(self, data: pld.DistributedTensor[[64], pl.FP32]):
                 ctx = pld.system.get_comm_ctx(data)
                 return pld.system.foo(ctx)  # type: ignore[attr-defined]

@@ -24,6 +24,12 @@ from pypto.ir import OptimizationStrategy, PassManager
 from pypto.pypto_core import passes as core_passes
 
 
+def _expect_trace_cycle(program_class: type) -> type:
+    with pytest.raises(TypeError, match="recursive call cycle detected"):
+        pl.program(program_class)
+    return program_class
+
+
 class TestInlineFunctionsBasic:
     """Single-call-site, single-return cases."""
 
@@ -608,9 +614,9 @@ class TestInlineFunctionsCycles:
     """Cycle detection in the Inline → Inline call graph."""
 
     def test_self_recursion_errors(self):
-        """An Inline function calling itself raises ValueError."""
+        """Tracing rejects recursive programs before InlineFunctions runs."""
 
-        @pl.program
+        @_expect_trace_cycle
         class Before:
             @pl.function(type=pl.FunctionType.Inline)
             def loop(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
@@ -622,13 +628,10 @@ class TestInlineFunctionsCycles:
                 r: pl.Tensor[[1], pl.INT32] = self.loop(x)
                 return r
 
-        with pytest.raises(ValueError, match="Cycle detected"):
-            passes.inline_functions()(Before)
-
     def test_mutual_recursion_errors(self):
-        """A → B → A (both Inline) raises ValueError naming the cycle."""
+        """Tracing rejects recursive programs before InlineFunctions runs."""
 
-        @pl.program
+        @_expect_trace_cycle
         class Before:
             @pl.function(type=pl.FunctionType.Inline)
             def a(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
@@ -644,9 +647,6 @@ class TestInlineFunctionsCycles:
             def main(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 r: pl.Tensor[[1], pl.INT32] = self.a(x)
                 return r
-
-        with pytest.raises(ValueError, match="Cycle detected.*Inline"):
-            passes.inline_functions()(Before)
 
 
 class TestInlineFunctionsBodyShapes:
@@ -693,7 +693,7 @@ class TestInlineFunctionsBodyShapes:
         return var) so the spliced shape is hand-derivable: ``CloneInlineBody``
         deep-clones the For body with ``x→a``, ``out→ext`` (param substitution
         carried into both use- and def-sites, src lines 224-242), the base
-        IRMutator mints a fresh loop var, and the trailing ``return out`` aliases
+        IRMutator creates a fresh loop var, and the trailing ``return out`` aliases
         to the call-site LHS (``r = ext``)."""
 
         @pl.program

@@ -5991,15 +5991,17 @@ class TestTileLoadStoreShapeElements:
     def test_dsl_load_rejects_nested_valid_shape_positional(self):
         """The user-facing path: an author who reads valid_shape as [start, extent] pairs.
 
-        Positionally, the parser resolves the closure var into a tuple of tuples,
-        so the deducer is what has to reject it — this spelling used to compile to
-        an out-of-bounds ``tload`` with no diagnostic at any layer. The var is
-        annotated ``Any``, as in the offsets case above, so the shape of the value
-        is only knowable at parse time: exactly what a static checker cannot catch.
+        Both spellings meet the shared operand coercion (``one bracket level,
+        not nested pairs`` — the tracing-side message; the parser's deducer had
+        its own wording for the same rejection). This spelling used to compile
+        to an out-of-bounds ``tload`` with no diagnostic at any layer. The var
+        is annotated ``Any``, as in the offsets case above, so the shape of the
+        value is only knowable at trace time: exactly what a static checker
+        cannot catch.
         """
         pairs: Any = [[0, 40], [0, 56]]
 
-        with pytest.raises(InvalidOperationError, match="valid_shape tuple element 0 must be ScalarType"):
+        with pytest.raises(InvalidOperationError, match="one bracket level, not nested pairs"):
 
             @pl.function
             def func(

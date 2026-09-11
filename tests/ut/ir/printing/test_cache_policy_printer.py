@@ -251,12 +251,19 @@ def test_roundtrip_multiple_declarations_and_both_policies():
     assert second == first + 1, text
 
 
-def test_declaration_written_late_prints_first():
+def test_roundtrip_prints_the_marker_before_the_body():
     """The round-trip is position-normalising: markers lead the scope body.
 
-    The declaration describes the whole scope, so where the author wrote it in
-    the body carries no meaning — the printer emits it first, and the fixpoint
-    is reached on the very first reprint rather than drifting.
+    The declaration describes the whole scope, so the printer emits it first
+    and the fixpoint is reached on the very first reprint rather than
+    drifting. The late-written *input* is a parser-frontend fact — the AST
+    parser hoists markers from any top-level body position, while tracing
+    (execute-and-collect, no lookahead) requires the declaration before the
+    scope's first statement — so the late-write normalization itself is
+    pinned by the parser twin
+    (``tests/ut/ir/parser/test_cache_policy_roundtrip.py::test_roundtrip_normalises_position_of_a_late_declaration``);
+    this fixture writes the marker first and pins the printer's leading-
+    statement placement.
     """
 
     @pl.program
@@ -269,8 +276,8 @@ def test_declaration_written_late_prints_first():
             out: pl.Out[pl.Tensor[[256, 256], pl.FP32]],
         ) -> pl.Tensor[[256, 256], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP, name_hint="mm"):
-                c: pl.Tensor[[256, 256], pl.FP32] = pl.matmul(a, b, out_dtype=pl.FP32)
                 pl.set_cache_policy(b, pl.CachePolicy.BYPASS)
+                c: pl.Tensor[[256, 256], pl.FP32] = pl.matmul(a, b, out_dtype=pl.FP32)
                 out = pl.assemble(out, c, [0, 0])
             return out
 

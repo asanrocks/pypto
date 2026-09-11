@@ -451,10 +451,14 @@ class TestOutlineGraphScopesFastPath:
 
 
 class TestGraphScopeParsing:
-    """Frontend surface: what ``pl.graph`` accepts and what it refuses."""
+    """Frontend surface: what ``pl.graph`` accepts and what it refuses.
+
+    The name is the graph key, so the construct pins it (one non-empty string
+    literal — Python's own signature error when absent); placement rules are
+    checked at the trace-enter hook with the parser's shared diagnostics."""
 
     def test_region_name_is_required(self):
-        with pytest.raises(ParserSyntaxError, match=r"exactly one positional argument"):
+        with pytest.raises(TypeError, match=r"required positional argument: 'name'"):
 
             @pl.program
             class Bad:
@@ -465,13 +469,13 @@ class TestGraphScopeParsing:
                     return y
 
     def test_region_name_must_be_a_string_literal(self):
-        with pytest.raises(ParserSyntaxError, match=r"must be a string literal"):
+        with pytest.raises(TypeError, match=r"must be a string literal"):
 
             @pl.program
             class Bad:
                 @pl.function
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                    # A non-string literal is exactly what this test feeds the parser.
+                    # A non-string literal is exactly what this test feeds the construct.
                     with pl.graph(4):  # type: ignore[arg-type]
                         y: pl.Tensor[[64], pl.FP32] = pl.add(x, x)
                     return y
@@ -530,7 +534,7 @@ class TestGraphScopeParsing:
                     return y
 
     def test_as_clause_is_rejected(self):
-        with pytest.raises(ParserSyntaxError, match=r"as \.\.\.:` is not supported"):
+        with pytest.raises(TypeError, match=r"with pl\.graph\(\.\.\.\) as \.\.\.: is not supported"):
 
             @pl.program
             class Bad:

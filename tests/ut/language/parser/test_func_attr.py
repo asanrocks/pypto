@@ -42,9 +42,9 @@ def _source(prologue):
 import pypto.language as pl
 
 
-@pl.program
+@pl.program_parser
 class P:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
         {prologue}
         out[0:64] = x[0:64]
@@ -63,9 +63,9 @@ class TestReferenceValuedAttrs:
     """The capability the decorator form cannot express at all."""
 
     def test_attr_references_a_parameter(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 x: pl.Tensor[[64, 64], pl.FP32],
@@ -80,9 +80,9 @@ class TestReferenceValuedAttrs:
         assert _param_index(func, func.attrs["stationary"]) == 1
 
     def test_reference_valued_attr_round_trips_through_text(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 x: pl.Tensor[[64, 64], pl.FP32],
@@ -103,9 +103,9 @@ class TestReferenceValuedAttrs:
     def test_reference_valued_attr_round_trips_through_serialization(self):
         """Serialization dispatches on value type, so no serializer change was needed."""
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 x: pl.Tensor[[64, 64], pl.FP32],
@@ -124,16 +124,16 @@ class TestReferenceValuedAttrs:
 
 class TestEquivalenceWithDecoratorForm:
     def test_static_attr_matches_decorator_spelling(self):
-        @pl.program
+        @pl.program_parser
         class Body:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 pl.func_attr({"split": pl.SplitMode.UP_DOWN})
                 out[0:64] = x[0:64]
 
-        @pl.program
+        @pl.program_parser
         class Decorator:
-            @pl.function(type=pl.FunctionType.InCore, attrs={"split": pl.SplitMode.UP_DOWN})
+            @pl.function_parser(type=pl.FunctionType.InCore, attrs={"split": pl.SplitMode.UP_DOWN})
             def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 out[0:64] = x[0:64]
 
@@ -142,9 +142,9 @@ class TestEquivalenceWithDecoratorForm:
     def test_split_keeps_its_enum_type_through_the_prologue(self):
         """``split`` stores an int but is spelled as the enum on both paths."""
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 pl.func_attr({"split": pl.SplitMode.UP_DOWN})
                 out[0:64] = x[0:64]
@@ -154,9 +154,9 @@ class TestEquivalenceWithDecoratorForm:
         assert func.split == ir.SplitMode.UP_DOWN
 
     def test_multiple_calls_merge(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 pl.func_attr({"split": pl.SplitMode.UP_DOWN})
                 pl.func_attr({"windowize": True})
@@ -167,9 +167,9 @@ class TestEquivalenceWithDecoratorForm:
         assert attrs["windowize"] is True
 
     def test_body_and_decorator_attrs_combine(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore, attrs={"windowize": True})
+            @pl.function_parser(type=pl.FunctionType.InCore, attrs={"windowize": True})
             def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 pl.func_attr({"split": pl.SplitMode.UP_DOWN})
                 out[0:64] = x[0:64]
@@ -183,9 +183,9 @@ class TestParserRejections:
     def test_rejects_placement_after_a_statement(self):
         with pytest.raises(ParserSyntaxError, match="must appear before every other statement"):
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                     out[0:64] = x[0:64]
                     pl.func_attr({"split": pl.SplitMode.UP_DOWN})
@@ -193,9 +193,9 @@ class TestParserRejections:
     def test_rejects_duplicate_key_across_two_calls(self):
         with pytest.raises((ParserSyntaxError, ValueError), match="[Dd]uplicate.*split"):
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                     pl.func_attr({"split": pl.SplitMode.UP_DOWN})
                     pl.func_attr({"split": pl.SplitMode.LEFT_RIGHT})
@@ -210,9 +210,9 @@ class TestParserRejections:
         """
         with pytest.raises(ParserSyntaxError) as exc_info:
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                     pl.func_attr({"split": pl.SplitMode.UP_DOWN})
                     pl.func_attr({"split": pl.SplitMode.LEFT_RIGHT})
@@ -231,9 +231,9 @@ class TestParserRejections:
     def test_rejects_key_duplicated_between_decorator_and_body(self):
         with pytest.raises((ParserSyntaxError, ValueError), match="[Dd]uplicate.*split"):
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function(type=pl.FunctionType.InCore, attrs={"split": pl.SplitMode.UP_DOWN})
+                @pl.function_parser(type=pl.FunctionType.InCore, attrs={"split": pl.SplitMode.UP_DOWN})
                 def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                     pl.func_attr({"split": pl.SplitMode.LEFT_RIGHT})
                     out[0:64] = x[0:64]
@@ -261,9 +261,9 @@ class TestDeprecation:
     def test_decorator_attrs_warns(self):
         with pytest.warns(DeprecationWarning, match="cannot reference parameters"):
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function(type=pl.FunctionType.InCore, attrs={"split": pl.SplitMode.UP_DOWN})
+                @pl.function_parser(type=pl.FunctionType.InCore, attrs={"split": pl.SplitMode.UP_DOWN})
                 def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                     out[0:64] = x[0:64]
 
@@ -271,9 +271,9 @@ class TestDeprecation:
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                     pl.func_attr({"split": pl.SplitMode.UP_DOWN})
                     out[0:64] = x[0:64]
@@ -292,9 +292,9 @@ class TestDeprecation:
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function(type=pl.FunctionType.InCore, attrs={})
+                @pl.function_parser(type=pl.FunctionType.InCore, attrs={})
                 def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                     out[0:64] = x[0:64]
 
@@ -309,9 +309,9 @@ class TestDeprecation:
         spelling: a dedicated keyword, or the ``pl.func_attr`` prologue.
         """
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore, attrs={"split": pl.SplitMode.UP_DOWN})
+            @pl.function_parser(type=pl.FunctionType.InCore, attrs={"split": pl.SplitMode.UP_DOWN})
             def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 out[0:64] = x[0:64]
 
@@ -326,13 +326,13 @@ class TestDeprecation:
 
 class TestPrinter:
     def test_auto_scope_still_prints_as_its_own_kwarg(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration, auto_scope=False)
+            @pl.function_parser(type=pl.FunctionType.Orchestration, auto_scope=False)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.func_attr({"windowize": True})
                 with pl.scope():
@@ -349,9 +349,9 @@ class TestPrinter:
         ir.assert_structural_equal(pl.parse_program(text), P)
 
     def test_empty_attrs_emit_no_prologue(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 out[0:64] = x[0:64]
 
@@ -364,9 +364,9 @@ class TestProloguePlacementAndValueShapes:
     def test_docstring_may_precede_the_prologue(self):
         """A docstring is not "another statement" — it precedes the prologue."""
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 """Kernel docstring."""
                 pl.func_attr({"split": pl.SplitMode.UP_DOWN})
@@ -378,9 +378,9 @@ class TestProloguePlacementAndValueShapes:
     def test_split_none_is_dropped_like_the_decorator_path(self):
         """Storing the 0 would be a spelling the printer filters, losing the key."""
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(self, x: pl.Tensor[[64], pl.FP32], out: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 pl.func_attr({"split": pl.SplitMode.NONE})
                 out[0:64] = x[0:64]
@@ -412,9 +412,9 @@ class TestProloguePlacementAndValueShapes:
         when classifying abstractness, exactly as a docstring is.
         """
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(level=pl.Level.HOST, role=pl.Role.SubWorker, attrs={"tag": 1})
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.SubWorker, attrs={"tag": 1})
             def cb(x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]: ...
 
         func = _function(P, "cb")

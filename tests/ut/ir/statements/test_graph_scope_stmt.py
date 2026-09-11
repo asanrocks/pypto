@@ -13,7 +13,6 @@ import pypto.language as pl
 import pytest
 from pypto import DataType, ir
 from pypto.ir.printer import python_print
-from pypto.language.parser.diagnostics import ParserSyntaxError
 
 
 def _vars(span: ir.Span) -> tuple[ir.Var, ir.Var]:
@@ -90,10 +89,11 @@ def test_serialize_roundtrip():
 def test_empty_name_is_rejected_by_the_parser():
     """The name is the graph key, so no path auto-generates one.
 
-    The parser rejects it first, which is what a user hits; ``IRBuilder``'s own
-    ``CHECK`` behind it is the backstop for IR built by other means.
+    The construct rejects it at construction, which is what a user hits;
+    ``IRBuilder``'s own ``CHECK`` behind it is the backstop for IR built by
+    other means.
     """
-    with pytest.raises(ParserSyntaxError, match=r"must not be empty"):
+    with pytest.raises(ValueError, match=r"must not be empty"):
 
         @pl.program
         class Bad:

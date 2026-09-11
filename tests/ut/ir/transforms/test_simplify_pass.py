@@ -63,17 +63,17 @@ class TestIdentitySimplification:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i + 0
+                    y: pl.Scalar[pl.INDEX] = i + 0
                     pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -85,17 +85,17 @@ class TestIdentitySimplification:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = 0 + i
+                    y: pl.Scalar[pl.INDEX] = 0 + i
                     pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -107,17 +107,17 @@ class TestIdentitySimplification:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i * 1
+                    y: pl.Scalar[pl.INDEX] = i * 1
                     pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -129,17 +129,17 @@ class TestIdentitySimplification:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i - 0
+                    y: pl.Scalar[pl.INDEX] = i - 0
                     pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -229,17 +229,17 @@ class TestRangeAwareSimplification:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i // 8
+                    y: pl.Scalar[pl.INDEX] = i // 8
                     pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = 0
+                    y: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                     pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -251,17 +251,17 @@ class TestRangeAwareSimplification:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i % 8
+                    y: pl.Scalar[pl.INDEX] = i % 8
                     pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -273,9 +273,9 @@ class TestRangeAwareSimplification:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i // 4
+                    y: pl.Scalar[pl.INDEX] = i // 4
                     pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -287,19 +287,19 @@ class TestRangeAwareSimplification:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8, 4], pl.INT64]):
+            def main(self, out: pl.Tensor[[8, 4], pl.INDEX]):
                 for i in pl.range(8):
                     for j in pl.range(4):
-                        y: pl.Scalar[pl.INT64] = j // 4
+                        y: pl.Scalar[pl.INDEX] = j // 4
                         pl.tensor.write(out, [i, j], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8, 4], pl.INT64]):
+            def main(self, out: pl.Tensor[[8, 4], pl.INDEX]):
                 for i in pl.range(8):
                     for j in pl.range(4):
-                        y: pl.Scalar[pl.INT64] = 0
+                        y: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                         pl.tensor.write(out, [i, j], y)
 
         after = passes.simplify()(Before)
@@ -318,19 +318,19 @@ class TestIfBranchConstraint:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     if i < 4:
-                        y: pl.Scalar[pl.INT64] = i // 4
+                        y: pl.Scalar[pl.INDEX] = i // 4
                         pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     if i < 4:
-                        y: pl.Scalar[pl.INT64] = 0
+                        y: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                         pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -343,25 +343,25 @@ class TestIfBranchConstraint:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     if i < 4:
-                        y: pl.Scalar[pl.INT64] = i // 4
+                        y: pl.Scalar[pl.INDEX] = i // 4
                         pl.tensor.write(out, [i], y)
                     else:
-                        y2: pl.Scalar[pl.INT64] = i // 8
+                        y2: pl.Scalar[pl.INDEX] = i // 8
                         pl.tensor.write(out, [i], y2)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     if i < 4:
-                        y: pl.Scalar[pl.INT64] = 0
+                        y: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                         pl.tensor.write(out, [i], y)
                     else:
-                        y2: pl.Scalar[pl.INT64] = 0
+                        y2: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                         pl.tensor.write(out, [i], y2)
 
         after = passes.simplify()(Before)
@@ -373,25 +373,25 @@ class TestIfBranchConstraint:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[16], pl.INT64]):
+            def main(self, out: pl.Tensor[[16], pl.INDEX]):
                 for i in pl.range(16):
                     if i < 8:
-                        y: pl.Scalar[pl.INT64] = i // 8
+                        y: pl.Scalar[pl.INDEX] = i // 8
                         pl.tensor.write(out, [i], y)
                     else:
-                        z: pl.Scalar[pl.INT64] = i // 16
+                        z: pl.Scalar[pl.INDEX] = i // 16
                         pl.tensor.write(out, [i], z)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[16], pl.INT64]):
+            def main(self, out: pl.Tensor[[16], pl.INDEX]):
                 for i in pl.range(16):
                     if i < 8:
-                        y: pl.Scalar[pl.INT64] = 0
+                        y: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                         pl.tensor.write(out, [i], y)
                     else:
-                        z: pl.Scalar[pl.INT64] = 0
+                        z: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                         pl.tensor.write(out, [i], z)
 
         after = passes.simplify()(Before)
@@ -410,18 +410,18 @@ class TestControlFlow:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i + 0
+                    y: pl.Scalar[pl.INDEX] = i + 0
                     pl.tensor.write(out, [i], y)
                     break
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out, [i], y)
                     break
 
@@ -434,18 +434,18 @@ class TestControlFlow:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[4], pl.INT64]):
+            def main(self, out: pl.Tensor[[4], pl.INDEX]):
                 for i in pl.range(4):
-                    y: pl.Scalar[pl.INT64] = i * 1
+                    y: pl.Scalar[pl.INDEX] = i * 1
                     pl.tensor.write(out, [i], y)
                     continue
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[4], pl.INT64]):
+            def main(self, out: pl.Tensor[[4], pl.INDEX]):
                 for i in pl.range(4):
-                    y: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out, [i], y)
                     continue
 
@@ -458,19 +458,19 @@ class TestControlFlow:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     with pl.at(level=pl.Level.CORE_GROUP):
-                        y: pl.Scalar[pl.INT64] = i + 0
+                        y: pl.Scalar[pl.INDEX] = i + 0
                         pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     with pl.at(level=pl.Level.CORE_GROUP):
-                        y: pl.Scalar[pl.INT64] = i
+                        y: pl.Scalar[pl.INDEX] = i
                         pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -483,7 +483,7 @@ class TestControlFlow:
         class Before:
             @pl.function
             def main(self, n: pl.Scalar[pl.INDEX]):
-                i: pl.Scalar[pl.INDEX] = 0
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 while i < n + 0:
                     i = i + 1
 
@@ -491,7 +491,7 @@ class TestControlFlow:
         class Expected:
             @pl.function
             def main(self, n: pl.Scalar[pl.INDEX]):
-                i: pl.Scalar[pl.INDEX] = 0
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 while i < n:
                     i = i + 1
 
@@ -517,13 +517,14 @@ class TestControlFlow:
         class Before:
             @pl.function
             def main(self, out: pl.Tensor[[8], pl.INDEX]):
-                i: pl.Scalar[pl.INDEX] = 0
-                for (i_it,) in pl.while_(init_values=(i,)):
-                    pl.cond(i_it < 4)
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                (i_it,) = pl.intrin.carry(i)
+                while i_it < 4:
                     y: pl.Scalar[pl.INDEX] = i_it * 2
                     pl.tensor.write(out, [i_it], y)
                     nxt: pl.Scalar[pl.INDEX] = i_it + 1
-                    i_end: pl.Scalar[pl.INDEX] = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (i_end,) = pl.intrin.leak()
                 # Reading the return_var after the loop keeps the carry live and
                 # exercises the return_vars_ rebuild alongside the iter_args_ one.
                 pl.tensor.write(out, [7], i_end)
@@ -584,11 +585,12 @@ class TestControlFlow:
         class WhileOuter:
             @pl.function
             def main(self, out: pl.Tensor[[8], pl.INDEX]):
-                i: pl.Scalar[pl.INDEX] = 0
-                acc_next: pl.Scalar[pl.INDEX] = 0
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 while i < 4:
-                    for j, (acc,) in pl.range(0, 1, init_values=(i,)):
-                        acc_next = pl.yield_(acc + 1)
+                    (acc,) = pl.intrin.carry(i)
+                    for j in pl.range(0, 1):
+                        pl.intrin.yield_(acc + 1)
+                    (acc_next,) = pl.intrin.leak()
                     i = i + 1
                 pl.tensor.write(out, [0], acc_next)
 
@@ -598,8 +600,10 @@ class TestControlFlow:
             def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 acc_next: pl.Scalar[pl.INDEX] = 0
                 for k in pl.range(4):
-                    for j, (acc,) in pl.range(0, 1, init_values=(k,)):
-                        acc_next = pl.yield_(acc + 1)
+                    (acc,) = pl.intrin.carry(k)
+                    for j in pl.range(0, 1):
+                        pl.intrin.yield_(acc + 1)
+                    (acc_next,) = pl.intrin.leak()
                 pl.tensor.write(out, [0], acc_next)
 
         def post_loop_operand(program):
@@ -640,8 +644,10 @@ class TestControlFlow:
             def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 acc_next: pl.Scalar[pl.INDEX] = 0
                 for k in pl.range(4):
-                    for j, (acc,) in pl.range(0, 1, init_values=(k,)):
-                        acc_next = pl.yield_(acc + 1)
+                    (acc,) = pl.intrin.carry(k)
+                    for j in pl.range(0, 1):
+                        pl.intrin.yield_(acc + 1)
+                    (acc_next,) = pl.intrin.leak()
                 pl.tensor.write(out, [0], acc_next)
 
         # Verification is on by default — the point of the test is that the
@@ -671,20 +677,20 @@ class TestControlFlow:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out_y: pl.Tensor[[8], pl.INT64], out_z: pl.Tensor[[8], pl.INT64]):
+            def main(self, out_y: pl.Tensor[[8], pl.INDEX], out_z: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i + 0
-                    z: pl.Scalar[pl.INT64] = i * 1
+                    y: pl.Scalar[pl.INDEX] = i + 0
+                    z: pl.Scalar[pl.INDEX] = i * 1
                     pl.tensor.write(out_y, [i], y)
                     pl.tensor.write(out_z, [i], z)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out_y: pl.Tensor[[8], pl.INT64], out_z: pl.Tensor[[8], pl.INT64]):
+            def main(self, out_y: pl.Tensor[[8], pl.INDEX], out_z: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i
-                    z: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
+                    z: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out_y, [i], y)
                     pl.tensor.write(out_z, [i], z)
 
@@ -697,28 +703,28 @@ class TestControlFlow:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     if i < 4:
-                        y: pl.Scalar[pl.INT64] = i // 4
+                        y: pl.Scalar[pl.INDEX] = i // 4
                         pl.tensor.write(out, [i], y)
                         break
                     else:
-                        y2: pl.Scalar[pl.INT64] = i + 0
+                        y2: pl.Scalar[pl.INDEX] = i + 0
                         pl.tensor.write(out, [i], y2)
                         continue
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     if i < 4:
-                        y: pl.Scalar[pl.INT64] = 0
+                        y: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                         pl.tensor.write(out, [i], y)
                         break
                     else:
-                        y2: pl.Scalar[pl.INT64] = i
+                        y2: pl.Scalar[pl.INDEX] = i
                         pl.tensor.write(out, [i], y2)
                         continue
 
@@ -731,21 +737,21 @@ class TestControlFlow:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     with pl.at(level=pl.Level.CORE_GROUP):
                         if i < 4:
-                            y: pl.Scalar[pl.INT64] = i // 4
+                            y: pl.Scalar[pl.INDEX] = i // 4
                             pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
                     with pl.at(level=pl.Level.CORE_GROUP):
                         if i < 4:
-                            y: pl.Scalar[pl.INT64] = 0
+                            y: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                             pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -764,9 +770,9 @@ class TestNoChange:
         @pl.program
         class Before:
             @pl.function
-            def main(self, out: pl.Tensor[[8], pl.INT64]):
+            def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(8):
-                    y: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -778,17 +784,17 @@ class TestNoChange:
         @pl.program
         class Before:
             @pl.function
-            def main(self, n: pl.Scalar[pl.INDEX], out: pl.Tensor[[8], pl.INT64]):
+            def main(self, n: pl.Scalar[pl.INDEX], out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(n):
-                    y: pl.Scalar[pl.INT64] = i + 0
+                    y: pl.Scalar[pl.INDEX] = i + 0
                     pl.tensor.write(out, [i], y)
 
         @pl.program
         class Expected:
             @pl.function
-            def main(self, n: pl.Scalar[pl.INDEX], out: pl.Tensor[[8], pl.INT64]):
+            def main(self, n: pl.Scalar[pl.INDEX], out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(n):
-                    y: pl.Scalar[pl.INT64] = i
+                    y: pl.Scalar[pl.INDEX] = i
                     pl.tensor.write(out, [i], y)
 
         after = passes.simplify()(Before)
@@ -826,7 +832,7 @@ class TestScalarConstantPropagation:
         class Before:
             @pl.function
             def main(self, out: pl.Tensor[[1], pl.INDEX]):
-                CHUNK_K: pl.Scalar[pl.INDEX] = 512
+                CHUNK_K: pl.Scalar[pl.INDEX] = pl.const(512, pl.INDEX)
                 y: pl.Scalar[pl.INDEX] = CHUNK_K + 1
                 pl.tensor.write(out, [0], y)
 
@@ -848,7 +854,7 @@ class TestScalarConstantPropagation:
         class Before:
             @pl.function
             def main(self):
-                CHUNK_K: pl.Scalar[pl.INDEX] = 512
+                CHUNK_K: pl.Scalar[pl.INDEX] = pl.const(512, pl.INDEX)
                 for _i in pl.range(0, 1024, CHUNK_K):
                     pass
 
@@ -872,7 +878,7 @@ class TestScalarConstantPropagation:
         class Before:
             @pl.function
             def main(self):
-                N: pl.Scalar[pl.INDEX] = 4
+                N: pl.Scalar[pl.INDEX] = pl.const(4, pl.INDEX)
                 _t: pl.Tensor[[N, 8], pl.FP32] = pl.tensor.create([N, 8], dtype=pl.FP32)
 
         # After simplify + scalar DCE: N folds into the tensor shape and
@@ -894,7 +900,7 @@ class TestScalarConstantPropagation:
         class Before:
             @pl.function
             def main(self, x: pld.DistributedTensor[[4, 8], pl.FP32]):
-                n: pl.Scalar[pl.INDEX] = 2
+                n: pl.Scalar[pl.INDEX] = pl.const(2, pl.INDEX)
                 _viewed = pl.tensor.view(x, [n * 2, 8])
 
         @pl.program
@@ -935,9 +941,9 @@ class TestScalarConstantPropagation:
         class Before:
             @pl.function
             def main(self, cond: pl.Scalar[pl.BOOL], out: pl.Tensor[[1], pl.INDEX]):
-                k: pl.Scalar[pl.INDEX] = 7
+                k: pl.Scalar[pl.INDEX] = pl.const(7, pl.INDEX)
                 if cond:
-                    k = 5
+                    k = pl.const(5, pl.INDEX)
                 y: pl.Scalar[pl.INDEX] = k + 1
                 pl.tensor.write(out, [0], y)
 
@@ -955,7 +961,7 @@ class TestScalarConstantPropagation:
         class Before:
             @pl.function
             def main(self, n: pl.Scalar[pl.INDEX]):
-                i: pl.Scalar[pl.INDEX] = 0
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 while i < n:
                     i = i + 1
 
@@ -971,10 +977,13 @@ class TestScalarConstantPropagation:
         class Before:
             @pl.function
             def main(self):
-                N: pl.Scalar[pl.INDEX] = 4
+                N: pl.Scalar[pl.INDEX] = pl.const(4, pl.INDEX)
                 acc: pl.Tensor[[N, 8], pl.FP32] = pl.tensor.create([N, 8], dtype=pl.FP32)
-                for _i, (acc_iter,) in pl.range(4, init_values=(acc,)):
+                (acc_iter,) = pl.intrin.carry(acc)
+                for _i in pl.range(4):
                     acc_iter = pl.tensor.add(acc_iter, acc_iter)
+                    pl.intrin.yield_(acc_iter)
+                (acc_iter,) = pl.intrin.leak()
 
         # After simplify + scalar DCE: N folds into every shape annotation
         # and Call arg, then its scalar binding is dropped. `acc` is
@@ -984,8 +993,11 @@ class TestScalarConstantPropagation:
             @pl.function
             def main(self):
                 acc: pl.Tensor[[4, 8], pl.FP32] = pl.tensor.create([4, 8], dtype=pl.FP32)
-                for _i, (acc_iter,) in pl.range(4, init_values=(acc,)):
+                (acc_iter,) = pl.intrin.carry(acc)
+                for _i in pl.range(4):
                     acc_iter = pl.tensor.add(acc_iter, acc_iter)
+                    pl.intrin.yield_(acc_iter)
+                (acc_iter,) = pl.intrin.leak()
 
         after = passes.simplify()(Before)
         ir.assert_structural_equal(after, Expected)
@@ -1009,7 +1021,7 @@ class TestScalarDCE:
         class Before:
             @pl.function
             def main(self):
-                y: pl.Scalar[pl.INDEX] = 5  # noqa: F841
+                y: pl.Scalar[pl.INDEX] = pl.const(5, pl.INDEX)  # noqa: F841
 
         @pl.program
         class Expected:
@@ -1027,7 +1039,7 @@ class TestScalarDCE:
         class Before:
             @pl.function
             def main(self):
-                a: pl.Scalar[pl.INDEX] = 5
+                a: pl.Scalar[pl.INDEX] = pl.const(5, pl.INDEX)
                 b: pl.Scalar[pl.INDEX] = a + 1  # noqa: F841
 
         @pl.program
@@ -1125,7 +1137,7 @@ class TestScalarDCE:
             @pl.function
             def main(self):
                 with pl.at(level=pl.Level.CORE_GROUP):
-                    dead: pl.Scalar[pl.INDEX] = 7  # noqa: F841
+                    dead: pl.Scalar[pl.INDEX] = pl.const(7, pl.INDEX)  # noqa: F841
                     _t: pl.Tensor[[4], pl.FP32] = pl.tensor.create([4], dtype=pl.FP32)
 
         @pl.program
@@ -1157,7 +1169,7 @@ class TestConstantIfCollapse:
                         y: pl.Scalar[pl.INDEX] = i + 1
                         pl.tensor.write(out, [i], y)
                     else:
-                        z: pl.Scalar[pl.INDEX] = 99
+                        z: pl.Scalar[pl.INDEX] = pl.const(99, pl.INDEX)
                         pl.tensor.write(out, [i], z)
 
         @pl.program
@@ -1184,7 +1196,7 @@ class TestConstantIfCollapse:
             def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(0, 8, 2):
                     if i == -1:
-                        y: pl.Scalar[pl.INDEX] = 99
+                        y: pl.Scalar[pl.INDEX] = pl.const(99, pl.INDEX)
                         pl.tensor.write(out, [i], y)
                     else:
                         y2: pl.Scalar[pl.INDEX] = i + 1
@@ -1219,7 +1231,7 @@ class TestConstantIfCollapse:
             def main(self, out: pl.Tensor[[8], pl.INDEX]):
                 for i in pl.range(0, 8, 2):
                     if i == -1:
-                        y: pl.Scalar[pl.INDEX] = 99
+                        y: pl.Scalar[pl.INDEX] = pl.const(99, pl.INDEX)
                         pl.tensor.write(out, [i], y)
                     pl.tensor.write(out, [i], i)
 
@@ -1254,7 +1266,7 @@ class TestConstantIfCollapse:
                 for i in pl.range(0, 8, 2):
                     off: pl.Scalar[pl.INDEX] = i * 256 + 256
                     if off == 0:
-                        y: pl.Scalar[pl.INDEX] = 99
+                        y: pl.Scalar[pl.INDEX] = pl.const(99, pl.INDEX)
                         pl.tensor.write(out, [i], y)
                     else:
                         y2: pl.Scalar[pl.INDEX] = i + 1
@@ -1345,12 +1357,15 @@ class TestConstantIfCollapse:
                         pl.tensor.write(out, [0], pos)
 
         # Both guards survive; the outer one is only canonicalized `Ge` -> `Le`.
+        # The canonical const-left `Le` is staged explicitly: a bare `0 <= pos`
+        # traces to the reflected `pos.__ge__(0)` (Python tries int.__le__
+        # first), which builds `Ge` — the very form the pass canonicalizes away.
         @pl.program
         class Expected:
             @pl.function
             def main(self, base: pl.Scalar[pl.INDEX], out: pl.Tensor[[1], pl.INDEX]):
                 pos: pl.Scalar[pl.INDEX] = base - 1
-                if 0 <= pos:
+                if pl.const(0, pl.INDEX) <= pos:
                     if pos < 8:
                         pl.tensor.write(out, [0], pos)
 
@@ -1677,17 +1692,18 @@ class TestTensorViewFolding:
                 same: pl.Tensor[[8, 4], pl.FP32] = pl.tensor.view(x, layout=pl.TensorLayout.ND)
                 return same
 
-        @pl.program
-        class Expected:
-            @pl.function
-            def main(self, x: pl.Tensor[[8, 4], pl.FP32]) -> pl.Tensor[[8, 4], pl.FP32]:
-                # 21f11ecb dropped the alias-fold: the view Call still folds
-                # to ``x``, but the ``same = x`` residual is no longer removed.
-                same: pl.Tensor[[8, 4], pl.FP32, pl.TensorView(stride=[4, 1], layout=pl.TensorLayout.ND)] = x
-                return same
-
         after = passes.simplify()(Before)
-        ir.assert_structural_equal(after, Expected)
+        func = next(func for func in after.functions.values() if func.name == "main")
+        assert isinstance(func.body, ir.SeqStmts)
+        assign = next(stmt for stmt in func.body.stmts if isinstance(stmt, ir.AssignStmt))
+        assert isinstance(assign.value, ir.Var)
+        assert isinstance(assign.var.type, ir.TensorType)
+        assert assign.var.type.tensor_view is not None
+        assert assign.var.type.tensor_view.layout == ir.TensorLayout.ND
+        stride = assign.var.type.tensor_view.stride
+        # the isinstance filter doubles as the concreteness check: a
+        # non-ConstInt dim would drop out and fail the value comparison
+        assert [dim.value for dim in stride if isinstance(dim, ir.ConstInt)] == [4, 1]
 
     def test_preserves_substantive_layout_flip(self):
         """Genuine ND → DN flip (with the auto trailing-pair swap) survives —
@@ -1810,7 +1826,7 @@ class TestManualScopeSubmit:
 
             @pl.function(type=pl.FunctionType.Orchestration)
             def main(self):
-                N: pl.Scalar[pl.INDEX] = 4
+                N: pl.Scalar[pl.INDEX] = pl.const(4, pl.INDEX)
                 t: pl.Tensor[[N, 8], pl.FP32] = pl.tensor.create([N, 8], dtype=pl.FP32)
                 with pl.manual_scope():
                     res = pl.submit(self.kernel, t)  # noqa: F841
@@ -1884,9 +1900,12 @@ class TestDeadIfReturnVarsDCE:
         class Before:
             @pl.function
             def main(self, cond: pl.Scalar[pl.BOOL], out: pl.Tensor[[1], pl.INDEX]):
-                value: pl.Scalar[pl.INDEX] = 0
+                # Typed staged seeds (spec(const)): the phi this test exercises
+                # only derives from a staged local — a bare literal stays host
+                # and ConvertToSSA sees no branch rebind.
+                value: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
                 if cond:
-                    value = 1
+                    value = pl.const(1, pl.INDEX)
                     pl.tensor.write(out, [0], value)
 
         ssa_form = passes.convert_to_ssa()(Before)
@@ -1917,10 +1936,10 @@ class TestDeadIfReturnVarsDCE:
             @pl.function
             def main(self, cond: pl.Scalar[pl.BOOL], out: pl.Tensor[[1], pl.INDEX]):
                 if cond:
-                    t1: pl.Scalar[pl.INDEX] = 1
+                    t1: pl.Scalar[pl.INDEX] = pl.const(1, pl.INDEX)
                     pl.tensor.write(out, [0], t1)
                 else:
-                    t1: pl.Scalar[pl.INDEX] = 2
+                    t1: pl.Scalar[pl.INDEX] = pl.const(2, pl.INDEX)
                     pl.tensor.write(out, [0], t1)
 
         @pl.program
@@ -1928,10 +1947,10 @@ class TestDeadIfReturnVarsDCE:
             @pl.function(strict_ssa=True)
             def main(self, cond: pl.Scalar[pl.BOOL], out: pl.Tensor[[1], pl.INDEX]):
                 if cond:
-                    t1_0: pl.Scalar[pl.INDEX] = 1
+                    t1_0: pl.Scalar[pl.INDEX] = pl.const(1, pl.INDEX)
                     pl.tensor.write(out, [0], t1_0)
                 else:
-                    t1_1: pl.Scalar[pl.INDEX] = 2
+                    t1_1: pl.Scalar[pl.INDEX] = pl.const(2, pl.INDEX)
                     pl.tensor.write(out, [0], t1_1)
 
         ssa_form = passes.convert_to_ssa()(Before)
@@ -1948,9 +1967,9 @@ class TestDeadIfReturnVarsDCE:
             @pl.function
             def main(self, cond: pl.Scalar[pl.BOOL], out: pl.Tensor[[1], pl.INDEX]):
                 if cond:
-                    t1: pl.Scalar[pl.INDEX] = 1
+                    t1: pl.Scalar[pl.INDEX] = pl.const(1, pl.INDEX)
                 else:
-                    t1: pl.Scalar[pl.INDEX] = 2
+                    t1: pl.Scalar[pl.INDEX] = pl.const(2, pl.INDEX)
                 pl.tensor.write(out, [0], t1)
 
         ssa_form = passes.convert_to_ssa()(Before)
@@ -2025,9 +2044,10 @@ class TestDeadIfReturnVarsDCE:
             @pl.function(type=pl.FunctionType.Orchestration)
             def main(self, t: pl.Tensor[[1], pl.INDEX], cond: pl.Scalar[pl.BOOL]) -> pl.Tensor[[1], pl.INDEX]:
                 if cond:
-                    c: pl.Scalar[pl.INDEX] = pl.yield_(pl.tensor.read(t, [0]))  # noqa: F841
+                    pl.intrin.yield_(pl.tensor.read(t, [0]))
                 else:
-                    c: pl.Scalar[pl.INDEX] = pl.yield_(pl.tensor.read(t, [0]))  # noqa: F841
+                    pl.intrin.yield_(pl.tensor.read(t, [0]))
+                (c,) = pl.intrin.leak()
                 return t
 
         after = passes.simplify()(Before)
@@ -2118,8 +2138,10 @@ class TestDeadLoopCarryDCE:
         class Before:
             @pl.function(type=pl.FunctionType.Orchestration)
             def main(self, t: pl.Tensor[[1], pl.INDEX]) -> pl.Tensor[[1], pl.INDEX]:
-                for _i, (c_1,) in pl.range(4, init_values=(pl.tensor.read(t, [0]),)):
-                    c: pl.Scalar[pl.INDEX] = pl.yield_(pl.tensor.read(t, [0]))  # noqa: F841
+                (c_1,) = pl.intrin.carry(pl.tensor.read(t, [0]))
+                for _i in pl.range(4):
+                    pl.intrin.yield_(pl.tensor.read(t, [0]))
+                (c,) = pl.intrin.leak()
                 return t
 
         after = passes.simplify()(Before)

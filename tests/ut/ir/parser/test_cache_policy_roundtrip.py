@@ -91,9 +91,9 @@ def _reparse(prog):
 
 
 def _at_scope_program():
-    @pl.program
+    @pl.program_parser
     class AtScope:
-        @pl.function
+        @pl.function_parser
         def main(
             self,
             a: pl.Tensor[[256, 128], pl.FP32],
@@ -125,9 +125,9 @@ def test_roundtrip_at_scope_recovers_declaration():
 
 
 def _spmd_for_program():
-    @pl.program
+    @pl.program_parser
     class SpmdFor:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(
             self,
             b: pl.Tensor[[512, 128], pl.FP32],
@@ -163,9 +163,9 @@ def test_roundtrip_spmd_for_recovers_declaration():
 
 
 def _empty_spmd_body_program():
-    @pl.program
+    @pl.program_parser
     class EmptyBody:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(
             self,
             b: pl.Tensor[[512, 128], pl.FP32],
@@ -191,9 +191,9 @@ def test_roundtrip_empty_spmd_body_recovers_declaration():
 def test_roundtrip_preserves_both_policies_and_their_order():
     """DEFAULT and BYPASS both survive, distinctly, in the order they were written."""
 
-    @pl.program
+    @pl.program_parser
     class Multi:
-        @pl.function
+        @pl.function_parser
         def main(
             self,
             a: pl.Tensor[[256, 128], pl.FP32],
@@ -215,9 +215,9 @@ def test_roundtrip_preserves_both_policies_and_their_order():
 def test_roundtrip_normalises_position_of_a_late_declaration():
     """A declaration written mid-body reparses identically — position carries no meaning."""
 
-    @pl.program
+    @pl.program_parser
     class Late:
-        @pl.function
+        @pl.function_parser
         def main(
             self,
             a: pl.Tensor[[256, 128], pl.FP32],
@@ -243,9 +243,9 @@ def test_parse_accepts_the_submodule_spelling_and_normalises_it():
 import pypto.language as pl
 
 
-@pl.program
+@pl.program_parser
 class Alt:
-    @pl.function
+    @pl.function_parser
     def main(self, a: pl.Tensor[[256, 128], pl.FP32], b: pl.Tensor[[128, 256], pl.FP32],
              out: pl.Out[pl.Tensor[[256, 256], pl.FP32]]) -> pl.Tensor[[256, 256], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP, name_hint="mm"):
@@ -266,9 +266,9 @@ class Alt:
 def test_repeating_the_same_policy_for_one_tensor_is_accepted():
     """A restated declaration is redundant, not an error: one entry survives."""
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function
+        @pl.function_parser
         def main(
             self,
             a: pl.Tensor[[64, 64], pl.FP32],
@@ -294,9 +294,9 @@ def test_conflicting_policies_for_one_tensor_are_rejected():
     """
     with pytest.raises(ParserSyntaxError, match="conflicting policies"):
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],

@@ -92,11 +92,16 @@ def test_annotated_scalar_literal_matches_annotation_dtype():
     match — otherwise the AssignStmt is asymmetric, and the mismatch resurfaces
     far downstream (Simplify propagates the constant into a loop's ``iter_arg``
     init, where TypeCheck compares it against the declared carry dtype).
+
+    The annotation re-stamp is the parser's LHS-annotation fold — under tracing
+    the annotation is cosmetic and the literal lifts at the operand boundary —
+    so this fixture pins the parser-owned channel and collects through the
+    parser markers.
     """
 
-    @pl.program
+    @pl.program_parser
     class Program:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(self, d: pl.Out[pl.Tensor[[4], pl.FP32]]) -> pl.Tensor[[4], pl.FP32]:
             acc: pl.Scalar[pl.INT64] = 0
             for _k in pl.range(4):

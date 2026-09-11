@@ -179,9 +179,9 @@ def test_split_none_scope_survives_print_reparse():
     two converge.
     """
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(
             self,
             a: pl.Tensor[[512, 128], pl.FP32],
@@ -248,7 +248,7 @@ def test_fully_qualified_split():
 def test_fully_qualified_cross_core_slot():
     """pl.optimizations.cross_core_slot(...) also works."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(
             level=pl.Level.CORE_GROUP,
@@ -272,7 +272,7 @@ def test_parse_optimizations_cross_core_slot_only():
     without naming a SplitMode it does not want.
     """
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.cross_core_slot(slot_num=4)]):
             y = pl.add(x, x)
@@ -288,7 +288,7 @@ def test_parse_optimizations_cross_core_slot_only():
 def test_parse_optimizations_split_and_cross_core_slot():
     """The two entries are orthogonal and combine in one list."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(
             level=pl.Level.CORE_GROUP,
@@ -307,7 +307,7 @@ def test_duplicate_cross_core_slot_errors():
     """Two pl.cross_core_slot(...) entries in the same list is an error."""
     with pytest.raises(ParserSyntaxError, match="Duplicate.*cross_core_slot"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(
                 level=pl.Level.CORE_GROUP,
@@ -322,7 +322,7 @@ def test_cross_core_slot_conflicts_with_deprecated_split_slot_num():
     dedicated entry — is rejected rather than resolved by list order."""
     with pytest.raises(ParserSyntaxError, match="sets the cross-core slot count twice"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(
                 level=pl.Level.CORE_GROUP,
@@ -339,7 +339,7 @@ def test_cross_core_slot_conflict_detected_in_either_order():
     """Same conflict, entries swapped — the deprecated spelling appearing last."""
     with pytest.raises(ParserSyntaxError, match="sets the cross-core slot count twice"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(
                 level=pl.Level.CORE_GROUP,
@@ -356,7 +356,7 @@ def test_cross_core_slot_requires_slot_num_keyword():
     """pl.cross_core_slot() without slot_num= is an error."""
     with pytest.raises(ParserSyntaxError, match="requires the slot_num="):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.cross_core_slot()]):  # type: ignore[call-arg]
                 y = pl.add(x, x)
@@ -367,7 +367,7 @@ def test_cross_core_slot_rejects_positional_arg():
     """The slot count must be passed by keyword."""
     with pytest.raises(ParserSyntaxError, match="no positional arguments"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.cross_core_slot(4)]):  # type: ignore[misc]
                 y = pl.add(x, x)
@@ -378,7 +378,7 @@ def test_cross_core_slot_rejects_unknown_keyword():
     """Only slot_num= is accepted."""
     with pytest.raises(ParserSyntaxError, match="Unknown keyword argument 'depth'"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.cross_core_slot(depth=4)]):  # type: ignore[call-arg]
                 y = pl.add(x, x)
@@ -414,7 +414,7 @@ def test_cross_core_slot_rejects_bool_literal():
     """bool is a subclass of int — True must not pose as a slot count."""
     with pytest.raises(ParserSyntaxError, match="must be an integer literal"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(
                 level=pl.Level.CORE_GROUP,
@@ -429,7 +429,7 @@ def test_cross_core_slot_on_non_core_group_errors():
     has no meaning on a Hierarchy scope, so it must not silently attach."""
     with pytest.raises(ParserSyntaxError, match="CORE_GROUP"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.HOST, optimizations=[pl.cross_core_slot(slot_num=4)]):
                 y = pl.add(x, x)
@@ -452,7 +452,7 @@ def test_split_slot_num_emits_deprecation_warning():
     """The old carrier still parses, but warns and points at the new entry."""
     with pytest.warns(DeprecationWarning, match="pl.cross_core_slot"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(
                 level=pl.Level.CORE_GROUP,
@@ -479,7 +479,7 @@ def test_split_without_slot_num_emits_no_warning():
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.UP_DOWN)]):
                 y = pl.add(x, x)

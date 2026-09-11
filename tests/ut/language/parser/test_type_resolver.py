@@ -1851,7 +1851,7 @@ class TestLayoutIntegration:
         """
         with pytest.raises(ParserTypeError, match=r"pl\.Tensor\[\.\.\., pl\.DN\] is not supported"):
 
-            @pl.function
+            @pl.function_parser
             def func(
                 x: pl.Tensor[[16, 1], pl.FP16],
             ) -> pl.Tensor[[16, 1], pl.FP16, pl.DN]:

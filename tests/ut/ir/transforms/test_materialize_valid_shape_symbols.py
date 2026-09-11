@@ -65,7 +65,7 @@ def _kernel_and_caller():
             sij: pl.Tensor[[Q, BLK], pl.FP32],
             valid_len: pl.Scalar[pl.INDEX],
             out: pl.Out[pl.Tensor[[Q, BLK], pl.FP32]],
-        ) -> pl.Tensor[[Q, BLK], pl.FP32]:
+        ) -> pl.Tensor[[16, 128], pl.FP32]:
             narrowed = pl.slice(sij, [16, 128], [0, 0], valid_shape=[16, valid_len])
             return kernel(narrowed, out)
 
