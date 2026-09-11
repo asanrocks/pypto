@@ -29,14 +29,23 @@ from types import TracebackType
 # Import DSL helpers from parent language module
 from ..dsl_api import range, yield_
 from ..typing import Scalar, Tensor, Tile
-from .decorator import InlineFunction, function, inline, program
+from .decorator import (
+    InlineFunction,
+    function,
+    function_parser,
+    inline,
+    program,
+    program_parser,
+)
 from .diagnostics import ErrorRenderer, ParserError
 from .text_parser import loads, loads_program, parse, parse_program
 
 __all__ = [
     "function",
+    "function_parser",
     "inline",
     "program",
+    "program_parser",
     "InlineFunction",
     "parse",
     "loads",

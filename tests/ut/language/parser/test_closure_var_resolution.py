@@ -10,7 +10,7 @@
 """Unit tests for closure variable resolution in DSL function bodies (issue #276).
 
 Verifies that Python globals/closure variables used as positional arguments
-in function calls inside @pl.function bodies are resolved correctly.
+in function calls inside @pl.function_parser bodies are resolved correctly.
 """
 
 import ast
@@ -53,7 +53,7 @@ class TestClosureVarAsPositionalArg:
         OFFSET = [0, 0]
         TILE_SHAPE = [64, 64]
 
-        @pl.function
+        @pl.function_parser
         def func(
             t: pl.Tensor[[128, 128], pl.FP32], out: pl.Tensor[[128, 128], pl.FP32]
         ) -> pl.Tensor[[128, 128], pl.FP32]:
@@ -71,7 +71,7 @@ class TestClosureVarAsPositionalArg:
         """Int closure variable resolves to ConstInt in function body."""
         AXIS = 1
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64, 128], pl.FP32]) -> pl.Tensor[[128, 64], pl.FP32]:
             result: pl.Tensor[[128, 64], pl.FP32] = pl.transpose(x, axis1=0, axis2=AXIS)
             return result
@@ -87,7 +87,7 @@ class TestClosureVarAsPositionalArg:
         """Float closure variable resolves to ConstFloat in function body."""
         SCALE = 2.0
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, SCALE)
             return result
@@ -100,7 +100,7 @@ class TestClosureVarAsPositionalArg:
         """Bool closure variable resolves to ConstBool in function body."""
         FLAG = True
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, FLAG)
             return result
@@ -115,7 +115,7 @@ class TestClosureVarAsPositionalArg:
         OFFSET = (0, 0)
         TILE_SHAPE = (64, 64)
 
-        @pl.function
+        @pl.function_parser
         def func(
             t: pl.Tensor[[128, 128], pl.FP32], out: pl.Tensor[[128, 128], pl.FP32]
         ) -> pl.Tensor[[128, 128], pl.FP32]:
@@ -154,7 +154,7 @@ class TestClosureVarAsPositionalArg:
         """DynVar closure variable resolves to ir.Var with INDEX type."""
         M = pl.dynamic("M")
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             # ``M`` is a DynVar (INDEX); cast before use as a tensor scalar operand.
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, pl.cast(M, pl.INT32))  # type: ignore[arg-type]
@@ -177,7 +177,7 @@ class TestClosureVarShadowing:
         """Variable defined in DSL body shadows same-named closure variable."""
         x_scale = 999.0  # noqa: F841 — deliberately shadowed by DSL assignment
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             x_scale: pl.Tensor[[64], pl.FP32] = pl.add(x, x)
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x_scale, x)
@@ -200,7 +200,7 @@ class TestClosureVarErrors:
         """Variable not in scope or closure raises UndefinedVariableError."""
         with pytest.raises(UndefinedVariableError, match="Undefined variable"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, totally_undefined)  # noqa: F821 # type: ignore
                 return result
@@ -211,7 +211,7 @@ class TestClosureVarErrors:
 
         with pytest.raises(ParserTypeError, match="Unsupported closure variable type"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, BAD_VALUE)  # type: ignore[arg-type]
                 return result

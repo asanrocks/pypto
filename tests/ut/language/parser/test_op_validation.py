@@ -38,7 +38,7 @@ class TestWrapperErrorsThroughParser:
     def test_unknown_pl_op_clean_error(self):
         with pytest.raises(InvalidOperationError, match=r"Unknown operation 'pl\.does_not_exist'"):
 
-            @pl.function
+            @pl.function_parser
             def main(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.does_not_exist(x)  # type: ignore[attr-defined]
                 return result
@@ -46,7 +46,7 @@ class TestWrapperErrorsThroughParser:
     def test_pl_exp_on_scalar_emits_python_operators_hint(self):
         with pytest.raises(InvalidOperationError) as exc_info:
 
-            @pl.function
+            @pl.function_parser
             def main(
                 config: pl.Tensor[[1], pl.FP32],
                 out: pl.Tensor[[1], pl.FP32],
@@ -67,7 +67,7 @@ class TestWrapperErrorsThroughParser:
             match=r"pl\.tensor operation 'cast'.*Invalid rounding mode",
         ):
 
-            @pl.function
+            @pl.function_parser
             def main(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                 result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(
                     x,
@@ -124,9 +124,9 @@ class TestSpanPropagatesIntoWrapperConstructedNodes:
     def test_call_span_matches_parse_site(self):
         """``Call`` span must point at the user's source line, not the wrapper file."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -183,9 +183,9 @@ class TestFullPythonCallingConvention:
     def test_mixed_positional_and_keyword_styles_all_parse(self):
         """All-positional, mixed, all-keyword, and unified-op-kwargs forms parse."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 x: pl.Tensor[[16, 16], pl.FP16],
@@ -223,9 +223,9 @@ class TestFullPythonCallingConvention:
     def test_dtype_attribute_works_positional_and_keyword(self):
         """``pl.cast(x, pl.BF16)`` and ``pl.cast(x, target_type=pl.BF16)`` both parse."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 x: pl.Tensor[[16, 16], pl.FP32],

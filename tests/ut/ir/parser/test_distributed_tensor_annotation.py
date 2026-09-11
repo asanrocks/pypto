@@ -17,9 +17,9 @@ from pypto.pypto_core.ir import DistributedTensorType, TensorType
 
 
 def test_distributed_tensor_param_resolves_to_distributed_type():
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def f(self, x: pld.DistributedTensor[[256], pl.FP32]) -> pld.DistributedTensor[[256], pl.FP32]:
             return x
 
@@ -36,9 +36,9 @@ def test_distributed_tensor_param_resolves_to_distributed_type():
 def test_plain_tensor_param_is_not_distributed_type():
     """``pl.Tensor[...]`` must not promote to ``DistributedTensorType``."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def f(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
@@ -53,9 +53,9 @@ def test_plain_tensor_param_is_not_distributed_type():
 def test_distributed_tensor_with_layout():
     """DistributedTensor mirrors Tensor's third-slot layout dispatch."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def f(self, x: pld.DistributedTensor[[64], pl.FP32, pl.NZ]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
@@ -80,9 +80,9 @@ def test_distributed_tensor_ignores_explicit_layout_window_buffer_marker():
     annotation eval at class definition (the distributed metaclass subscript).
     """
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def f(
             self, x: pld.DistributedTensor[[256], pl.FP32, "window_buffer=wbuf"]
         ) -> pld.DistributedTensor[[256], pl.FP32]:

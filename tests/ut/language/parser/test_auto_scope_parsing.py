@@ -52,13 +52,13 @@ def _first_if(stmt):
 
 
 def test_scope_auto_requires_opt_out_and_round_trips():
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
-        @pl.function(type=pl.FunctionType.Orchestration, auto_scope=False)
+        @pl.function_parser(type=pl.FunctionType.Orchestration, auto_scope=False)
         def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.scope():
                 a = self.k1(x)
@@ -76,13 +76,13 @@ def test_scope_auto_requires_opt_out_and_round_trips():
 
 
 def test_scope_manual_mode_round_trips():
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.scope(mode=pl.ScopeMode.MANUAL):
                 a = self.k1(x)
@@ -99,13 +99,13 @@ def test_scope_manual_mode_round_trips():
 
 
 def test_manual_scope_alias_parses_to_same_ir():
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.manual_scope():
                 a = self.k1(x)
@@ -120,9 +120,9 @@ def test_manual_scope_alias_parses_to_same_ir():
 def test_scope_rejects_positional_args():
     with pytest.raises(ParserSyntaxError):
 
-        @pl.program
+        @pl.program_parser
         class _Prog:
-            @pl.function(type=pl.FunctionType.Orchestration, auto_scope=False)
+            @pl.function_parser(type=pl.FunctionType.Orchestration, auto_scope=False)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.scope(1):  # type: ignore[arg-type]  # deliberate: positional arg rejected
                     a = x
@@ -132,13 +132,13 @@ def test_scope_rejects_positional_args():
 def test_auto_scope_rejected_in_default_mode():
     with pytest.raises(ParserSyntaxError):  # AUTO scope requires auto_scope=False
 
-        @pl.program
+        @pl.program_parser
         class _Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.scope():
                     a = self.k1(x)
@@ -148,9 +148,9 @@ def test_auto_scope_rejected_in_default_mode():
 def test_loop_carried_yield_outside_scope_ok():
     # Supported pattern: scope wraps the per-iteration work, the loop-carried
     # yield is a direct for-body child.
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.AIV)
+        @pl.function_parser(type=pl.FunctionType.AIV)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -160,7 +160,7 @@ def test_loop_carried_yield_outside_scope_ok():
             r: pl.Tensor[[16, 16], pl.FP32] = pl.store(t, [0, 0], out)
             return r
 
-        @pl.function(type=pl.FunctionType.Orchestration, auto_scope=False)
+        @pl.function_parser(type=pl.FunctionType.Orchestration, auto_scope=False)
         def orch(self, a: pl.Tensor[[16, 16], pl.FP32], out: pl.Out[pl.Tensor[[16, 16], pl.FP32]]):
             for i, (acc,) in pl.range(4, init_values=(out,)):
                 with pl.scope():
@@ -185,13 +185,13 @@ def test_manual_scope_in_if_branch_registers_yield_var():
     # if branch must still register as the if's return-var. _scan_for_yields
     # treats manual_scope (an alias for `pl.scope(mode=MANUAL)`) as transparent,
     # exactly like `pl.scope()` — otherwise the enclosing if drops `return_var`.
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             for i, (acc,) in pl.range(4, init_values=(x,)):
                 if i == 0:
@@ -216,13 +216,13 @@ def test_manual_scope_in_if_branch_registers_yield_var():
 def test_auto_scope_rejected_inside_manual_scope():
     with pytest.raises(ParserSyntaxError):  # runtime forbids AUTO nested in MANUAL
 
-        @pl.program
+        @pl.program_parser
         class _Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration, auto_scope=False)
+            @pl.function_parser(type=pl.FunctionType.Orchestration, auto_scope=False)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.scope(mode=pl.ScopeMode.MANUAL):
                     with pl.scope():

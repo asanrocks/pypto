@@ -59,7 +59,7 @@ class TestBinopConstantFolding:
         """ROPE_DIM // 2 folds to ConstInt(4), not FloorDiv(ConstInt(8), ConstInt(2))."""
         ROPE_DIM = 8
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.INT32]) -> pl.Tensor[[64], pl.INT32]:
             result = pl.mul(x, ROPE_DIM // 2)
             return result
@@ -78,7 +78,7 @@ class TestBinopConstantFolding:
         A = 10
         B = 20
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.INT32]) -> pl.Tensor[[64], pl.INT32]:
             result = pl.mul(x, A + B)
             return result
@@ -97,7 +97,7 @@ class TestBinopConstantFolding:
         BASE = 64
         FACTOR = 2
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.INT32]) -> pl.Tensor[[64], pl.INT32]:
             result = pl.mul(x, BASE * FACTOR)
             return result
@@ -114,7 +114,7 @@ class TestBinopConstantFolding:
         N = 17
         M = 5
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.INT32]) -> pl.Tensor[[64], pl.INT32]:
             result = pl.mul(x, N % M)
             return result
@@ -132,7 +132,7 @@ class TestBinopConstantFolding:
         B = 28
         C = 4
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.INT32]) -> pl.Tensor[[64], pl.INT32]:
             result = pl.mul(x, (A + B) // C)
             return result
@@ -149,7 +149,7 @@ class TestBinopConstantFolding:
         A = 10.0
         B = 4.0
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result = pl.mul(x, A / B)
             return result
@@ -171,7 +171,7 @@ class TestUnaryopConstantFolding:
         """-CLOSURE_VAR folds to ConstInt(-val), not Neg(ConstInt(val))."""
         VAL = 42
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.INT32]) -> pl.Tensor[[64], pl.INT32]:
             result = pl.mul(x, -VAL)
             return result
@@ -196,7 +196,7 @@ class TestMixedExpressionFallback:
         """dsl_scalar + CLOSURE produces an IR Add node, not a constant."""
         OFFSET = 10
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[64], pl.FP32],
             cfg: pl.Tensor[[1], pl.INT32],
@@ -227,7 +227,7 @@ class TestMixedExpressionFallback:
     def test_pure_dsl_binop_not_folded(self):
         """Operations on DSL-defined variables should not attempt folding."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             a = pl.add(x, x)
             b = pl.sub(a, x)
@@ -254,9 +254,9 @@ class TestDimensionEqualityAfterFolding:
         """Two occurrences of ROPE_DIM // 2 fold to ConstInt(4), enabling DimensionsEqual."""
         ROPE_DIM = 8
 
-        @pl.program
+        @pl.program_parser
         class FoldedDims:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 src: pl.Tensor[[16, 8], pl.FP32],
@@ -284,7 +284,7 @@ class TestDimensionEqualityAfterFolding:
         A = 16
         B = 8
 
-        @pl.function
+        @pl.function_parser
         def func(
             src: pl.Tensor[[16, 8], pl.FP32],
             out: pl.Tensor[[1, 8], pl.FP32],
@@ -308,7 +308,7 @@ class TestScopeShadowingSafety:
         """DSL-scoped variable N shadows closure N — folding must not happen."""
         N = 8  # noqa: F841 — deliberately shadowed by DSL assignment below
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[64], pl.FP32],
             cfg: pl.Tensor[[1], pl.INDEX],
@@ -337,7 +337,7 @@ class TestScopeShadowingSafety:
         """If one operand is DSL-scoped and the other is closure, skip folding."""
         M = 100
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[64], pl.FP32],
             cfg: pl.Tensor[[1], pl.INDEX],
@@ -385,7 +385,7 @@ class TestSymbolicShapeEquality:
         """``x[:, k : k + C]`` inside a loop produces a literal-C extent."""
         C = 64
 
-        @pl.function
+        @pl.function_parser
         def func(a: pl.Tensor[[8, 256], pl.BF16]) -> pl.Tensor[[8, 64], pl.BF16]:
             out = a[:, 0:C]
             for k in pl.range(C, 256, C):
@@ -399,7 +399,7 @@ class TestSymbolicShapeEquality:
         """``x[:, i * s : (i + 1) * s]`` folds to extent ``s``."""
         S = 32
 
-        @pl.function
+        @pl.function_parser
         def func(a: pl.Tensor[[8, 256], pl.BF16]) -> pl.Tensor[[8, 32], pl.BF16]:
             out = a[:, 0:S]
             for i in pl.range(8):
@@ -416,7 +416,7 @@ class TestSymbolicShapeEquality:
         as ``k + C - k`` did not match the initial ``C`` shape."""
         C = 64
 
-        @pl.function
+        @pl.function_parser
         def func(a: pl.Tensor[[8, 256], pl.BF16]) -> pl.Tensor[[8, 64], pl.BF16]:
             chunk = a[:, 0:C]
             for k in pl.range(C, 256, C):
@@ -432,7 +432,7 @@ class TestSymbolicShapeEquality:
         raised 'requires compatible shapes'."""
         HALF = 32
 
-        @pl.function
+        @pl.function_parser
         def func(
             src: pl.Tensor[[1, 128], pl.FP32],
             out: pl.Tensor[[1, 32], pl.FP32],

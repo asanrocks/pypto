@@ -44,9 +44,9 @@ def _iter_stmts(stmt: ir.Stmt):
 def test_put_parses_to_op_with_atomic_attr():
     """``pld.tensor.put`` parses to the registered op with the ``atomic`` attr packed as int."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             dst: pld.DistributedTensor[[16, 64], pl.FP16],
@@ -77,9 +77,9 @@ def test_put_parses_to_op_with_atomic_attr():
 def test_put_round_trips_through_printer_and_parser():
     """Printed ``pld.tensor.put`` IR re-parses to a structurally-equal program."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             dst: pld.DistributedTensor[[8], pl.FP32],

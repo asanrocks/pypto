@@ -33,7 +33,7 @@ class TestStaticPrint:
     def test_static_print_variable(self, capsys):
         """Test that static_print prints variable name and type."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[128, 64], pl.FP16]) -> pl.Tensor[[128, 64], pl.FP16]:
             pl.static_print(x)
             return x
@@ -44,7 +44,7 @@ class TestStaticPrint:
     def test_static_print_string_label(self, capsys):
         """Test that string arguments are printed as-is."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_print("my label")
             return x
@@ -55,7 +55,7 @@ class TestStaticPrint:
     def test_static_print_multiple_args(self, capsys):
         """Test static_print with mixed string and variable args."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_print("input:", x)
             return x
@@ -66,7 +66,7 @@ class TestStaticPrint:
     def test_static_print_const(self, capsys):
         """Test static_print with a constant value."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_print(42)
             return x
@@ -77,7 +77,7 @@ class TestStaticPrint:
     def test_static_print_fstring_with_variable(self, capsys):
         """Test that static_print supports f-strings with IR variables."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[128, 64], pl.FP16]) -> pl.Tensor[[128, 64], pl.FP16]:
             pl.static_print(f"input: {x}")
             return x
@@ -88,7 +88,7 @@ class TestStaticPrint:
     def test_static_print_fstring_with_constant(self, capsys):
         """Test that static_print supports f-strings with constants."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_print(f"value: {42}")
             return x
@@ -99,7 +99,7 @@ class TestStaticPrint:
     def test_static_print_fstring_multiple_placeholders(self, capsys):
         """Test f-string with multiple expression placeholders."""
 
-        @pl.function
+        @pl.function_parser
         def func(a: pl.Tensor[[64], pl.FP32], b: pl.Tensor[[32], pl.FP16]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_print(f"a={a}, b={b}")
             return a
@@ -112,13 +112,13 @@ class TestStaticPrint:
     def test_static_print_fstring_no_ir_generated(self):
         """Test that static_print with f-strings produces no IR."""
 
-        @pl.function
+        @pl.function_parser
         def with_print(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_print(f"debug: {x}")
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.function
+        @pl.function_parser
         def without_print(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
@@ -128,13 +128,13 @@ class TestStaticPrint:
     def test_static_print_no_ir_generated(self):
         """Test that static_print produces no IR — programs are structurally equal."""
 
-        @pl.function
+        @pl.function_parser
         def with_print(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_print(x)
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.function
+        @pl.function_parser
         def without_print(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
@@ -146,7 +146,7 @@ class TestStaticPrint:
 
         with pytest.raises(ParserSyntaxError, match="requires at least 1 argument"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.static_print()
                 return x
@@ -156,7 +156,7 @@ class TestStaticPrint:
         code = """
 import pypto.language as pl
 
-@pl.function
+@pl.function_parser
 def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     pl.static_print("check:", x)
     return x
@@ -171,7 +171,7 @@ def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
 
         with pytest.raises(ParserError):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.static_print("debug:", x)
                 pl.static_assert(False, "intentional failure")
@@ -187,7 +187,7 @@ class TestStaticAssert:
     def test_static_assert_true_passes(self):
         """Test that static_assert(True) succeeds."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_assert(True)
             return x
@@ -200,7 +200,7 @@ class TestStaticAssert:
 
         with pytest.raises(ParserError, match="static_assert failed"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.static_assert(False)
                 return x
@@ -210,7 +210,7 @@ class TestStaticAssert:
 
         with pytest.raises(ParserError, match="shape mismatch"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.static_assert(False, "shape mismatch")
                 return x
@@ -218,7 +218,7 @@ class TestStaticAssert:
     def test_static_assert_nonzero_int_passes(self):
         """Test that static_assert(1) passes."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_assert(1)
             return x
@@ -230,7 +230,7 @@ class TestStaticAssert:
 
         with pytest.raises(ParserError, match="static_assert failed"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.static_assert(0)
                 return x
@@ -239,7 +239,7 @@ class TestStaticAssert:
         """Test static_assert with closure variable expression."""
         N = 64
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_assert(N > 32)
             return x
@@ -253,7 +253,7 @@ class TestStaticAssert:
 
         with pytest.raises(ParserError, match="static_assert failed"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.static_assert(N > 32)
                 return x
@@ -263,7 +263,7 @@ class TestStaticAssert:
 
         with pytest.raises(ParserError, match="compile-time evaluable"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Scalar[pl.INT32]) -> pl.Scalar[pl.INT32]:
                 pl.static_assert(x)
                 return x
@@ -271,13 +271,13 @@ class TestStaticAssert:
     def test_static_assert_no_ir_generated(self):
         """Test that static_assert produces no IR."""
 
-        @pl.function
+        @pl.function_parser
         def with_assert(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             pl.static_assert(True)
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.function
+        @pl.function_parser
         def without_assert(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
@@ -289,14 +289,14 @@ class TestStaticAssert:
 
         with pytest.raises(ParserSyntaxError, match="1 or 2 arguments"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.static_assert()
                 return x
 
         with pytest.raises(ParserSyntaxError, match="1 or 2 arguments"):
 
-            @pl.function
+            @pl.function_parser
             def func2(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.static_assert(True, "msg", "extra")
                 return x
@@ -306,7 +306,7 @@ class TestStaticAssert:
         code = """
 import pypto.language as pl
 
-@pl.function
+@pl.function_parser
 def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     pl.static_assert(True)
     return x
@@ -321,7 +321,7 @@ def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         code = """
 import pypto.language as pl
 
-@pl.function
+@pl.function_parser
 def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     pl.static_assert(False, "bad condition")
     return x
@@ -338,7 +338,7 @@ class TestStaticPrintFstringErrors:
 
         with pytest.raises(UnsupportedFeatureError, match="conversion"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.static_print(f"{x!r}")
                 return x
@@ -348,7 +348,7 @@ class TestStaticPrintFstringErrors:
 
         with pytest.raises(UnsupportedFeatureError, match="format spec"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Scalar[pl.INT32]) -> pl.Scalar[pl.INT32]:
                 pl.static_print(f"{x:>10}")
                 return x

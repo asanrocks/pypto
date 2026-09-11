@@ -19,7 +19,7 @@ in orchestration codegen.
 import pypto.language as pl
 import pytest
 from pypto import DataType, ir
-from pypto.language.parser.diagnostics.exceptions import ParserSyntaxError, ParserTypeError
+from pypto.language.parser.diagnostics import ParserSyntaxError, ParserTypeError
 
 
 def _flatten(stmt):
@@ -44,9 +44,9 @@ def _main_submits(prog) -> list:
 
 
 def _plain_flag_program():
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def producer(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -54,7 +54,7 @@ def _plain_flag_program():
             out = pl.store(t, [0, 0], out)
             return out
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -66,9 +66,9 @@ def _plain_flag_program():
 
 
 def _spmd_flag_program():
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def producer(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -76,7 +76,7 @@ def _spmd_flag_program():
             out = pl.store(t, [0, 0], out)
             return out
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -88,9 +88,9 @@ def _spmd_flag_program():
 
 
 def _no_flag_program():
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def producer(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -98,7 +98,7 @@ def _no_flag_program():
             out = pl.store(t, [0, 0], out)
             return out
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -110,9 +110,9 @@ def _no_flag_program():
 
 
 def _explicit_false_program():
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def producer(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -120,7 +120,7 @@ def _explicit_false_program():
             out = pl.store(t, [0, 0], out)
             return out
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -155,9 +155,9 @@ class TestAllowEarlyResolveParsing:
     def test_non_bool_literal_rejected(self):
         with pytest.raises(ParserSyntaxError, match="allow_early_resolve must be a boolean literal"):
 
-            @pl.program
+            @pl.program_parser
             class Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def producer(
                     self,
                     x: pl.Tensor[[512, 128], pl.FP32],
@@ -167,7 +167,7 @@ class TestAllowEarlyResolveParsing:
                     out = pl.store(t, [0, 0], out)
                     return out
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self,
                     x: pl.Tensor[[512, 128], pl.FP32],
@@ -182,9 +182,9 @@ class TestAllowEarlyResolveParsing:
         # is not an accepted kwarg there.
         with pytest.raises(ParserTypeError, match="allow_early_resolve"):
 
-            @pl.program
+            @pl.program_parser
             class Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def producer(
                     self,
                     x: pl.Tensor[[512, 128], pl.FP32],
@@ -194,7 +194,7 @@ class TestAllowEarlyResolveParsing:
                     out = pl.store(t, [0, 0], out)
                     return out
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self,
                     x: pl.Tensor[[512, 128], pl.FP32],
@@ -206,13 +206,13 @@ class TestAllowEarlyResolveParsing:
 
 class TestTimingSlotParsing:
     def test_spmd_submit_records_slot_as_attr(self):
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def producer(self, x: pl.Tensor[[1], pl.FP32]) -> pl.Tensor[[1], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[1], pl.FP32]) -> pl.Tensor[[1], pl.FP32]:
                 with pl.manual_scope():
                     out, _ = pl.spmd_submit(self.producer, x, core_num=4, timing_slot=15)
@@ -235,13 +235,13 @@ class TestTimingSlotParsing:
         source = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def producer(self, x: pl.Tensor[[1], pl.FP32]) -> pl.Tensor[[1], pl.FP32]:
         return x
 
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(self, x: pl.Tensor[[1], pl.FP32]) -> pl.Tensor[[1], pl.FP32]:
         with pl.manual_scope():
             out, _ = pl.submit(self.producer, x, timing_slot=SLOT)
@@ -254,13 +254,13 @@ class Prog:
         source = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def producer(self, x: pl.Tensor[[1], pl.FP32]) -> pl.Tensor[[1], pl.FP32]:
         return x
 
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(self, x: pl.Tensor[[1], pl.FP32]) -> pl.Tensor[[1], pl.FP32]:
         with pl.manual_scope():
             out, _ = pl.submit(self.producer, x, timing_slot=0)
@@ -314,9 +314,9 @@ class TestAllowEarlyResolveStructuralEqual:
 
 
 def _at_flag_program():
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -339,9 +339,9 @@ class TestAtAllowEarlyResolve:
         ir.assert_structural_equal(reparsed, Prog)
 
     def test_default_omitted_from_print(self):
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
             ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -355,9 +355,9 @@ class TestAtAllowEarlyResolve:
     def test_non_bool_literal_rejected(self):
         with pytest.raises(ParserSyntaxError, match="allow_early_resolve must be a boolean literal"):
 
-            @pl.program
+            @pl.program_parser
             class Prog:
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self,
                     x: pl.Tensor[[512, 128], pl.FP32],

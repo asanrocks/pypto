@@ -70,9 +70,9 @@ def test_remote_load_lifts_to_op_call_with_tile_return_type():
     """``pld.tile.remote_load`` on a DistributedTensor param parses to an IR
     call whose return type is ``TileType(shape=[32], dtype=target.dtype)``."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[64], pl.FP16],
@@ -94,9 +94,9 @@ def test_remote_load_threads_target_and_peer_through_args():
     """The parser packs ``[target, peer, offsets, shape]`` as positional args
     on the IR call (kwargs collapsed)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[64], pl.FP32],
@@ -122,9 +122,9 @@ def test_remote_load_threads_target_and_peer_through_args():
 def test_remote_load_handles_multi_dim_shape():
     """2-D target → 2-D offsets/shape — ranks must match."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[64, 32], pl.FP16],
@@ -143,9 +143,9 @@ def test_remote_load_handles_multi_dim_shape():
 def test_remote_load_accepts_valid_shape_for_ragged_tail():
     """The optional fifth argument becomes the result tile's valid_shape."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[1, 17], pl.FP32],
@@ -176,9 +176,9 @@ def test_remote_load_accepts_valid_shape_for_ragged_tail():
 def test_remote_load_rejects_zero_positional():
     with pytest.raises(InvalidOperationError, match="positional argument"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64], pl.FP32],
@@ -193,9 +193,9 @@ def test_remote_load_rejects_too_many_positional():
     # still rejected.
     with pytest.raises(InvalidOperationError, match="positional argument"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64], pl.FP32],
@@ -208,9 +208,9 @@ def test_remote_load_rejects_too_many_positional():
 def test_remote_load_accepts_positional_args():
     # The printer emits positional args (data, peer, offsets, shape); the parser
     # must accept that form for the print->parse roundtrip to hold.
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[64], pl.FP32],
@@ -228,9 +228,9 @@ def test_remote_load_accepts_positional_args():
 def test_remote_load_rejects_missing_peer():
     with pytest.raises(InvalidOperationError, match="required positional argument"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64], pl.FP32],
@@ -242,9 +242,9 @@ def test_remote_load_rejects_missing_peer():
 def test_remote_load_rejects_missing_offsets():
     with pytest.raises(InvalidOperationError, match="required positional argument"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64], pl.FP32],
@@ -257,9 +257,9 @@ def test_remote_load_rejects_missing_offsets():
 def test_remote_load_rejects_missing_shape():
     with pytest.raises(InvalidOperationError, match="required positional argument"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64], pl.FP32],
@@ -272,9 +272,9 @@ def test_remote_load_rejects_missing_shape():
 def test_remote_load_rejects_unknown_kwarg():
     with pytest.raises(InvalidOperationError, match="unexpected keyword argument"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64], pl.FP32],
@@ -295,9 +295,9 @@ def test_remote_load_rejects_plain_tensor_target():
     """The parser refuses a ``pl.Tensor`` target — must be window-bound."""
     with pytest.raises(InvalidOperationError, match="DistributedTensor"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pl.Tensor[[64], pl.FP32],
@@ -315,9 +315,9 @@ def test_remote_load_rejects_non_list_offsets():
     """
     with pytest.raises(InvalidOperationError, match="remote_load"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64], pl.FP32],
@@ -331,9 +331,9 @@ def test_remote_load_rejects_unknown_subop():
     """``pld.tile.<other>`` is rejected at 3-segment dispatch."""
     with pytest.raises(InvalidOperationError, match=r"pld\.tile"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64], pl.FP32],
@@ -347,9 +347,9 @@ def test_remote_load_short_form():
     """``pld.remote_load(...)`` (unified short form) parses to the same IR op
     as the canonical 3-segment ``pld.tile.remote_load(...)``."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[64], pl.FP32],

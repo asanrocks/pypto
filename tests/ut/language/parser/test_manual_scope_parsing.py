@@ -12,7 +12,7 @@
 import pypto.language as pl
 import pytest
 from pypto import ir
-from pypto.language.parser.diagnostics.exceptions import (
+from pypto.language.parser.diagnostics import (
     ParserSyntaxError,
     ParserTypeError,
     UnsupportedFeatureError,
@@ -58,13 +58,13 @@ def _calls_in(stmt):
 
 class TestManualScopeParsing:
     def test_parse_manual_scope_creates_runtime_scope_with_manual_true(self):
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     a = self.k1(x)
@@ -79,25 +79,25 @@ class TestManualScopeParsing:
     def test_parse_manual_scope_rejects_arguments(self):
         with pytest.raises(ParserSyntaxError):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope(name="foo"):
                         return x
 
     def test_submit_records_manual_dep_edges(self):
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k2(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     a, a_tid = pl.submit(self.k1, x)
@@ -142,17 +142,17 @@ class TestManualScopeParsing:
     def test_cluster_nested_submit_rejects_per_task_dispatch_metadata(self, submit_expr, metadata_field):
         """Inner Submit controls cannot be represented by the outlined Group dispatch."""
         source = f"""
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.AIC)
+    @pl.function_parser(type=pl.FunctionType.AIC)
     def k1(self, x: pl.Tensor[[64], pl.INT32]) -> pl.Tensor[[64], pl.INT32]:
         return x
 
-    @pl.function(type=pl.FunctionType.AIV)
+    @pl.function_parser(type=pl.FunctionType.AIV)
     def k2(self, x: pl.Tensor[[64], pl.INT32]) -> pl.Tensor[[64], pl.INT32]:
         return x
 
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(self, x: pl.Tensor[[64], pl.INT32]) -> pl.Tensor[[64], pl.INT32]:
         with pl.cluster():
             a, a_tid = pl.submit(self.k1, x)
@@ -166,13 +166,13 @@ class Prog:
     def test_submit_none_dep_entry_dropped(self):
         """A bare ``None`` entry in ``deps=`` contributes no edge."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     a, _ = pl.submit(self.k1, x, deps=[None])
@@ -190,13 +190,13 @@ class Prog:
         """``deps=`` on a plain ``self.kernel(...)`` call is rejected — use pl.submit."""
         with pytest.raises(ParserTypeError):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         a = self.k1(x)
@@ -208,13 +208,13 @@ class Prog:
         on ``Submit::deps_`` only (ManualDepsOnSubmitOnly invariant)."""
         with pytest.raises(ParserTypeError, match="manual_dep_edges"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         a, a_tid = pl.submit(self.k1, x)
@@ -231,17 +231,17 @@ class Prog:
         conservatively). No ``with pl.manual_scope():`` required.
         """
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k2(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 # No manual_scope wrapper — auto OverlapMap stays on; the
                 # explicit deps= entry is added on top.
@@ -262,13 +262,13 @@ class Prog:
     def test_submit_as_bare_expression_is_rejected(self):
         with pytest.raises(ParserSyntaxError):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         pl.submit(self.k1, x)
@@ -282,13 +282,13 @@ class Prog:
         usually still writes the unpacked ``a, tid = pl.submit(...)`` form.
         """
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     a = pl.submit(self.k1, x)  # noqa: F841 — checked via IR
@@ -315,9 +315,9 @@ class Prog:
         them to the ``Call`` it synthesises for the outlined kernel.
         """
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="s1") as t1:
                     y: pl.Tensor[[64], pl.FP32] = x
@@ -366,9 +366,9 @@ class Prog:
         vanish across a round-trip.
         """
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="s1") as t1:
                     y: pl.Tensor[[64], pl.FP32] = x
@@ -391,9 +391,9 @@ class Prog:
     def test_pl_at_no_dep_args_print_parse_roundtrip(self):
         """``no_dep_args=`` survives a print → parse round-trip on its own."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -412,9 +412,9 @@ class Prog:
         """All three attr-driven kwargs in one ``pl.at(...)`` round-trip
         together."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -443,9 +443,9 @@ class Prog:
         """``as`` is only meaningful on ``pl.at(...)``; other constructs reject it."""
         with pytest.raises(ParserSyntaxError):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope() as not_supported:  # noqa: F841
                         return x
@@ -454,13 +454,13 @@ class Prog:
         """pl.submit result targets must be plain names — no nested tuples."""
         with pytest.raises(ParserSyntaxError):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         # Nested tuple in the result target — must error rather
@@ -475,9 +475,9 @@ class TestPlAtNoDepArgsParsing:
     def test_no_dep_args_records_arg_direction_overrides_vars(self):
         """The parser writes the resolved Var list to ScopeStmt.attrs[arg_direction_overrides_vars]."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -503,9 +503,9 @@ class TestPlAtNoDepArgsParsing:
     def test_no_dep_args_combines_with_deps_and_tid(self):
         """``deps=``, ``no_dep_args=``, and ``as tid:`` are independent and may all appear."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -537,9 +537,9 @@ class TestPlAtNoDepArgsParsing:
     def test_no_dep_args_rejects_non_list_literal(self):
         with pytest.raises(ParserTypeError, match="must be a list literal"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.Opaque)
+                @pl.function_parser(type=pl.FunctionType.Opaque)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     nope = [x]  # noqa: F841
                     with pl.at(level=pl.Level.CORE_GROUP, no_dep_args=nope):
@@ -549,9 +549,9 @@ class TestPlAtNoDepArgsParsing:
     def test_no_dep_args_rejects_non_name_entry(self):
         with pytest.raises(ParserTypeError, match="bare tensor names"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.Opaque)
+                @pl.function_parser(type=pl.FunctionType.Opaque)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.at(level=pl.Level.CORE_GROUP, no_dep_args=[pl.no_dep(x)]):
                         y: pl.Tensor[[64], pl.FP32] = pl.add(x, x)
@@ -565,9 +565,9 @@ class TestPlAtNoDepArgsParsing:
         # it, so static-checker noise about ``ghost`` is irrelevant here.
         with pytest.raises(ParserTypeError, match="unknown name"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.Opaque)
+                @pl.function_parser(type=pl.FunctionType.Opaque)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.at(
                         level=pl.Level.CORE_GROUP,
@@ -579,9 +579,9 @@ class TestPlAtNoDepArgsParsing:
     def test_no_dep_args_rejects_duplicate(self):
         with pytest.raises(ParserTypeError, match="more than once"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.Opaque)
+                @pl.function_parser(type=pl.FunctionType.Opaque)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.at(level=pl.Level.CORE_GROUP, no_dep_args=[x, x]):
                         y: pl.Tensor[[64], pl.FP32] = pl.add(x, x)
@@ -590,9 +590,9 @@ class TestPlAtNoDepArgsParsing:
     def test_no_dep_args_empty_list_is_noop(self):
         """``no_dep_args=[]`` is tolerated and leaves the scope attrs clean."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.at(level=pl.Level.CORE_GROUP, no_dep_args=[]):
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x, x)
@@ -650,17 +650,17 @@ class TestSubmitDepsPerElementAndComprehension:
     def test_form1_single_per_element_subscript(self):
         """``deps=[tids[n]]`` desugars to a size-1 fresh array."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     tids = pl.array.create(4, pl.TASK_ID)
@@ -690,17 +690,17 @@ class TestSubmitDepsPerElementAndComprehension:
     def test_form1_mixed_scalar_and_subscript(self):
         """``deps=[scalar, tids[2*k], tids[2*k+1]]`` desugars to a size-3 fresh array."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     seed_a, seed_tid = pl.submit(self.producer, x)
@@ -741,17 +741,17 @@ class TestSubmitDepsPerElementAndComprehension:
         """``deps=[arr[k] for k in range(K)]`` unrolls to a size-K fresh array."""
         K = 4
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     tids = pl.array.create(K, pl.TASK_ID)
@@ -781,17 +781,17 @@ class TestSubmitDepsPerElementAndComprehension:
 
         K = 4
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     tids = pl.array.create(K, pl.TASK_ID)
@@ -825,17 +825,17 @@ class TestSubmitDepsPerElementAndComprehension:
     def test_form2_comprehension_global_iterable(self):
         """A module-global list is a valid iterable for Form 2."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     tids = pl.array.create(4, pl.TASK_ID)
@@ -862,17 +862,17 @@ class TestSubmitDepsPerElementAndComprehension:
         with a clear error pointing at Form 1 inline."""
         with pytest.raises(ParserTypeError, match="DSL loop"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         tids = pl.array.create(4, pl.TASK_ID)
@@ -891,17 +891,17 @@ class TestSubmitDepsPerElementAndComprehension:
         """A filter that depends on an IR Var (from `pl.range`) is rejected."""
         with pytest.raises(ParserTypeError, match="IR variable"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         tids = pl.array.create(4, pl.TASK_ID)
@@ -921,17 +921,17 @@ class TestSubmitDepsPerElementAndComprehension:
         """When every `deps=` entry is a bare TaskId scalar Var, NO synthesizer
         fires — codegen golden output stays byte-identical."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     a, a_tid = pl.submit(self.producer, x)
@@ -970,17 +970,17 @@ class TestSubmitDepsPerElementAndComprehension:
         before we ever reach ``deps=cast_deps``."""
         with pytest.raises(UnsupportedFeatureError, match="ListComp"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         tids = pl.array.create(4, pl.TASK_ID)
@@ -998,17 +998,17 @@ class TestSubmitDepsPerElementAndComprehension:
         at parse time with a clear error."""
         with pytest.raises(ParserTypeError, match="cannot mix"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         tids = pl.array.create(4, pl.TASK_ID)
@@ -1025,17 +1025,17 @@ class TestSubmitDepsPerElementAndComprehension:
         so both orientations raise."""
         with pytest.raises(ParserTypeError, match="cannot mix"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def producer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def consumer(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         tids = pl.array.create(4, pl.TASK_ID)
@@ -1054,9 +1054,9 @@ class TestSubmitDepsPerElementAndComprehension:
         AssignStmts BEFORE the ScopeStmt so the attr reference resolves.
         """
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="s1") as t1:
                     y: pl.Tensor[[64], pl.FP32] = x
@@ -1099,11 +1099,11 @@ class TestSubmitDepsPerElementAndComprehension:
         """``with pl.at(..., deps=[arr[k] for k in range(K)])`` unrolls correctly."""
         K = 3
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                # Seed K producer scopes; collect their TaskIds in an array.
+                # Create K producer scopes; collect their TaskIds in an array.
                 tids = pl.array.create(K, pl.TASK_ID)
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="p0") as t0:
                     y0: pl.Tensor[[64], pl.FP32] = x

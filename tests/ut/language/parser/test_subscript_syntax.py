@@ -15,8 +15,7 @@ from typing import cast
 import pypto.language as pl
 import pytest
 from pypto import ir
-from pypto.language.parser.diagnostics import ParserTypeError
-from pypto.language.parser.diagnostics.exceptions import UnsupportedFeatureError
+from pypto.language.parser.diagnostics import ParserTypeError, UnsupportedFeatureError
 
 _OP_TILE_SLICE = ir.get_op("tile.slice").name
 
@@ -27,7 +26,7 @@ class TestTensorSubscript:
     def test_tensor_read_via_subscript(self):
         """A[i, j] with all integer indices on Tensor -> tensor.read."""
 
-        @pl.function
+        @pl.function_parser
         def read_elem(
             A: pl.Tensor[[64, 128], pl.FP32],
             i: pl.Scalar[pl.INDEX],
@@ -42,7 +41,7 @@ class TestTensorSubscript:
     def test_tensor_slice_via_subscript(self):
         """A[0:16, :] with slices on Tensor -> tensor.slice."""
 
-        @pl.function
+        @pl.function_parser
         def slice_tensor(
             A: pl.Tensor[[64, 128], pl.FP32],
         ) -> pl.Tensor[[16, 128], pl.FP32]:
@@ -55,7 +54,7 @@ class TestTensorSubscript:
     def test_tensor_slice_both_bounds(self):
         """A[0:16, 0:32] with explicit bounds -> tensor.slice with computed shapes."""
 
-        @pl.function
+        @pl.function_parser
         def slice_both(
             A: pl.Tensor[[64, 128], pl.FP32],
         ) -> pl.Tensor[[16, 32], pl.FP32]:
@@ -68,7 +67,7 @@ class TestTensorSubscript:
     def test_tensor_slice_open_end(self):
         """A[32:, :] with open end -> tensor.slice with shape = dim - start."""
 
-        @pl.function
+        @pl.function_parser
         def slice_open_end(
             A: pl.Tensor[[64, 128], pl.FP32],
         ) -> pl.Tensor[[32, 128], pl.FP32]:
@@ -81,7 +80,7 @@ class TestTensorSubscript:
     def test_tensor_mixed_subscript(self):
         """A[0:16, 0] with mixed int and slice -> tensor.slice, scalar axis dropped -> [16]."""
 
-        @pl.function
+        @pl.function_parser
         def mixed_sub(
             A: pl.Tensor[[64, 128], pl.FP32],
         ) -> pl.Tensor[[16], pl.FP32]:
@@ -94,7 +93,7 @@ class TestTensorSubscript:
     def test_tensor_subscript_variable_indices(self):
         """A[i, j] with variable indices on Tensor -> tensor.read."""
 
-        @pl.function
+        @pl.function_parser
         def read_var(
             A: pl.Tensor[[64, 128], pl.FP32],
             i: pl.Scalar[pl.INDEX],
@@ -110,7 +109,7 @@ class TestTensorSubscript:
         """A[0:16:2, :] with step should raise error."""
         with pytest.raises(UnsupportedFeatureError, match="step"):
 
-            @pl.function
+            @pl.function_parser
             def bad_step(
                 A: pl.Tensor[[64, 128], pl.FP32],
             ) -> pl.Tensor[[8, 128], pl.FP32]:
@@ -120,7 +119,7 @@ class TestTensorSubscript:
         """A[i, j, k] on a 2D tensor -> error (more indices than rank)."""
         with pytest.raises(ParserTypeError, match="3 indices but the tensor is 2D"):
 
-            @pl.function
+            @pl.function_parser
             def too_many(
                 A: pl.Tensor[[64, 128], pl.FP32],
             ) -> pl.Tensor[[64, 128], pl.FP32]:
@@ -129,7 +128,7 @@ class TestTensorSubscript:
     def test_tensor_partial_index_rank_reduces(self):
         """A[i] on a 2D tensor -> a 1D view (dim 0 dropped)."""
 
-        @pl.function
+        @pl.function_parser
         def partial(
             A: pl.Tensor[[64, 128], pl.FP32],
             i: pl.Scalar[pl.INDEX],
@@ -143,7 +142,7 @@ class TestTensorSubscript:
     def test_tensor_chained_index(self):
         """C[i][j] on a 4D tensor -> two rank-reducing slices, result 2D."""
 
-        @pl.function
+        @pl.function_parser
         def chained(
             C: pl.Tensor[[64, 64, 64, 64], pl.FP32],
             i: pl.Scalar[pl.INDEX],
@@ -158,7 +157,7 @@ class TestTensorSubscript:
     def test_tensor_two_index_partial(self):
         """C[i, j] on a 4D tensor -> a single rank-reducing slice, result 2D."""
 
-        @pl.function
+        @pl.function_parser
         def two_index(
             C: pl.Tensor[[64, 64, 64, 64], pl.FP32],
             i: pl.Scalar[pl.INDEX],
@@ -173,7 +172,7 @@ class TestTensorSubscript:
     def test_tensor_mixed_slice_and_scalar(self):
         """C[i:i+8, j] on a 4D tensor -> [8, 64, 64] view (dim 1 dropped)."""
 
-        @pl.function
+        @pl.function_parser
         def mixed(
             C: pl.Tensor[[64, 64, 64, 64], pl.FP32],
             i: pl.Scalar[pl.INDEX],
@@ -192,7 +191,7 @@ class TestTileSubscript:
     def test_tile_slice_via_subscript(self):
         """A[0:16, :] on Tile -> tile.slice."""
 
-        @pl.function
+        @pl.function_parser
         def slice_tile(
             x: pl.Tensor[[64, 128], pl.FP32],
         ) -> pl.Tensor[[64, 128], pl.FP32]:
@@ -207,7 +206,7 @@ class TestTileSubscript:
     def test_tile_slice_dynamic_upper_uses_valid_shape(self):
         """t[:, :valid_cols] keeps static shape and lowers valid_cols into valid_shape."""
 
-        @pl.function
+        @pl.function_parser
         def slice_tile_dynamic(
             x: pl.Tensor[[64, 128], pl.FP32],
             valid_cols: pl.Scalar[pl.INDEX],
@@ -236,7 +235,7 @@ class TestTileSubscript:
     def test_tile_full_slice_preserves_input_valid_shape(self):
         """t[:, :] preserves the source tile's logical valid_shape."""
 
-        @pl.function
+        @pl.function_parser
         def slice_tile_full(
             x: pl.Tensor[[64, 128], pl.FP32],
             valid_cols: pl.Scalar[pl.INDEX],
@@ -262,7 +261,7 @@ class TestTileSubscript:
     def test_tile_slice_upper_intersects_input_valid_shape(self):
         """t[:, :16] should not widen a source tile that already has narrower valid_shape."""
 
-        @pl.function
+        @pl.function_parser
         def slice_tile_capped(
             x: pl.Tensor[[64, 128], pl.FP32],
             valid_cols: pl.Scalar[pl.INDEX],
@@ -291,7 +290,7 @@ class TestTileSubscript:
     def test_tile_slice_static_upper_clamps_to_source_shape(self):
         """t[:, :256] should clamp its static shape to the source tile extent."""
 
-        @pl.function
+        @pl.function_parser
         def slice_tile_clamped(
             x: pl.Tensor[[64, 128], pl.FP32],
         ) -> pl.Tensor[[64, 128], pl.FP32]:
@@ -315,7 +314,7 @@ class TestTileSubscript:
     def test_tile_read_via_subscript(self):
         """A[0, 0] with literal integer indices on Tile -> tile.read."""
 
-        @pl.function
+        @pl.function_parser
         def read_tile_elem(
             x: pl.Tensor[[64, 128], pl.FP32],
         ) -> pl.Tensor[[64, 128], pl.FP32]:
@@ -330,7 +329,7 @@ class TestTileSubscript:
     def test_tile_read_variable_indices(self):
         """A[i, j] with variable INDEX scalars on Tile -> tile.read."""
 
-        @pl.function
+        @pl.function_parser
         def read_var(
             x: pl.Tensor[[64, 128], pl.FP32],
             i: pl.Scalar[pl.INDEX],
@@ -348,7 +347,7 @@ class TestTileSubscript:
         """t[i, j, k] on a 2D tile -> error (more indices than rank)."""
         with pytest.raises(ParserTypeError, match="3 indices but the tile is 2D"):
 
-            @pl.function
+            @pl.function_parser
             def too_many(
                 x: pl.Tensor[[64, 128], pl.FP32],
             ) -> pl.Tensor[[64, 128], pl.FP32]:
@@ -360,7 +359,7 @@ class TestTileSubscript:
         """t[i] on a 2D tile -> a [1, 128] view (dim 0 dropped, clamped to 2D) + warning."""
         with pytest.warns(UserWarning, match="auto-promoting to 2D shape"):
 
-            @pl.function
+            @pl.function_parser
             def partial(
                 x: pl.Tensor[[64, 128], pl.FP32],
                 i: pl.Scalar[pl.INDEX],
@@ -376,7 +375,7 @@ class TestTileSubscript:
         """A[0:16:2, :] with step on tile should raise error."""
         with pytest.raises(UnsupportedFeatureError, match="step"):
 
-            @pl.function
+            @pl.function_parser
             def bad_step(
                 x: pl.Tensor[[64, 128], pl.FP32],
             ) -> pl.Tensor[[64, 128], pl.FP32]:
@@ -388,7 +387,7 @@ class TestTileSubscript:
         """A[:, start:] on Tile should reject dynamic lower bounds."""
         with pytest.raises(UnsupportedFeatureError, match="Dynamic lower bounds"):
 
-            @pl.function
+            @pl.function_parser
             def bad_dynamic_lower(
                 x: pl.Tensor[[64, 128], pl.FP32],
                 start: pl.Scalar[pl.INDEX],
@@ -401,7 +400,7 @@ class TestTileSubscript:
         """A[:, 10:5] on Tile should reject empty static slices."""
         with pytest.raises(UnsupportedFeatureError, match="positive static extent"):
 
-            @pl.function
+            @pl.function_parser
             def bad_empty_static_slice(
                 x: pl.Tensor[[64, 128], pl.FP32],
             ) -> pl.Tensor[[64, 128], pl.FP32]:
@@ -416,7 +415,7 @@ class TestTupleSubscript:
     def test_tuple_subscript_still_works(self):
         """For-loop tuple unpacking still works after subscript dispatch changes."""
 
-        @pl.function
+        @pl.function_parser
         def tuple_access(
             x: pl.Tensor[[64], pl.FP32],
         ) -> pl.Tensor[[1], pl.FP32]:
@@ -455,7 +454,7 @@ class TestTensorSubscriptWrite:
     def test_tensor_assemble_via_subscript_write(self):
         """A[i:i+16, j:j+32] = src on Tensor -> tensor.assemble (rebinds A)."""
 
-        @pl.function
+        @pl.function_parser
         def write_slice(
             out: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tensor[[16, 32], pl.FP32],
@@ -472,7 +471,7 @@ class TestTensorSubscriptWrite:
     def test_tensor_subscript_write_constant_offsets(self):
         """A[0:16, 0:32] = src lowers to tensor.assemble with literal offsets [0, 0]."""
 
-        @pl.function
+        @pl.function_parser
         def write_const(
             out: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tensor[[16, 32], pl.FP32],
@@ -495,7 +494,7 @@ class TestTensorSubscriptWrite:
     def test_tensor_subscript_write_open_lower(self):
         """A[:16, :32] = src treats omitted lower bound as 0."""
 
-        @pl.function
+        @pl.function_parser
         def write_open(
             out: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tensor[[16, 32], pl.FP32],
@@ -516,7 +515,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(UnsupportedFeatureError, match="step"):
 
-            @pl.function
+            @pl.function_parser
             def bad_step(
                 out: pl.Tensor[[64, 128], pl.FP32],
                 src: pl.Tensor[[8, 128], pl.FP32],
@@ -529,7 +528,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(ParserTypeError, match="3 indices but the tensor is 2D"):
 
-            @pl.function
+            @pl.function_parser
             def too_many(
                 out: pl.Tensor[[64, 128], pl.FP32],
                 src: pl.Tensor[[1, 128], pl.FP32],
@@ -540,7 +539,7 @@ class TestTensorSubscriptWrite:
     def test_tensor_subscript_write_partial(self):
         """A[0:16] = src on a 2D tensor writes rows 0..16 (trailing axis implicit ':')."""
 
-        @pl.function
+        @pl.function_parser
         def partial_write(
             out: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tensor[[16, 128], pl.FP32],
@@ -554,7 +553,7 @@ class TestTensorSubscriptWrite:
     def test_tensor_subscript_write_rank_reducing(self):
         """C[i, j] = rhs2d on a 4D tensor lowers the rhs into a [1, 1, 64, 64] window."""
 
-        @pl.function
+        @pl.function_parser
         def reduce_write(
             C: pl.Tensor[[64, 64, 64, 64], pl.FP32],
             rhs: pl.Tensor[[64, 64], pl.FP32],
@@ -573,7 +572,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(ParserTypeError, match="must be 2D to match"):
 
-            @pl.function
+            @pl.function_parser
             def bad_src(
                 C: pl.Tensor[[64, 64, 64, 64], pl.FP32],
                 rhs: pl.Tensor[[64, 64, 64], pl.FP32],
@@ -588,7 +587,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(UnsupportedFeatureError, match="Element-write"):
 
-            @pl.function
+            @pl.function_parser
             def bad_elem(
                 out: pl.Tensor[[64, 128], pl.FP32],
                 v: pl.Scalar[pl.FP32],
@@ -603,7 +602,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(UnsupportedFeatureError, match="before SSA conversion"):
 
-            @pl.function(strict_ssa=True)
+            @pl.function_parser(strict_ssa=True)
             def bad_ssa(
                 out: pl.Tensor[[64, 128], pl.FP32],
                 src: pl.Tensor[[16, 32], pl.FP32],
@@ -616,7 +615,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(ParserTypeError, match="shape mismatch on source axis 0"):
 
-            @pl.function
+            @pl.function_parser
             def bad_shape(
                 out: pl.Tensor[[64, 128], pl.FP32],
                 src: pl.Tensor[[8, 32], pl.FP32],  # axis 0 should be 16
@@ -629,7 +628,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(ParserTypeError, match="shape mismatch on source axis 1"):
 
-            @pl.function
+            @pl.function_parser
             def bad_full(
                 out: pl.Tensor[[64, 128], pl.FP32],
                 src: pl.Tensor[[64, 32], pl.FP32],  # axis 1 should be 128
@@ -642,7 +641,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(ParserTypeError, match="must be 2D"):
 
-            @pl.function
+            @pl.function_parser
             def bad_rank_src(
                 out: pl.Tensor[[64, 128], pl.FP32],
                 src: pl.Tensor[[32], pl.FP32],
@@ -653,7 +652,7 @@ class TestTensorSubscriptWrite:
     def test_tensor_subscript_write_symbolic_extent_simplifies_match(self):
         """``out[i:i+16, j:j+32] = src`` simplifies (i+16)-i=16 etc. and matches src."""
 
-        @pl.function
+        @pl.function_parser
         def symbolic_match(
             out: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tensor[[16, 32], pl.FP32],
@@ -671,7 +670,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(ParserTypeError, match="shape mismatch on source axis 0"):
 
-            @pl.function
+            @pl.function_parser
             def bad_symbolic(
                 out: pl.Tensor[[64, 128], pl.FP32],
                 src: pl.Tensor[[16, 32], pl.FP32],  # axis 0 should be 8
@@ -683,7 +682,7 @@ class TestTensorSubscriptWrite:
     def test_tensor_subscript_write_unfoldable_extent_skipped(self):
         """Genuinely-symbolic extents (``out[:, :k] = src`` with runtime k) are trusted."""
 
-        @pl.function
+        @pl.function_parser
         def truly_symbolic(
             out: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tensor[[64, 128], pl.FP32],
@@ -701,7 +700,7 @@ class TestTensorSubscriptWrite:
         """src.static=[16, 8] padded for ISA alignment, valid_shape=[16, 4];
         a window expecting 4 cols must be accepted (mirrors pl.store)."""
 
-        @pl.function
+        @pl.function_parser
         def narrow_write(
             out: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tensor[[16, 8], pl.FP32],
@@ -719,7 +718,7 @@ class TestTensorSubscriptWrite:
 
         with pytest.raises(ParserTypeError, match="shape mismatch on source axis 1"):
 
-            @pl.function
+            @pl.function_parser
             def bad_neither_match(
                 out: pl.Tensor[[64, 128], pl.FP32],
                 src: pl.Tensor[[16, 8], pl.FP32],
@@ -732,7 +731,7 @@ class TestTensorSubscriptWrite:
         """Dynamic valid_shape (Scalar[INDEX]) cannot be disproven at parse time —
         parser must trust it (symmetric to dynamic slot / dynamic static_shape)."""
 
-        @pl.function
+        @pl.function_parser
         def dynamic_valid(
             out: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tensor[[16, 8], pl.FP32],
@@ -750,7 +749,7 @@ class TestTensorSubscriptWrite:
         static_shape (not the window extents) and carry valid_shape through
         reshape's 3rd arg — otherwise the reshape product check rejects."""
 
-        @pl.function
+        @pl.function_parser
         def rank_reduce_narrow(
             C: pl.Tensor[[32, 8, 8], pl.FP32],
             src: pl.Tensor[[16, 16], pl.FP32],
@@ -774,7 +773,7 @@ class TestTileSubscriptWrite:
     def test_tile_assemble_via_subscript_write(self):
         """t[0:16, 0:32] = src on Tile -> tile.assemble."""
 
-        @pl.function
+        @pl.function_parser
         def write_tile(
             x: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tile[[16, 32], pl.FP32],
@@ -804,7 +803,7 @@ class TestTileSubscriptWrite:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # the t[j] read auto-promotes to [1, N] + warns
 
-            @pl.function
+            @pl.function_parser
             def write_row(
                 x: pl.Tensor[[64, 128], pl.FP32],
                 i: pl.Scalar[pl.INDEX],
@@ -824,7 +823,7 @@ class TestTileSubscriptWrite:
         """Tile src with static=[16, 8] (ISA padding) and valid=[16, 4] writes into
         a [16, 4] window — accept, mirroring pl.store's tile-side behavior."""
 
-        @pl.function
+        @pl.function_parser
         def narrow_tile_write(
             x: pl.Tensor[[64, 128], pl.FP32],
             src: pl.Tile[[16, 8], pl.FP32],
@@ -842,7 +841,7 @@ class TestTileSubscriptWrite:
         cleanly when the source carries no actual narrowing (valid == static).
         Guards against treating canonical implicit views as narrowed."""
 
-        @pl.function
+        @pl.function_parser
         def lift_1d(
             x: pl.Tensor[[64, 16], pl.FP32],
             row: pl.Tile[[16], pl.FP32],
@@ -863,7 +862,7 @@ class TestTileSubscriptWrite:
         ``[1, N]`` would mis-iterate to ``[1, 1, 1]`` and the reshape product
         check would reject."""
 
-        @pl.function
+        @pl.function_parser
         def lift_with_lead(
             x: pl.Tensor[[8, 64, 128], pl.FP32],
             i: pl.Scalar[pl.INDEX],
@@ -891,7 +890,7 @@ class TestTileSubscriptWrite:
         at all the lift silently widened it back to the full 16x16.
         """
 
-        @pl.function
+        @pl.function_parser
         def narrow_tile_lift(
             x: pl.Tensor[[32, 16, 16], pl.FP32],
             src: pl.Tile[[16, 16], pl.FP32],

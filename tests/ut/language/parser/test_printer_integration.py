@@ -44,7 +44,7 @@ class TestPrinterIntegration:
     def test_function_printed_with_subscript_types(self):
         """Test that function parameters use subscript notation."""
 
-        @pl.function
+        @pl.function_parser
         def test_func(x: pl.Tensor[[64, 128], pl.FP16]) -> pl.Tensor[[64, 128], pl.FP32]:
             result: pl.Tensor[[64, 128], pl.FP32] = pl.cast(x, target_type=pl.FP32)
             return result
@@ -61,7 +61,7 @@ class TestPrinterIntegration:
     def test_parsed_function_printer_round_trip(self):
         """Test that parsed functions can be printed correctly."""
 
-        @pl.function
+        @pl.function_parser
         def round_trip(
             x: pl.Tensor[[64], pl.FP32],
             y: pl.Tensor[[64], pl.FP32],
@@ -81,7 +81,7 @@ class TestPrinterIntegration:
     def test_yield_type_annotation_in_if_statement(self):
         """Test that type annotations on yield assignments are printed (issue #185)."""
 
-        @pl.function
+        @pl.function_parser
         def func_with_if_yield(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[64, 128], pl.FP32]:
             init: pl.Tensor[[64, 128], pl.FP32] = pl.create_tensor([64, 128], dtype=pl.FP32)
 
@@ -105,7 +105,7 @@ class TestPrinterIntegration:
     def test_tuple_yield_no_type_annotation(self):
         """Test that tuple yields don't print type annotations (not valid Python syntax)."""
 
-        @pl.function
+        @pl.function_parser
         def func_with_tuple_yield(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[64], pl.FP32]:
             init1: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
             init2: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
@@ -138,7 +138,7 @@ class TestCastModeRoundTrip:
     def test_printer_outputs_mode_as_string_name(self):
         """Test that printer outputs mode='round' instead of mode=2."""
 
-        @pl.function
+        @pl.function_parser
         def cast_func(x: pl.Tensor[[64, 128], pl.FP16]) -> pl.Tensor[[64, 128], pl.FP32]:
             result: pl.Tensor[[64, 128], pl.FP32] = pl.cast(x, target_type=pl.FP32, mode="round")
             return result
@@ -154,7 +154,7 @@ class TestCastModeRoundTrip:
         mode_names = ["none", "rint", "round", "floor", "ceil", "trunc", "odd"]
 
         def _make_cast_func(mode_name: str):
-            @pl.function
+            @pl.function_parser
             def cast_func(x: pl.Tensor[[64], pl.FP16]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.cast(x, target_type=pl.FP32, mode=mode_name)
                 return result
@@ -183,7 +183,7 @@ class TestCastModeRoundTrip:
     def test_cast_mode_round_trip(self):
         """Test parse → print → re-parse round-trip with mode='round'."""
 
-        @pl.function
+        @pl.function_parser
         def original(x: pl.Tensor[[64, 128], pl.FP16]) -> pl.Tensor[[64, 128], pl.FP32]:
             result: pl.Tensor[[64, 128], pl.FP32] = pl.cast(x, target_type=pl.FP32, mode="round")
             return result
@@ -200,7 +200,7 @@ class TestCastModeRoundTrip:
     def test_cast_default_mode_round_trip(self):
         """Test that cast with default mode (no explicit mode) round-trips correctly."""
 
-        @pl.function
+        @pl.function_parser
         def original(x: pl.Tensor[[64, 128], pl.FP16]) -> pl.Tensor[[64, 128], pl.FP32]:
             result: pl.Tensor[[64, 128], pl.FP32] = pl.cast(x, target_type=pl.FP32)
             return result
@@ -220,7 +220,7 @@ class TestWhileLoopRoundTrip:
     def test_while_loop_natural_syntax(self):
         """Test that natural while loop can be parsed and printed."""
 
-        @pl.function
+        @pl.function_parser
         def while_natural(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             x: pl.Scalar[pl.INT64] = 0
             while x < n:
@@ -241,7 +241,7 @@ class TestWhileLoopRoundTrip:
     def test_while_loop_with_multiple_variables(self):
         """Test while loop with multiple variable updates."""
 
-        @pl.function
+        @pl.function_parser
         def while_multi(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             x: pl.Scalar[pl.INT64] = 0
             y: pl.Scalar[pl.INT64] = 1
@@ -261,7 +261,7 @@ class TestWhileLoopRoundTrip:
     def test_nested_while_loops_round_trip(self):
         """Test nested while loops round-trip."""
 
-        @pl.function
+        @pl.function_parser
         def nested_while(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             x: pl.Scalar[pl.INT64] = 0
             while x < n:
@@ -280,7 +280,7 @@ class TestWhileLoopRoundTrip:
     def test_while_in_for_round_trip(self):
         """Test while loop inside for loop round-trip."""
 
-        @pl.function
+        @pl.function_parser
         def while_in_for(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             init_sum: pl.Scalar[pl.INT64] = 0
 
@@ -303,7 +303,7 @@ class TestWhileLoopRoundTrip:
     def test_for_in_while_round_trip(self):
         """Test for loop inside while loop round-trip."""
 
-        @pl.function
+        @pl.function_parser
         def for_in_while(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             x: pl.Scalar[pl.INT64] = 0
             while x < n:
@@ -324,7 +324,7 @@ class TestWhileLoopRoundTrip:
     def test_while_structural_equality_after_print(self):
         """Test that while loop structure is preserved after printing."""
 
-        @pl.function
+        @pl.function_parser
         def original(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             x: pl.Scalar[pl.INT64] = 0
             while x < n:
@@ -356,7 +356,7 @@ class TestWhileLoopRoundTrip:
     def test_while_with_tensor_operations_round_trip(self):
         """Test while loop with tensor operations."""
 
-        @pl.function
+        @pl.function_parser
         def while_tensors(n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             i: pl.Scalar[pl.INT64] = 0
             acc: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
@@ -375,7 +375,7 @@ class TestWhileLoopRoundTrip:
     def test_tensor_create_round_trip(self):
         """Test that pl.tensor.create round-trips through printer and parser."""
 
-        @pl.function
+        @pl.function_parser
         def func() -> pl.Tensor[[16, 1], pl.FP32]:
             y: pl.Tensor[[16, 1], pl.FP32] = pl.create_tensor([16, 1], dtype=pl.FP32)
             return y
@@ -389,7 +389,7 @@ class TestWhileLoopRoundTrip:
     def test_tile_create_round_trip(self):
         """Test that pl.tile.create round-trips through printer and parser."""
 
-        @pl.function
+        @pl.function_parser
         def func(t: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
             _tile: pl.Tile[[64, 16], pl.FP32] = pl.create_tile(
                 [64, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec

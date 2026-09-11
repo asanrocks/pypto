@@ -70,9 +70,9 @@ def _find_world_size_calls(func: ir.Function) -> list[ir.Call]:
 def test_world_size_call_returns_int64_scalar():
     """A bare ``pld.world_size()`` call lifts to a ScalarType(INT64) IR call."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self):
             n = pld.world_size()
             return n
@@ -91,9 +91,9 @@ def test_world_size_can_drive_pl_range_bound():
     """``pl.range(pld.world_size())`` produces a for-loop whose stop bound is
     the IR call (no DynVar / sentinel rewrite)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self):
             for _ in pl.range(pld.world_size()):  # type: ignore[arg-type]
                 pass
@@ -123,9 +123,9 @@ def test_world_size_can_drive_pl_range_bound():
 def test_world_size_rejects_positional_args():
     with pytest.raises(InvalidOperationError, match=r"no positional arguments|takes 0 positional"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch(self):
                 n = pld.world_size(4)  # type: ignore[call-arg]  # noqa: F841
                 return 0
@@ -136,9 +136,9 @@ def test_world_size_rejects_kwargs():
         InvalidOperationError, match=r"does not accept keyword arguments|unexpected keyword argument"
     ):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch(self):
                 n = pld.world_size(rank=0)  # type: ignore[call-arg]  # noqa: F841
                 return 0
@@ -149,9 +149,9 @@ def test_world_size_rejected_outside_host_function():
     function body is a parse error."""
     with pytest.raises(ParserSyntaxError, match="HOST"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.at(level=pl.Level.CORE_GROUP):
                     n = pld.world_size()  # noqa: F841
@@ -164,9 +164,9 @@ def test_world_size_rejected_in_nested_device_scope_within_host_function():
     the call is not lowerable there."""
     with pytest.raises(ParserSyntaxError, match="InCore"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch(self):
                 with pl.at(level=pl.Level.CORE_GROUP):
                     n = pld.world_size()  # noqa: F841
@@ -177,9 +177,9 @@ def test_world_size_call_used_as_size_in_alloc():
     """``pld.world_size()`` can flow into ``pld.tensor.alloc_window_buffer(size)``
     as a per-rank byte-size operand."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self):
             buf = pld.alloc_window_buffer(pld.world_size())
             return buf
@@ -205,9 +205,9 @@ def test_long_form_world_size_call():
     """The canonical ``pld.system.world_size()`` long form parses to the same op
     as the unified short form."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self):
             n = pld.system.world_size()
             return n

@@ -7,7 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Unit tests for @pl.function, @pl.inline, and @pl.program decorators."""
+"""Unit tests for @pl.function, @pl.inline, and @pl.program_parser decorators."""
 
 import ast
 import inspect
@@ -20,9 +20,9 @@ import pypto.language as pl
 import pytest
 from pypto import ir
 from pypto.language.parser import source_lookup
-from pypto.language.parser.diagnostics import ParserTypeError
-from pypto.language.parser.diagnostics.exceptions import (
+from pypto.language.parser.diagnostics import (
     ParserSyntaxError,
+    ParserTypeError,
     UndefinedVariableError,
     UnsupportedFeatureError,
 )
@@ -56,12 +56,12 @@ def _call_of(stmt: ir.AssignStmt) -> ir.Call:
 
 
 class TestFunctionDecorator:
-    """Tests for @pl.function decorator."""
+    """Tests for @pl.function_parser decorator."""
 
     def test_simple_function(self):
         """Test parsing simple function with no control flow."""
 
-        @pl.function
+        @pl.function_parser
         def add_tensors(
             x: pl.Tensor[[64, 128], pl.FP16],
             y: pl.Tensor[[64, 128], pl.FP16],
@@ -77,7 +77,7 @@ class TestFunctionDecorator:
     def test_function_with_multiple_statements(self):
         """Test function with multiple statements."""
 
-        @pl.function
+        @pl.function_parser
         def multi_op(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             a: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
             b: pl.Tensor[[64], pl.FP32] = pl.add(a, 1.0)
@@ -90,7 +90,7 @@ class TestFunctionDecorator:
     def test_function_with_multiple_params(self):
         """Test function with multiple parameters."""
 
-        @pl.function
+        @pl.function_parser
         def three_param(
             x: pl.Tensor[[64], pl.FP32],
             y: pl.Tensor[[64], pl.FP32],
@@ -105,7 +105,7 @@ class TestFunctionDecorator:
     def test_function_with_tensor_create(self):
         """Test function that creates tensors."""
 
-        @pl.function
+        @pl.function_parser
         def create_tensor(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[64, 128], pl.FP32]:
             result: pl.Tensor[[64, 128], pl.FP32] = pl.create_tensor([64, 128], dtype=pl.FP32)
             return result
@@ -119,7 +119,7 @@ class TestFunctionDecorator:
     def test_function_with_binary_ops(self):
         """Test function with binary operations."""
 
-        @pl.function
+        @pl.function_parser
         def binary_ops(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             # Using operator overloading
             result: pl.Tensor[[64], pl.FP32] = pl.add(pl.mul(x, 2.0), pl.create_tensor([64], dtype=pl.FP32))
@@ -135,7 +135,7 @@ class TestFunctionDecorator:
     def test_function_with_list_arguments(self):
         """Test function that uses list arguments."""
 
-        @pl.function
+        @pl.function_parser
         def with_lists(x: pl.Tensor[[64, 128], pl.FP32]) -> pl.Tensor[[32, 64], pl.FP32]:
             # slice takes list arguments
             result: pl.Tensor[[32, 64], pl.FP32] = pl.slice(x, [32, 64], [0, 0])
@@ -150,7 +150,7 @@ class TestFunctionDecorator:
     def test_function_with_eval_stmt(self):
         """Test parsing evaluation statements into EvalStmt."""
 
-        @pl.function
+        @pl.function_parser
         def with_eval_stmt(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             # Standalone evaluation statements should become EvalStmt
             pl.create_tensor([32], dtype=pl.FP32)
@@ -169,7 +169,7 @@ class TestFunctionDecorator:
     def test_function_serialization(self):
         """Test that parsed functions can be serialized."""
 
-        @pl.function
+        @pl.function_parser
         def simple(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
@@ -185,7 +185,7 @@ class TestFunctionDecorator:
     def test_function_with_different_dtypes(self):
         """Test function with various data types."""
 
-        @pl.function
+        @pl.function_parser
         def dtypes(
             fp16: pl.Tensor[[64], pl.FP16],
             fp32: pl.Tensor[[64], pl.FP32],
@@ -201,14 +201,14 @@ class TestFunctionDecorator:
 
         with pytest.raises(ParserTypeError, match="missing type annotation"):
 
-            @pl.function
+            @pl.function_parser
             def no_annotations(x):
                 return x
 
     def test_function_preserves_name(self):
         """Test that function name is preserved."""
 
-        @pl.function
+        @pl.function_parser
         def my_custom_function_name(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
@@ -217,7 +217,7 @@ class TestFunctionDecorator:
     def test_function_with_negative_numbers(self):
         """Test function with negative number literals."""
 
-        @pl.function
+        @pl.function_parser
         def with_negatives(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, -1.5)
             return result
@@ -234,7 +234,7 @@ class TestScalarParameters:
     def test_function_with_scalar_param(self):
         """Test function with scalar parameter - subscript notation."""
 
-        @pl.function
+        @pl.function_parser
         def add_scalar(
             x: pl.Tensor[[64], pl.FP32],
             scalar: pl.Scalar[pl.FP32],
@@ -254,7 +254,7 @@ class TestScalarParameters:
     def test_function_with_multiple_scalar_params(self):
         """Test function with multiple scalar parameters."""
 
-        @pl.function
+        @pl.function_parser
         def scale_and_offset(
             x: pl.Tensor[[64], pl.FP32],
             scale: pl.Scalar[pl.FP32],
@@ -271,7 +271,7 @@ class TestScalarParameters:
     def test_function_with_different_scalar_types(self):
         """Test function with scalars of different types."""
 
-        @pl.function
+        @pl.function_parser
         def mixed_scalars(
             fp_scalar: pl.Scalar[pl.FP32],
             int_scalar: pl.Scalar[pl.INT32],
@@ -286,7 +286,7 @@ class TestScalarParameters:
     def test_function_returning_scalar(self):
         """Test function that returns a scalar."""
 
-        @pl.function
+        @pl.function_parser
         def return_scalar(x: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             return x
 
@@ -297,7 +297,7 @@ class TestScalarParameters:
     def test_scalar_legacy_call_notation(self):
         """Test legacy pl.Scalar(dtype) notation (annotation uses Scalar[dtype])."""
 
-        @pl.function
+        @pl.function_parser
         def legacy_scalar(x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
             return x
 
@@ -337,7 +337,7 @@ class TestScalarParameters:
     def test_tile_ops_with_scalar(self):
         """Test tile operations with scalar parameter."""
 
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def tile_add_scalar(
             input_tile: pl.Tensor[[64, 64], pl.FP32],
             scalar: pl.Scalar[pl.FP32],
@@ -359,7 +359,7 @@ class TestTensorReadParsing:
     def test_tensor_read_basic(self):
         """Test parsing pl.tensor.read with constant indices."""
 
-        @pl.function
+        @pl.function_parser
         def read_elem(t: pl.Tensor[[4, 8], pl.FP32]) -> pl.Scalar[pl.FP32]:
             val: pl.Scalar[pl.FP32] = pl.tensor.read(t, [0, 0])
             return val
@@ -371,7 +371,7 @@ class TestTensorReadParsing:
     def test_tensor_read_with_loop_index(self):
         """Test parsing pl.tensor.read with loop variable as index."""
 
-        @pl.function
+        @pl.function_parser
         def read_in_loop(t: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             out: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
             for i in pl.range(64):
@@ -397,7 +397,7 @@ class TestTupleReturnType:
     def test_tuple_return_two_tensors(self):
         """Test function with tuple[Tensor, Tensor] return type."""
 
-        @pl.function
+        @pl.function_parser
         def two_outputs(
             x: pl.Tensor[[64], pl.FP32],
         ) -> tuple[pl.Tensor[[64], pl.FP32], pl.Tensor[[64], pl.FP32]]:
@@ -413,7 +413,7 @@ class TestTupleReturnType:
     def test_tuple_return_mixed_types(self):
         """Test function with tuple[Tensor, Scalar] return type."""
 
-        @pl.function
+        @pl.function_parser
         def mixed_return(
             x: pl.Tensor[[64], pl.FP32],
             idx: pl.Scalar[pl.INT64],
@@ -428,14 +428,14 @@ class TestTupleReturnType:
 
 
 class TestProgramDecorator:
-    """Tests for @pl.program decorator."""
+    """Tests for @pl.program_parser decorator."""
 
     def test_single_function_program(self):
-        """Test @pl.program with a single function."""
+        """Test @pl.program_parser with a single function."""
 
-        @pl.program
+        @pl.program_parser
         class SimpleProgram:
-            @pl.function
+            @pl.function_parser
             def add_one(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 return result
@@ -453,16 +453,16 @@ class TestProgramDecorator:
         assert add_func.params[0].name_hint == "x"
 
     def test_multiple_functions_program(self):
-        """Test @pl.program with multiple functions."""
+        """Test @pl.program_parser with multiple functions."""
 
-        @pl.program
+        @pl.program_parser
         class MathOps:
-            @pl.function
+            @pl.function_parser
             def square(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 result: pl.Tensor[[1], pl.INT32] = pl.mul(x, x)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def double(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 two: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
                 result: pl.Tensor[[1], pl.INT32] = pl.mul(x, two)
@@ -481,14 +481,14 @@ class TestProgramDecorator:
     def test_cross_function_calls(self):
         """Test cross-function calls using self.method() syntax."""
 
-        @pl.program
+        @pl.program_parser
         class CallTest:
-            @pl.function
+            @pl.function_parser
             def square(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 result: pl.Tensor[[1], pl.INT32] = pl.mul(x, x)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def sum_of_squares(
                 self, a: pl.Tensor[[1], pl.INT32], b: pl.Tensor[[1], pl.INT32]
             ) -> pl.Tensor[[1], pl.INT32]:
@@ -510,15 +510,15 @@ class TestProgramDecorator:
     def test_forward_reference(self):
         """Test calling a function defined later in the class."""
 
-        @pl.program
+        @pl.program_parser
         class ForwardRef:
-            @pl.function
+            @pl.function_parser
             def caller(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 # Call helper which is defined below
                 result: pl.Tensor[[1], pl.INT32] = self.helper(x)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def helper(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 result: pl.Tensor[[1], pl.INT32] = pl.mul(x, 2)
                 return result
@@ -529,9 +529,9 @@ class TestProgramDecorator:
     def test_recursive_call(self):
         """Test function calling itself recursively via self.method_name()."""
 
-        @pl.program
+        @pl.program_parser
         class RecursiveTest:
-            @pl.function
+            @pl.function_parser
             def factorial(self, n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 _zero: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
                 one: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
@@ -549,19 +549,19 @@ class TestProgramDecorator:
     def test_transitive_calls(self):
         """Test transitive calls where A calls B calls C."""
 
-        @pl.program
+        @pl.program_parser
         class TransitiveCalls:
-            @pl.function
+            @pl.function_parser
             def a(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 result: pl.Tensor[[1], pl.INT32] = self.b(x)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def b(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 result: pl.Tensor[[1], pl.INT32] = self.c(x)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def c(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 result: pl.Tensor[[1], pl.INT32] = pl.mul(x, 3)
                 return result
@@ -572,9 +572,9 @@ class TestProgramDecorator:
     def test_self_parameter_stripped(self):
         """Test that self parameter is properly stripped from IR."""
 
-        @pl.program
+        @pl.program_parser
         class SelfTest:
-            @pl.function
+            @pl.function_parser
             def test_func(
                 self, x: pl.Tensor[[1], pl.INT32], y: pl.Tensor[[1], pl.INT32]
             ) -> pl.Tensor[[1], pl.INT32]:
@@ -591,9 +591,9 @@ class TestProgramDecorator:
     def test_program_name_from_class(self):
         """Test that program name is extracted from class name."""
 
-        @pl.program
+        @pl.program_parser
         class MyCustomProgram:
-            @pl.function
+            @pl.function_parser
             def dummy(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 return x
 
@@ -612,9 +612,9 @@ class TestProgramDecorator:
             "direction": pl.adir.input,
         }
 
-        @pl.program
+        @pl.program_parser
         class AttrProgram:
-            @pl.function(attrs=expected_attrs)
+            @pl.function_parser(attrs=expected_attrs)
             def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                 return x
 
@@ -637,9 +637,9 @@ class TestProgramDecorator:
         """An unrepresentable Function attr is rejected instead of disappearing."""
         with pytest.raises(ParserSyntaxError, match="Unsupported list element type for key: custom_list"):
 
-            @pl.program
+            @pl.program_parser
             class InvalidAttrProgram:
-                @pl.function(attrs={"custom_list": [1, 2]})
+                @pl.function_parser(attrs={"custom_list": [1, 2]})
                 def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                     return x
 
@@ -656,9 +656,11 @@ class TestProgramDecorator:
         only its position is.
         """
 
-        @pl.program
+        @pl.program_parser
         class LaunchQueryProgram:
-            @pl.function(type=pl.FunctionType.Spmd, attrs={"core_num": pl.system.available_cluster_count()})
+            @pl.function_parser(
+                type=pl.FunctionType.Spmd, attrs={"core_num": pl.system.available_cluster_count()}
+            )
             def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                 return x
 
@@ -677,9 +679,9 @@ class TestProgramDecorator:
         n = ir.Var("n", ir.ScalarType(pl.INT32), span)
         with pytest.raises(ParserSyntaxError, match="references a variable"):
 
-            @pl.program
+            @pl.program_parser
             class VarAttrProgram:
-                @pl.function(type=pl.FunctionType.Spmd, attrs={"core_num": n})
+                @pl.function_parser(type=pl.FunctionType.Spmd, attrs={"core_num": n})
                 def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                     return x
 
@@ -690,9 +692,9 @@ class TestProgramDecorator:
         core_num = ir.add(n, ir.ConstInt(1, pl.INT32, span))
         with pytest.raises(ParserSyntaxError, match="references a variable"):
 
-            @pl.program
+            @pl.program_parser
             class VarExprAttrProgram:
-                @pl.function(type=pl.FunctionType.Spmd, attrs={"core_num": core_num})
+                @pl.function_parser(type=pl.FunctionType.Spmd, attrs={"core_num": core_num})
                 def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                     return x
 
@@ -700,17 +702,17 @@ class TestProgramDecorator:
         """A non-dict attrs= and a non-string key both raise a parser error."""
         with pytest.raises(ParserSyntaxError, match="must be a dict"):
 
-            @pl.program
+            @pl.program_parser
             class NonDictAttrs:
-                @pl.function(attrs=5)  # type: ignore[arg-type]  # deliberate: validates runtime rejection
+                @pl.function_parser(attrs=5)  # type: ignore[arg-type]  # deliberate: validates runtime rejection
                 def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                     return x
 
         with pytest.raises(ParserSyntaxError, match="keys must be strings"):
 
-            @pl.program
+            @pl.program_parser
             class NonStrKeyAttrs:
-                @pl.function(attrs={1: 2})  # type: ignore[arg-type]  # deliberate: validates runtime rejection
+                @pl.function_parser(attrs={1: 2})  # type: ignore[arg-type]  # deliberate: validates runtime rejection
                 def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                     return x
 
@@ -723,17 +725,17 @@ class TestProgramDecorator:
         """
         with pytest.raises(ParserSyntaxError, match="must be a dict"):
 
-            @pl.program
+            @pl.program_parser
             class EmptyListAttrs:
-                @pl.function(attrs=[])  # type: ignore[arg-type]  # deliberate: validates runtime rejection
+                @pl.function_parser(attrs=[])  # type: ignore[arg-type]  # deliberate: validates runtime rejection
                 def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                     return x
 
         with pytest.raises(ParserSyntaxError, match="must be a dict"):
 
-            @pl.program
+            @pl.program_parser
             class EmptyStrAttrs:
-                @pl.function(attrs="")  # type: ignore[arg-type]  # deliberate: validates runtime rejection
+                @pl.function_parser(attrs="")  # type: ignore[arg-type]  # deliberate: validates runtime rejection
                 def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                     return x
 
@@ -747,9 +749,9 @@ class TestProgramDecorator:
         for annotation in (pl.Scalar[pl.INT32], pl.Tensor[[4], pl.FP16]):
             with pytest.raises(ParserSyntaxError, match="annotation-only"):
 
-                @pl.program
+                @pl.program_parser
                 class AnnotationAttrs:
-                    @pl.function(attrs={"bad": annotation})
+                    @pl.function_parser(attrs={"bad": annotation})
                     def kernel(self, x: pl.Tensor[[4], pl.FP16]) -> pl.Tensor[[4], pl.FP16]:
                         return x
 
@@ -757,7 +759,7 @@ class TestProgramDecorator:
         """Test that empty class raises error."""
         with pytest.raises(ParserSyntaxError):  # Should raise ParserSyntaxError
 
-            @pl.program
+            @pl.program_parser
             class EmptyProgram:
                 pass
 
@@ -765,9 +767,9 @@ class TestProgramDecorator:
         """Test that calling undefined method raises error."""
         with pytest.raises(UndefinedVariableError):  # Should raise UndefinedVariableError
 
-            @pl.program
+            @pl.program_parser
             class UndefinedCall:
-                @pl.function
+                @pl.function_parser
                 def caller(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                     # Try to call a method that doesn't exist
                     result: pl.Tensor[[1], pl.INT32] = self.nonexistent(x)  # type: ignore
@@ -776,9 +778,9 @@ class TestProgramDecorator:
     def test_tuple_unpacking_from_cross_function_call(self):
         """Test tuple unpacking from self.func() returning multiple values."""
 
-        @pl.program
+        @pl.program_parser
         class TupleUnpack:
-            @pl.function
+            @pl.function_parser
             def split(
                 self, x: pl.Tensor[[64], pl.FP32]
             ) -> tuple[pl.Tensor[[64], pl.FP32], pl.Tensor[[64], pl.FP32]]:
@@ -786,7 +788,7 @@ class TestProgramDecorator:
                 b: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
                 return a, b
 
-            @pl.function
+            @pl.function_parser
             def caller(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 a, b = self.split(x)
                 result: pl.Tensor[[64], pl.FP32] = pl.add(a, b)
@@ -805,9 +807,9 @@ class TestProgramRoundTrip:
     def test_roundtrip_simple_program(self):
         """Test that printing and re-parsing produces equivalent IR."""
 
-        @pl.program
+        @pl.program_parser
         class Original:
-            @pl.function
+            @pl.function_parser
             def add(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 return result
@@ -841,14 +843,14 @@ class TestProgramRoundTrip:
     def test_roundtrip_with_cross_function_calls(self):
         """Test round-trip with cross-function calls."""
 
-        @pl.program
+        @pl.program_parser
         class WithCalls:
-            @pl.function
+            @pl.function_parser
             def helper(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 result: pl.Tensor[[1], pl.INT32] = pl.mul(x, 2)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def caller(self, x: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
                 result: pl.Tensor[[1], pl.INT32] = self.helper(x)
                 return result
@@ -870,14 +872,14 @@ class TestProgramRoundTrip:
 
 
 class TestFunctionDecoratorSourceUnavailable:
-    """Tests for @pl.function when inspect.getsourcelines() fails."""
+    """Tests for @pl.function_parser when inspect.getsourcelines() fails."""
 
     def test_function_with_linecache_source(self):
-        """Test that @pl.function works via linecache when inspect fails (e.g., exec)."""
+        """Test that @pl.function_parser works via linecache when inspect fails (e.g., exec)."""
         code = textwrap.dedent("""\
             import pypto.language as pl
 
-            @pl.function
+            @pl.function_parser
             def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 return result
@@ -898,11 +900,11 @@ class TestFunctionDecoratorSourceUnavailable:
             linecache.cache.pop(filename, None)
 
     def test_function_with_orig_argv_source(self, monkeypatch):
-        """Test that @pl.function works via sys.orig_argv for python -c scenarios."""
+        """Test that @pl.function_parser works via sys.orig_argv for python -c scenarios."""
         code = textwrap.dedent("""\
             import pypto.language as pl
 
-            @pl.function
+            @pl.function_parser
             def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 return result
@@ -919,13 +921,13 @@ class TestFunctionDecoratorSourceUnavailable:
         assert len(result.params) == 1
 
     def test_function_without_source_gives_clear_error(self):
-        """Test that @pl.function gives a clear ParserSyntaxError when no source is available."""
+        """Test that @pl.function_parser gives a clear ParserSyntaxError when no source is available."""
         code = textwrap.dedent("""\
             import pypto.language as pl
-            from pypto.language.parser.diagnostics.exceptions import ParserSyntaxError
+            from pypto.language.parser.diagnostics import ParserSyntaxError
 
             try:
-                @pl.function
+                @pl.function_parser
                 def add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                     return result
@@ -942,16 +944,16 @@ class TestFunctionDecoratorSourceUnavailable:
 
 
 class TestProgramDecoratorSourceUnavailable:
-    """Tests for @pl.program when inspect.getsourcelines() fails."""
+    """Tests for @pl.program_parser when inspect.getsourcelines() fails."""
 
     def test_program_with_linecache_source(self):
-        """Test that @pl.program works via linecache when inspect fails (e.g., exec)."""
+        """Test that @pl.program_parser works via linecache when inspect fails (e.g., exec)."""
         code = textwrap.dedent("""\
             import pypto.language as pl
 
-            @pl.program
+            @pl.program_parser
             class MyProgram:
-                @pl.function
+                @pl.function_parser
                 def add_one(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                     return result
@@ -972,13 +974,13 @@ class TestProgramDecoratorSourceUnavailable:
             linecache.cache.pop(filename, None)
 
     def test_program_with_orig_argv_source(self, monkeypatch):
-        """Test that @pl.program works via sys.orig_argv for python -c scenarios."""
+        """Test that @pl.program_parser works via sys.orig_argv for python -c scenarios."""
         code = textwrap.dedent("""\
             import pypto.language as pl
 
-            @pl.program
+            @pl.program_parser
             class MyProgram:
-                @pl.function
+                @pl.function_parser
                 def add_one(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                     return result
@@ -994,15 +996,15 @@ class TestProgramDecoratorSourceUnavailable:
         assert len(result.functions) == 1
 
     def test_program_without_source_gives_clear_error(self):
-        """Test that @pl.program gives a clear ParserSyntaxError when no source is available."""
+        """Test that @pl.program_parser gives a clear ParserSyntaxError when no source is available."""
         code = textwrap.dedent("""\
             import pypto.language as pl
-            from pypto.language.parser.diagnostics.exceptions import ParserSyntaxError
+            from pypto.language.parser.diagnostics import ParserSyntaxError
 
             try:
-                @pl.program
+                @pl.program_parser
                 class MyProgram:
-                    @pl.function
+                    @pl.function_parser
                     def add_one(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                         result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                         return result
@@ -1019,31 +1021,31 @@ class TestProgramDecoratorSourceUnavailable:
 
 
 class TestExternalFunctionCalls:
-    """Tests for calling externally-defined @pl.function from within @pl.program."""
+    """Tests for calling externally-defined @pl.function_parser from within @pl.program."""
 
     def test_basic_external_call(self):
-        """External @pl.function is callable and added to Program."""
+        """External @pl.function_parser is callable and added to Program."""
 
-        @pl.function
+        @pl.function_parser
         def double(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class MyModel:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = double(x)
                 return result
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def double(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = self.double(x)
                 return result
@@ -1053,26 +1055,26 @@ class TestExternalFunctionCalls:
     def test_external_return_type_propagation(self):
         """Return type from external function propagates to caller's variable."""
 
-        @pl.function
+        @pl.function_parser
         def ext_square(x: pl.Tensor[[32], pl.INT32]) -> pl.Tensor[[32], pl.INT32]:
             result: pl.Tensor[[32], pl.INT32] = pl.mul(x, x)
             return result
 
-        @pl.program
+        @pl.program_parser
         class TypeProp:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[32], pl.INT32]) -> pl.Tensor[[32], pl.INT32]:
                 y: pl.Tensor[[32], pl.INT32] = ext_square(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def ext_square(self, x: pl.Tensor[[32], pl.INT32]) -> pl.Tensor[[32], pl.INT32]:
                 result: pl.Tensor[[32], pl.INT32] = pl.mul(x, x)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[32], pl.INT32]) -> pl.Tensor[[32], pl.INT32]:
                 y: pl.Tensor[[32], pl.INT32] = self.ext_square(x)
                 return y
@@ -1082,37 +1084,37 @@ class TestExternalFunctionCalls:
     def test_multiple_external_functions(self):
         """Multiple external functions in one program."""
 
-        @pl.function
+        @pl.function_parser
         def ext_add(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.function
+        @pl.function_parser
         def ext_mul(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class MultiExt:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = ext_add(x)
                 z: pl.Tensor[[64], pl.FP32] = ext_mul(y)
                 return z
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def ext_add(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def ext_mul(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = self.ext_add(x)
                 z: pl.Tensor[[64], pl.FP32] = self.ext_mul(y)
@@ -1123,36 +1125,36 @@ class TestExternalFunctionCalls:
     def test_same_external_from_multiple_methods(self):
         """Same external called from 2 internal functions — added once to Program."""
 
-        @pl.function
+        @pl.function_parser
         def shared_helper(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class SharedExt:
-            @pl.function
+            @pl.function_parser
             def func_a(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = shared_helper(x)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def func_b(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = shared_helper(x)
                 return result
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def shared_helper(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def func_a(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = self.shared_helper(x)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def func_b(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = self.shared_helper(x)
                 return result
@@ -1160,23 +1162,23 @@ class TestExternalFunctionCalls:
         ir.assert_structural_equal(SharedExt, Expected)
 
     def test_naming_conflict_with_internal_raises_error(self):
-        """External with same name as internal @pl.function raises ParserSyntaxError."""
+        """External with same name as internal @pl.function_parser raises ParserSyntaxError."""
 
-        @pl.function
+        @pl.function_parser
         def conflicting(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
         with pytest.raises(ParserSyntaxError, match="conflicts with program function"):
 
-            @pl.program
+            @pl.program_parser
             class Conflict:
-                @pl.function
+                @pl.function_parser
                 def conflicting(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
                     return result
 
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = conflicting(x)
                     return result
@@ -1184,14 +1186,14 @@ class TestExternalFunctionCalls:
     def test_two_externals_same_name_raises_error(self):
         """Two different external functions with same .name raises ParserSyntaxError."""
 
-        @pl.function
+        @pl.function_parser
         def helper(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
         helper_v1 = helper
 
-        @pl.function
+        @pl.function_parser
         def helper(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:  # noqa: F811
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
             return result
@@ -1203,14 +1205,14 @@ class TestExternalFunctionCalls:
 
         with pytest.raises(ParserSyntaxError, match="Conflicting external functions"):
 
-            @pl.program
+            @pl.program_parser
             class ConflictExt:
-                @pl.function
+                @pl.function_parser
                 def func_a(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = helper_v1(x)
                     return result
 
-                @pl.function
+                @pl.function_parser
                 def func_b(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = helper_v2(x)
                     return result
@@ -1218,14 +1220,14 @@ class TestExternalFunctionCalls:
     def test_external_roundtrip(self):
         """Print program with external function → parse → structural equality."""
 
-        @pl.function
+        @pl.function_parser
         def ext_add_one(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class Original:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = ext_add_one(x)
                 return result
@@ -1238,28 +1240,28 @@ class TestExternalFunctionCalls:
     def test_aliased_import_uses_original_name(self):
         """Aliased reference uses the function's original .name for the GlobalVar."""
 
-        @pl.function
+        @pl.function_parser
         def original_name(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
         aliased = original_name  # Local alias
 
-        @pl.program
+        @pl.program_parser
         class AliasTest:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = aliased(x)
                 return result
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def original_name(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = self.original_name(x)
                 return result
@@ -1274,9 +1276,9 @@ class TestExternalFunctionCalls:
 
         with pytest.raises(UnsupportedFeatureError, match="Unsupported function call"):
 
-            @pl.program
+            @pl.program_parser
             class BadCall:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = regular_python_func(x)
                     return result
@@ -1293,16 +1295,16 @@ class TestInlineFunctionCalls:
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class InlineTest:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = double_it(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
                 y: pl.Tensor[[64], pl.FP32] = result
@@ -1318,17 +1320,17 @@ class TestInlineFunctionCalls:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class ReturnTest:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = add_one(x)
                 z: pl.Tensor[[64], pl.FP32] = pl.mul(y, 2.0)
                 return z
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 y: pl.Tensor[[64], pl.FP32] = result
@@ -1346,16 +1348,16 @@ class TestInlineFunctionCalls:
             b: pl.Tensor[[64], pl.FP32] = pl.mul(a, 2.0)
             return b
 
-        @pl.program
+        @pl.program_parser
         class MultiStmt:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = multi_step(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 a: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 b: pl.Tensor[[64], pl.FP32] = pl.mul(a, 2.0)
@@ -1365,23 +1367,23 @@ class TestInlineFunctionCalls:
         ir.assert_structural_equal(MultiStmt, Expected)
 
     def test_inline_no_extra_function_in_program(self):
-        """Inline does NOT add a function to the Program — only @pl.function does."""
+        """Inline does NOT add a function to the Program — only @pl.function_parser does."""
 
         @pl.inline
         def inlined_op(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class NoExtraFunc:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = inlined_op(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 y: pl.Tensor[[64], pl.FP32] = result
@@ -1400,17 +1402,17 @@ class TestInlineFunctionCalls:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class TwiceCalled:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = add_one(x)
                 z: pl.Tensor[[64], pl.FP32] = add_one(y)
                 return z
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 y: pl.Tensor[[64], pl.FP32] = result
@@ -1431,9 +1433,9 @@ class TestInlineFunctionCalls:
             output = pl.tensor.assemble(output, value, [0])
             return output
 
-        @pl.program
+        @pl.program_parser
         class Actual:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 first: pl.Tensor[[4], pl.FP32],
@@ -1446,9 +1448,9 @@ class TestInlineFunctionCalls:
                 result = write_value(combined, output)
                 return result
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 first: pl.Tensor[[4], pl.FP32],
@@ -1475,9 +1477,9 @@ class TestInlineFunctionCalls:
 
         with pytest.raises(ParserTypeError, match="expects 1 argument.*got 2"):
 
-            @pl.program
+            @pl.program_parser
             class WrongArgCount:
-                @pl.function
+                @pl.function_parser
                 def main(
                     self, a: pl.Tensor[[64], pl.FP32], b: pl.Tensor[[64], pl.FP32]
                 ) -> pl.Tensor[[64], pl.FP32]:
@@ -1493,16 +1495,16 @@ class TestInlineFunctionCalls:
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, SCALE)
             return result
 
-        @pl.program
+        @pl.program_parser
         class ClosureTest:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = scale(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 3.0)
                 y: pl.Tensor[[64], pl.FP32] = result
@@ -1518,16 +1520,16 @@ class TestInlineFunctionCalls:
             tmp: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return tmp
 
-        @pl.program
+        @pl.program_parser
         class WithInline:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = inlined_add(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class ManualExpand:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 tmp: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 y: pl.Tensor[[64], pl.FP32] = tmp
@@ -1537,12 +1539,12 @@ class TestInlineFunctionCalls:
 
 
 class TestFunctionCallArgCountValidation:
-    """Tests for argument count validation on @pl.function and self.method() calls."""
+    """Tests for argument count validation on @pl.function_parser and self.method() calls."""
 
     def test_external_function_too_few_args(self):
-        """External @pl.function called with too few args raises error."""
+        """External @pl.function_parser called with too few args raises error."""
 
-        @pl.function
+        @pl.function_parser
         def compute(
             x: pl.Tensor[[64], pl.FP32],
             y: pl.Tensor[[64], pl.FP32],
@@ -1552,17 +1554,17 @@ class TestFunctionCallArgCountValidation:
 
         with pytest.raises(ParserTypeError, match=r"expects 2 argument\(s\), got 1"):
 
-            @pl.program
+            @pl.program_parser
             class Bad:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = compute(x)
                     return result
 
     def test_external_function_correct_args(self):
-        """External @pl.function called with correct args works."""
+        """External @pl.function_parser called with correct args works."""
 
-        @pl.function
+        @pl.function_parser
         def compute(
             x: pl.Tensor[[64], pl.FP32],
             y: pl.Tensor[[64], pl.FP32],
@@ -1570,9 +1572,9 @@ class TestFunctionCallArgCountValidation:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, y)
             return result
 
-        @pl.program
+        @pl.program_parser
         class Good:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -1588,9 +1590,9 @@ class TestFunctionCallArgCountValidation:
 
         with pytest.raises(ParserTypeError, match=r"expects 2 argument\(s\), got 1"):
 
-            @pl.program
+            @pl.program_parser
             class Bad:
-                @pl.function
+                @pl.function_parser
                 def helper(
                     self,
                     x: pl.Tensor[[64], pl.FP32],
@@ -1599,7 +1601,7 @@ class TestFunctionCallArgCountValidation:
                     result: pl.Tensor[[64], pl.FP32] = pl.add(x, y)
                     return result
 
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     result: pl.Tensor[[64], pl.FP32] = self.helper(x)
                     return result
@@ -1607,9 +1609,9 @@ class TestFunctionCallArgCountValidation:
     def test_cross_function_correct_args(self):
         """self.method() called with correct args works."""
 
-        @pl.program
+        @pl.program_parser
         class Good:
-            @pl.function
+            @pl.function_parser
             def helper(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -1618,7 +1620,7 @@ class TestFunctionCallArgCountValidation:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, y)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -1630,17 +1632,17 @@ class TestFunctionCallArgCountValidation:
         assert len(Good.functions) == 2
 
     def test_external_function_too_many_args(self):
-        """External @pl.function called with too many args raises error."""
+        """External @pl.function_parser called with too many args raises error."""
 
-        @pl.function
+        @pl.function_parser
         def single_arg(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
         with pytest.raises(ParserTypeError, match=r"expects 1 argument\(s\), got 2"):
 
-            @pl.program
+            @pl.program_parser
             class Bad:
-                @pl.function
+                @pl.function_parser
                 def main(
                     self,
                     x: pl.Tensor[[64], pl.FP32],
@@ -1658,9 +1660,9 @@ class TestCrossFunctionDynamicShapeSubstitution:
         M = pl.dynamic("M")
         N = pl.dynamic("N")
 
-        @pl.program
+        @pl.program_parser
         class DynShape:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def add_kernel(
                 self,
                 a: pl.Tensor[[M, N], pl.FP32],
@@ -1669,7 +1671,7 @@ class TestCrossFunctionDynamicShapeSubstitution:
                 result: pl.Tensor[[M, N], pl.FP32] = pl.add(a, b)
                 return result
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def orchestrator(
                 self,
                 a: pl.Tensor[[128, 128], pl.FP32],
@@ -1697,16 +1699,16 @@ class TestCrossFunctionDynamicShapeSubstitution:
         """Callee has [M, 64] — only M should be substituted."""
         M = pl.dynamic("M")
 
-        @pl.program
+        @pl.program_parser
         class PartialDyn:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 a: pl.Tensor[[M, 64], pl.FP32],
             ) -> pl.Tensor[[M, 64], pl.FP32]:
                 return a
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def orch(
                 self,
                 a: pl.Tensor[[256, 64], pl.FP32],
@@ -1730,16 +1732,16 @@ class TestCrossFunctionDynamicShapeSubstitution:
     def test_cross_function_static_shapes_unchanged(self):
         """All-static shapes → no substitution needed, return types unchanged."""
 
-        @pl.program
+        @pl.program_parser
         class StaticShape:
-            @pl.function
+            @pl.function_parser
             def helper(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
             ) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function
+            @pl.function_parser
             def caller(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -1764,9 +1766,9 @@ class TestCrossFunctionDynamicShapeSubstitution:
 
         with pytest.raises(ParserSyntaxError, match="conflicting bindings"):
 
-            @pl.program
+            @pl.program_parser
             class ShapeMismatch:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def kernel(
                     self,
                     a: pl.Tensor[[M, N], pl.FP32],
@@ -1775,7 +1777,7 @@ class TestCrossFunctionDynamicShapeSubstitution:
                     result: pl.Tensor[[M, N], pl.FP32] = pl.add(a, b)
                     return result
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def orch(
                     self,
                     a: pl.Tensor[[128, 64], pl.FP32],
@@ -1786,12 +1788,12 @@ class TestCrossFunctionDynamicShapeSubstitution:
 
 
 class TestExternalFunctionControlFlow:
-    """Tests for external @pl.function calls with control flow and SSA patterns."""
+    """Tests for external @pl.function_parser calls with control flow and SSA patterns."""
 
     def test_external_with_for_loop_iter_args(self):
         """External function containing a for loop with iter_args and yield."""
 
-        @pl.function
+        @pl.function_parser
         def accumulate(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             init: pl.Tensor[[64], pl.FP32] = x
             for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -1799,16 +1801,16 @@ class TestExternalFunctionControlFlow:
                 out = pl.yield_(new_acc)
             return out
 
-        @pl.program
+        @pl.program_parser
         class ExtLoopModel:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = accumulate(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def accumulate(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -1816,7 +1818,7 @@ class TestExternalFunctionControlFlow:
                     out = pl.yield_(new_acc)
                 return out
 
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = self.accumulate(x)
                 return y
@@ -1826,7 +1828,7 @@ class TestExternalFunctionControlFlow:
     def test_external_with_if_else_yield(self):
         """External function containing if/else with yield (SSA phi nodes)."""
 
-        @pl.function
+        @pl.function_parser
         def cond_scale(x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]) -> pl.Tensor[[64], pl.FP32]:
             if flag == 0:
                 out: pl.Tensor[[64], pl.FP32] = pl.yield_(pl.mul(x, 2.0))
@@ -1834,18 +1836,18 @@ class TestExternalFunctionControlFlow:
                 out: pl.Tensor[[64], pl.FP32] = pl.yield_(pl.add(x, 1.0))
             return out
 
-        @pl.program
+        @pl.program_parser
         class ExtIfModel:
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = cond_scale(x, flag)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def cond_scale(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -1855,7 +1857,7 @@ class TestExternalFunctionControlFlow:
                     out: pl.Tensor[[64], pl.FP32] = pl.yield_(pl.add(x, 1.0))
                 return out
 
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -1867,7 +1869,7 @@ class TestExternalFunctionControlFlow:
     def test_external_with_if_in_for_loop(self):
         """External function with if/else yield nested inside a for loop."""
 
-        @pl.function
+        @pl.function_parser
         def loop_cond(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             init: pl.Tensor[[64], pl.FP32] = x
             for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -1878,16 +1880,16 @@ class TestExternalFunctionControlFlow:
                 out = pl.yield_(val)
             return out
 
-        @pl.program
+        @pl.program_parser
         class ExtNestedModel:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = loop_cond(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def loop_cond(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -1898,7 +1900,7 @@ class TestExternalFunctionControlFlow:
                     out = pl.yield_(val)
                 return out
 
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = self.loop_cond(x)
                 return y
@@ -1908,14 +1910,14 @@ class TestExternalFunctionControlFlow:
     def test_external_called_in_caller_for_loop(self):
         """External function called inside caller's for loop with iter_args."""
 
-        @pl.function
+        @pl.function_parser
         def step(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class CallerLoop:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -1923,14 +1925,14 @@ class TestExternalFunctionControlFlow:
                     out = pl.yield_(updated)
                 return out
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def step(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -1943,14 +1945,14 @@ class TestExternalFunctionControlFlow:
     def test_external_called_in_caller_if_yield(self):
         """External function called inside caller's if/else with yield."""
 
-        @pl.function
+        @pl.function_parser
         def double(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class CallerIf:
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -1961,14 +1963,14 @@ class TestExternalFunctionControlFlow:
                     out: pl.Tensor[[64], pl.FP32] = pl.yield_(x)
                 return out
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def double(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -1984,14 +1986,14 @@ class TestExternalFunctionControlFlow:
     def test_external_in_for_with_if_yield(self):
         """External function called inside if/else yield inside caller's for loop."""
 
-        @pl.function
+        @pl.function_parser
         def bump(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class ComplexCaller:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -2003,14 +2005,14 @@ class TestExternalFunctionControlFlow:
                     out = pl.yield_(val)
                 return out
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def bump(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -2027,7 +2029,7 @@ class TestExternalFunctionControlFlow:
     def test_external_with_multiple_iter_args(self):
         """External function with for loop using multiple iter_args and yield."""
 
-        @pl.function
+        @pl.function_parser
         def dual_accumulate(
             x: pl.Tensor[[64], pl.FP32],
         ) -> pl.Tensor[[64], pl.FP32]:
@@ -2040,16 +2042,16 @@ class TestExternalFunctionControlFlow:
             result: pl.Tensor[[64], pl.FP32] = pl.add(out_a, out_b)
             return result
 
-        @pl.program
+        @pl.program_parser
         class ExtMultiIter:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = dual_accumulate(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def dual_accumulate(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init_a: pl.Tensor[[64], pl.FP32] = x
                 init_b: pl.Tensor[[64], pl.FP32] = x
@@ -2060,7 +2062,7 @@ class TestExternalFunctionControlFlow:
                 result: pl.Tensor[[64], pl.FP32] = pl.add(out_a, out_b)
                 return result
 
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = self.dual_accumulate(x)
                 return y
@@ -2082,17 +2084,17 @@ class TestInlineFunctionControlFlow:
                 out = pl.yield_(new_acc)
             return out
 
-        @pl.program
+        @pl.program_parser
         class InlineLoopModel:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = accumulate(x)
                 return y
 
         # Inline expansion: for loop is emitted directly in caller body
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -2115,9 +2117,9 @@ class TestInlineFunctionControlFlow:
                 out: pl.Tensor[[64], pl.FP32] = pl.yield_(pl.add(x, 1.0))
             return out
 
-        @pl.program
+        @pl.program_parser
         class InlineIfModel:
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -2125,9 +2127,9 @@ class TestInlineFunctionControlFlow:
                 return y
 
         # Inline expansion: if/else with yield is emitted directly in caller body
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -2155,16 +2157,16 @@ class TestInlineFunctionControlFlow:
                 out = pl.yield_(val)
             return out
 
-        @pl.program
+        @pl.program_parser
         class InlineNestedModel:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = loop_cond(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -2187,9 +2189,9 @@ class TestInlineFunctionControlFlow:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class CallerLoop:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -2198,9 +2200,9 @@ class TestInlineFunctionControlFlow:
                 return out
 
         # Inline expansion happens inside the for loop body
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -2220,9 +2222,9 @@ class TestInlineFunctionControlFlow:
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class CallerIf:
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -2234,9 +2236,9 @@ class TestInlineFunctionControlFlow:
                 return out
 
         # Inline expansion happens inside the if-then branch
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -2259,9 +2261,9 @@ class TestInlineFunctionControlFlow:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class ComplexCaller:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -2273,9 +2275,9 @@ class TestInlineFunctionControlFlow:
                     out = pl.yield_(val)
                 return out
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -2307,16 +2309,16 @@ class TestInlineFunctionControlFlow:
             result: pl.Tensor[[64], pl.FP32] = pl.add(out_a, out_b)
             return result
 
-        @pl.program
+        @pl.program_parser
         class InlineMultiIter:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = dual_accumulate(x)
                 return y
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init_a: pl.Tensor[[64], pl.FP32] = x
                 init_b: pl.Tensor[[64], pl.FP32] = x
@@ -2339,9 +2341,9 @@ class TestInlineFunctionControlFlow:
             result: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class YieldInlineArg:
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -2352,9 +2354,9 @@ class TestInlineFunctionControlFlow:
                 return out
 
         # Inline expansion as yield argument: statements emit before yield
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], flag: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -2376,18 +2378,18 @@ class TestInlineFunctionControlFlow:
             result: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             return result
 
-        @pl.program
+        @pl.program_parser
         class YieldInlineLoop:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
                     out = pl.yield_(transform(acc))
                 return out
 
-        @pl.program
+        @pl.program_parser
         class Expected:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = x
                 for i, (acc,) in pl.range(5, init_values=(init,)):
@@ -2590,22 +2592,22 @@ class TestClassSourceLookup:
             assert "Opaque" in excinfo.value.qualname
 
     def test_duplicate_program_class_names_parse_their_own_bodies(self):
-        """End to end: two `@pl.program class Prog` in one function stay distinct."""
+        """End to end: two `@pl.program_parser class Prog` in one function stay distinct."""
 
         def make(case: str) -> ir.Program:
             if case == "add":
 
-                @pl.program
+                @pl.program_parser
                 class Prog:
-                    @pl.function
+                    @pl.function_parser
                     def main(self, x: pl.Tensor[[8], pl.FP32]) -> pl.Tensor[[8], pl.FP32]:
                         return pl.add(x, 1.0)
 
                 return Prog
 
-            @pl.program
+            @pl.program_parser
             class Prog:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Tensor[[8], pl.FP32]) -> pl.Tensor[[8], pl.FP32]:
                     return pl.mul(x, 3.0)
 
@@ -2719,9 +2721,9 @@ class TestClassSourceLookup:
         """End-to-end: a function-local `@pl.program` still spans the real file lines."""
         current_line = sys._getframe().f_lineno
 
-        @pl.program
+        @pl.program_parser
         class LocalProgram:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)  # line current_line + 6
                 return y

@@ -26,7 +26,7 @@ import pypto.language as pl
 import pypto.language.distributed as pld
 import pytest
 from pypto import ir, passes
-from pypto.language.parser.diagnostics.exceptions import ParserError
+from pypto.language.parser.diagnostics import ParserError
 from pypto.pypto_core import ir as _ir_core
 
 _OP_PLD_TILE_REMOTE_LOAD = ir.get_op("pld.tile.remote_load").name

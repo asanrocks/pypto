@@ -496,7 +496,7 @@ class TestPlTupleSubscriptTypeResolver:
     def test_resolve_pl_tuple_roundtrip(self):
         """Test print → parse round-trip with pl.Tuple[...] syntax."""
         func = pl.parse("""
-@pl.function
+@pl.function_parser
 def func(
     x: pl.Tensor[[64], pl.FP32],
     y: pl.Tensor[[64], pl.FP32],
@@ -802,7 +802,7 @@ class TestDynamicShapeIntegration:
         """@pl.function with int variables from enclosing scope."""
         rows, cols = 128, 64
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[rows, cols], pl.FP32],
         ) -> pl.Tensor[[rows, cols], pl.FP32]:
@@ -819,9 +819,9 @@ class TestDynamicShapeIntegration:
         """@pl.program with int variables from enclosing scope."""
         rows, cols = 256, 128
 
-        @pl.program
+        @pl.program_parser
         class MyProgram:
-            @pl.function
+            @pl.function_parser
             def add(self, a: pl.Tensor[[rows, cols], pl.FP32]) -> pl.Tensor[[rows, cols], pl.FP32]:
                 return a
 
@@ -839,7 +839,7 @@ class TestDynamicShapeIntegration:
         """@pl.function with pl.dynamic() variables."""
         M = pl.dynamic("M")
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[M, 128], pl.FP32]) -> pl.Tensor[[M, 128], pl.FP32]:
             return x
 
@@ -857,7 +857,7 @@ class TestDynamicShapeIntegration:
         N = pl.dynamic("N")
         K = pl.dynamic("K")
 
-        @pl.function
+        @pl.function_parser
         def func(
             a: pl.Tensor[[M, K], pl.FP32],
             b: pl.Tensor[[K, N], pl.FP32],
@@ -883,7 +883,7 @@ class TestDynamicShapeIntegration:
         """Return type also supports dynamic shapes."""
         M = pl.dynamic("M")
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[M, 64], pl.FP32]) -> pl.Tensor[[M, 64], pl.FP32]:
             return x
 
@@ -903,9 +903,9 @@ class TestDynamicShapeIntegration:
         M = pl.dynamic("M")
         N = pl.dynamic("N")
 
-        @pl.program
+        @pl.program_parser
         class MyProgram:
-            @pl.function
+            @pl.function_parser
             def process(self, x: pl.Tensor[[M, N], pl.FP32]) -> pl.Tensor[[M, N], pl.FP32]:
                 return x
 
@@ -919,13 +919,13 @@ class TestDynamicShapeIntegration:
         """Same DynVar in multiple @pl.functions produces same ir.Var (issue #618)."""
         M = pl.dynamic("M")
 
-        @pl.program
+        @pl.program_parser
         class MyProgram:
-            @pl.function
+            @pl.function_parser
             def func_a(self, x: pl.Tensor[[M, 64], pl.FP32]) -> pl.Tensor[[M, 64], pl.FP32]:
                 return x
 
-            @pl.function
+            @pl.function_parser
             def func_b(self, y: pl.Tensor[[M, 128], pl.FP32]) -> pl.Tensor[[M, 128], pl.FP32]:
                 return y
 
@@ -942,7 +942,7 @@ class TestDynamicShapeIntegration:
     def test_parametrized_shapes(self, rows, cols):
         """pytest.mark.parametrize with variable shapes."""
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[rows, cols], pl.FP32],
         ) -> pl.Tensor[[rows, cols], pl.FP32]:
@@ -960,7 +960,7 @@ class TestDynamicShapeIntegration:
         shape = [128, 128]
         dtype = pl.FP32
 
-        @pl.function
+        @pl.function_parser
         def func(t: pl.Tensor[shape, dtype]) -> pl.Tensor[shape, dtype]:
             return t
 
@@ -976,7 +976,7 @@ class TestDynamicShapeIntegration:
         tile_shape = [64, 64]
         dtype = pl.FP32
 
-        @pl.function
+        @pl.function_parser
         def func(
             t: pl.Tensor[tensor_shape, dtype], tile: pl.Tensor[tile_shape, dtype]
         ) -> pl.Tensor[tensor_shape, dtype]:
@@ -993,9 +993,9 @@ class TestDynamicShapeIntegration:
         shape = [256, 128]
         dtype = pl.FP16
 
-        @pl.program
+        @pl.program_parser
         class MyProgram:
-            @pl.function
+            @pl.function_parser
             def process(self, x: pl.Tensor[shape, dtype]) -> pl.Tensor[shape, dtype]:
                 return x
 
@@ -1009,7 +1009,7 @@ class TestDynamicShapeIntegration:
     def test_parametrized_shape_variable(self, shape):
         """pytest.mark.parametrize with shape as a list variable."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[shape, pl.FP32]) -> pl.Tensor[shape, pl.FP32]:
             return x
 
@@ -1026,7 +1026,7 @@ class TestExpressionShapePatterns:
         """User computes shape dims from a base size."""
         base = 64
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[base * 2, base], pl.FP32],
         ) -> pl.Tensor[[base * 2, base], pl.FP32]:
@@ -1040,7 +1040,7 @@ class TestExpressionShapePatterns:
         """User splits a dimension with //."""
         total = 256
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[total // 4, total], pl.FP32],
         ) -> pl.Tensor[[total // 4, total], pl.FP32]:
@@ -1056,7 +1056,7 @@ class TestExpressionShapePatterns:
         heads = 8
         seq_len = 128
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[batch * heads, seq_len], pl.FP16],
         ) -> pl.Tensor[[batch * heads, seq_len], pl.FP16]:
@@ -1070,7 +1070,7 @@ class TestExpressionShapePatterns:
         """User stores config in a dict, uses subscript for dims."""
         config = {"rows": 128, "cols": 64}
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[config["rows"], config["cols"]], pl.FP32],  # noqa: F821
         ) -> pl.Tensor[[config["rows"], config["cols"]], pl.FP32]:  # noqa: F821
@@ -1084,7 +1084,7 @@ class TestExpressionShapePatterns:
         """User picks dims from a list of predefined sizes."""
         sizes = [32, 64, 128, 256]
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[sizes[2], sizes[1]], pl.FP32],
         ) -> pl.Tensor[[sizes[2], sizes[1]], pl.FP32]:
@@ -1098,7 +1098,7 @@ class TestExpressionShapePatterns:
         """User passes shape as a tuple (not list)."""
         shape = (128, 64)
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[shape, pl.FP32]) -> pl.Tensor[shape, pl.FP32]:
             return x
 
@@ -1110,7 +1110,7 @@ class TestExpressionShapePatterns:
         """User has a 1D tensor shape."""
         shape = [256]
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[shape, pl.FP32]) -> pl.Tensor[shape, pl.FP32]:
             return x
 
@@ -1122,7 +1122,7 @@ class TestExpressionShapePatterns:
         """User has a 3D tensor shape."""
         batch, rows, cols = 4, 128, 64
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[batch, rows, cols], pl.FP32],
         ) -> pl.Tensor[[batch, rows, cols], pl.FP32]:
@@ -1137,7 +1137,7 @@ class TestExpressionShapePatterns:
         input_shape = [256, 128]
         output_shape = [256, 64]
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[input_shape, pl.FP32],
         ) -> pl.Tensor[output_shape, pl.FP32]:
@@ -1155,7 +1155,7 @@ class TestExpressionShapePatterns:
         dtype_in = pl.FP16
         dtype_out = pl.FP32
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[128, 64], dtype_in],
         ) -> pl.Tensor[[128, 64], dtype_out]:
@@ -1175,7 +1175,7 @@ class TestExpressionShapePatterns:
     def test_parametrized_dtype_variable(self, dtype):
         """User parametrizes dtype across test cases."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64, 64], dtype]) -> pl.Tensor[[64, 64], dtype]:
             return x
 
@@ -1194,7 +1194,7 @@ class TestExpressionShapePatterns:
     def test_parametrized_shape_and_dtype(self, rows, cols, dtype):
         """User parametrizes both shape and dtype together."""
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[rows, cols], dtype],
         ) -> pl.Tensor[[rows, cols], dtype]:
@@ -1215,7 +1215,7 @@ class TestClosureVarsInFunctionBody:
         tile_shape = [64, 64]
         dtype = pl.FP32
 
-        @pl.function
+        @pl.function_parser
         def func(
             t: pl.Tensor[tensor_shape, dtype], out: pl.Tensor[tensor_shape, dtype]
         ) -> pl.Tensor[tensor_shape, dtype]:
@@ -1240,7 +1240,7 @@ class TestClosureVarsInFunctionBody:
         """User passes shapes= kwarg as a closure variable (t.py pattern)."""
         tile_shape = [32, 32]
 
-        @pl.function
+        @pl.function_parser
         def func(
             t: pl.Tensor[[128, 128], pl.FP32], out: pl.Tensor[[128, 128], pl.FP32]
         ) -> pl.Tensor[[128, 128], pl.FP32]:
@@ -1257,7 +1257,7 @@ class TestClosureVarsInFunctionBody:
         """User passes an int kwarg (like axis) from closure."""
         swap_axis = 1
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[64, 128], pl.FP32],
         ) -> pl.Tensor[[128, 64], pl.FP32]:
@@ -1275,7 +1275,7 @@ class TestClosureVarsInFunctionBody:
         """User passes dtype= kwarg from closure variable."""
         out_dtype = pl.FP16
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP16]:
             result: pl.Tensor[[64, 64], pl.FP16] = pl.cast(x, target_type=out_dtype)
             return result
@@ -1295,7 +1295,7 @@ class TestClosureVarsInFunctionBody:
         shape = [128, 128]
         tile_shape = [64, 64]
 
-        @pl.function
+        @pl.function_parser
         def kernel_add(t: pl.Tensor[[x, y], dtype], out: pl.Tensor[shape, dtype]) -> pl.Tensor[shape, dtype]:
             a: pl.Tile[tile_shape, dtype] = pl.tile.load(t, offsets=[0, 0], shapes=tile_shape)
             b: pl.Tile[tile_shape, dtype] = pl.add(a, 5)
@@ -1314,9 +1314,9 @@ class TestClosureVarsInFunctionBody:
         tile_shape = [64, 64]
         dtype = pl.FP32
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function
+            @pl.function_parser
             def compute(
                 self, t: pl.Tensor[shape, dtype], out: pl.Tensor[shape, dtype]
             ) -> pl.Tensor[shape, dtype]:
@@ -1348,7 +1348,7 @@ class TestDynamicShapeEdgeCases:
         N = pl.dynamic("N")
         shape = [M, N]
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[shape, pl.FP32]) -> pl.Tensor[shape, pl.FP32]:
             return x
 
@@ -1364,7 +1364,7 @@ class TestDynamicShapeEdgeCases:
         M = pl.dynamic("M")
         shape = [M, 128]
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[shape, pl.FP32]) -> pl.Tensor[shape, pl.FP32]:
             return x
 
@@ -1380,7 +1380,7 @@ class TestDynamicShapeEdgeCases:
         M = pl.dynamic("M")
         base = 64
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[M, base * 2], pl.FP32],
         ) -> pl.Tensor[[M, base * 2], pl.FP32]:
@@ -1400,7 +1400,7 @@ class TestDynamicShapeEdgeCases:
         shape = [64, 64]
         dtype = pl.FP32
 
-        @pl.function
+        @pl.function_parser
         def func(
             a: pl.Tensor[shape, dtype],
             b: pl.Tensor[shape, dtype],
@@ -1417,7 +1417,7 @@ class TestDynamicShapeEdgeCases:
         """User uses a variable for Tile shape annotation."""
         tile_shape = [32, 32]
 
-        @pl.function
+        @pl.function_parser
         def func(
             t: pl.Tensor[[128, 128], pl.FP32], out: pl.Tensor[[128, 128], pl.FP32]
         ) -> pl.Tensor[[128, 128], pl.FP32]:
@@ -1437,7 +1437,7 @@ class TestDynamicShapeEdgeCases:
 
         with pytest.raises(NameError, match=r"shaep|Cannot resolve|Unknown|undefined"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[shaep, pl.FP32]) -> pl.Tensor[shaep, pl.FP32]:  # noqa: F821
                 return x
 
@@ -1447,7 +1447,7 @@ class TestDynamicShapeEdgeCases:
 
         with pytest.raises(ParserTypeError, match=r"must be a list or tuple|Failed to evaluate"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[shape, pl.FP32]) -> pl.Tensor[shape, pl.FP32]:
                 return x
 
@@ -1457,7 +1457,7 @@ class TestDynamicShapeEdgeCases:
 
         with pytest.raises(ParserTypeError, match=r"must be int|element"):
 
-            @pl.function
+            @pl.function_parser
             def func(x: pl.Tensor[shape, pl.FP32]) -> pl.Tensor[shape, pl.FP32]:
                 return x
 
@@ -1465,7 +1465,7 @@ class TestDynamicShapeEdgeCases:
         """Shape variables from outer function are captured by inner @pl.function."""
 
         def make_kernel(rows, cols, dtype):
-            @pl.function
+            @pl.function_parser
             def kernel(
                 x: pl.Tensor[[rows, cols], dtype],
             ) -> pl.Tensor[[rows, cols], dtype]:
@@ -1489,7 +1489,7 @@ class TestDynamicShapeEdgeCases:
         """User writes a factory function that parametrizes shape."""
 
         def make_kernel(shape, dtype):
-            @pl.function
+            @pl.function_parser
             def kernel(x: pl.Tensor[shape, dtype]) -> pl.Tensor[shape, dtype]:
                 return x
 
@@ -1732,7 +1732,7 @@ class TestLayoutIntegration:
     def test_function_with_tensor_layout(self):
         """@pl.function with layout in parameter and return type."""
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[64, 128], pl.FP16, pl.NZ],
         ) -> pl.Tensor[[64, 128], pl.FP16, pl.NZ]:
@@ -1753,7 +1753,7 @@ class TestLayoutIntegration:
     def test_function_mixed_layout_and_no_layout(self):
         """@pl.function with some params having layout and some not."""
 
-        @pl.function
+        @pl.function_parser
         def func(
             a: pl.Tensor[[64, 128], pl.FP16, pl.NZ],
             b: pl.Tensor[[64, 128], pl.FP16],
@@ -1771,9 +1771,9 @@ class TestLayoutIntegration:
     def test_program_with_tensor_layout(self):
         """@pl.program with layout annotations."""
 
-        @pl.program
+        @pl.program_parser
         class MyProgram:
-            @pl.function
+            @pl.function_parser
             def compute(
                 self,
                 x: pl.Tensor[[64, 128], pl.FP16, pl.NZ],
@@ -1791,7 +1791,7 @@ class TestLayoutIntegration:
         """@pl.function with layout from closure variable."""
         layout = pl.NZ
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[64, 128], pl.FP16, layout],
         ) -> pl.Tensor[[64, 128], pl.FP16, layout]:
@@ -1814,7 +1814,7 @@ class TestLayoutIntegration:
     def test_parametrized_layout(self, layout, expected):
         """pytest.mark.parametrize with layout (every layout the bare slot accepts)."""
 
-        @pl.function
+        @pl.function_parser
         def func(
             x: pl.Tensor[[64, 128], pl.FP16, layout],
         ) -> pl.Tensor[[64, 128], pl.FP16, layout]:
@@ -1837,7 +1837,7 @@ class TestLayoutIntegration:
         """
         with pytest.raises(ParserTypeError, match=r"pl\.Tensor\[\.\.\., pl\.DN\] is not supported"):
 
-            @pl.function
+            @pl.function_parser
             def func(
                 x: pl.Tensor[[16, 1], pl.FP16, pl.DN],
             ) -> pl.Tensor[[16, 1], pl.FP16]:

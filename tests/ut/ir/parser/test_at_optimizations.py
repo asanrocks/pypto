@@ -49,7 +49,7 @@ def _find_scope_stmt(stmt: ir.Stmt) -> ir.ScopeStmt | None:
 def test_parse_optimizations_split_only_up_down():
     """optimizations=[pl.split(UP_DOWN)] → InCore with split=UP_DOWN."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.UP_DOWN)]):
             y = pl.add(x, x)
@@ -64,7 +64,7 @@ def test_parse_optimizations_split_only_up_down():
 def test_parse_optimizations_split_only_left_right():
     """optimizations=[pl.split(LEFT_RIGHT)] → InCore with split=LEFT_RIGHT."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.LEFT_RIGHT)]):
             y = pl.add(x, x)
@@ -79,7 +79,7 @@ def test_parse_optimizations_split_only_left_right():
 def test_parse_optimizations_empty_list_is_plain_incore():
     """optimizations=[] → InCore with no split."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP, optimizations=[]):
             y = pl.add(x, x)
@@ -99,7 +99,7 @@ def test_new_optimizations_kwarg_emits_no_warning():
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.UP_DOWN)]):
                 y = pl.add(x, x)
@@ -113,7 +113,7 @@ def test_optimizations_must_be_list():
     """optimizations= must be a list literal."""
     with pytest.raises(ParserSyntaxError, match="must be a list literal"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(
                 level=pl.Level.CORE_GROUP,
@@ -127,7 +127,7 @@ def test_duplicate_split_errors():
     """Two pl.split(...) entries in the same list is an error."""
     with pytest.raises(ParserSyntaxError, match="Duplicate.*split"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(
                 level=pl.Level.CORE_GROUP,
@@ -141,7 +141,7 @@ def test_unsupported_entry_errors():
     """Unknown entries in optimizations=[...] are rejected."""
     with pytest.raises(ParserSyntaxError, match="Unsupported entry"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP, optimizations=[42]):  # type: ignore[list-item]
                 y = pl.add(x, x)
@@ -156,7 +156,7 @@ def test_split_none_in_list_is_accepted_as_nosplit():
     the scope in ``test_no_optimizations_leaves_split_unset`` — deliberately so.
     """
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.NONE)]):
             y = pl.add(x, x)
@@ -217,7 +217,7 @@ def test_split_on_non_core_group_errors():
     """pl.split(...) is only valid at CORE_GROUP."""
     with pytest.raises(ParserSyntaxError, match="CORE_GROUP"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.HOST, optimizations=[pl.split(pl.SplitMode.UP_DOWN)]):
                 y = pl.add(x, x)
@@ -230,7 +230,7 @@ def test_split_on_non_core_group_errors():
 def test_fully_qualified_split():
     """pl.optimizations.split(...) also works."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(
             level=pl.Level.CORE_GROUP,

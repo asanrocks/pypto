@@ -44,9 +44,9 @@ def _iter_stmts(stmt: ir.Stmt):
 def test_get_parses_to_side_effect_op():
     """``pld.tensor.get`` parses to the registered side-effect-only op."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             dst: pld.DistributedTensor[[16, 64], pl.FP16],
@@ -78,9 +78,9 @@ def test_get_parses_to_side_effect_op():
 def test_get_subregion_parses_to_six_arg_op():
     """``pld.tensor.get`` subregion form parses offsets/shape as positional IR args."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             dst: pld.DistributedTensor[[16, 64], pl.FP16],
@@ -116,9 +116,9 @@ def test_get_subregion_parses_to_six_arg_op():
 def test_get_round_trips_through_printer_and_parser():
     """Printed ``pld.tensor.get`` IR re-parses to a structurally-equal program."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             dst: pld.DistributedTensor[[8], pl.FP32],
@@ -135,9 +135,9 @@ def test_get_round_trips_through_printer_and_parser():
 def test_get_subregion_round_trips_through_printer_and_parser():
     """Printed subregion ``pld.tensor.get`` IR re-parses to a structurally-equal program."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             dst: pld.DistributedTensor[[16, 64], pl.FP16],

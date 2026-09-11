@@ -21,7 +21,7 @@ class TestForLoops:
     def test_simple_for_loop(self):
         """Test simple for loop with one iter_arg."""
 
-        @pl.function
+        @pl.function_parser
         def sum_loop(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
             init: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
 
@@ -38,7 +38,7 @@ class TestForLoops:
     def test_for_loop_multiple_iter_args(self):
         """Test for loop with multiple iteration arguments."""
 
-        @pl.function
+        @pl.function_parser
         def multi_iter(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
             init1: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
             init2: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
@@ -59,7 +59,7 @@ class TestForLoops:
     def test_for_loop_with_range_params(self):
         """Test for loop with start, stop, step parameters."""
 
-        @pl.function
+        @pl.function_parser
         def range_params(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
             init: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
 
@@ -76,7 +76,7 @@ class TestForLoops:
     def test_nested_for_loops(self):
         """Test nested for loops."""
 
-        @pl.function
+        @pl.function_parser
         def nested_loops(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
             init: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
 
@@ -101,7 +101,7 @@ class TestForLoops:
     def test_for_loop_with_operations(self):
         """Test for loop with tensor operations."""
 
-        @pl.function
+        @pl.function_parser
         def loop_ops(x: pl.Tensor[[64, 128], pl.FP32]) -> pl.Tensor[[64, 128], pl.FP32]:
             init: pl.Tensor[[64, 128], pl.FP32] = pl.create_tensor([64, 128], dtype=pl.FP32)
 
@@ -127,7 +127,7 @@ class TestIfStatements:
     def test_if_in_loop(self):
         """Test if statement inside for loop."""
 
-        @pl.function
+        @pl.function_parser
         def if_in_loop(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[64], pl.FP32]:
             init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
 
@@ -155,7 +155,7 @@ class TestIfStatements:
     def test_if_yield_type_annotation_preserved(self):
         """Test that type annotations on yield assignments are preserved in IR (issue #185)."""
 
-        @pl.function
+        @pl.function_parser
         def if_with_annotated_yield(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[64, 128], pl.FP32]:
             init: pl.Tensor[[64, 128], pl.FP32] = pl.create_tensor([64, 128], dtype=pl.FP32)
 
@@ -181,7 +181,7 @@ class TestIfStatements:
     def test_if_yield_type_inferred_from_expression(self):
         """Test that unannotated yield assignments infer the type from the yielded expression (issue #234)."""
 
-        @pl.function
+        @pl.function_parser
         def if_with_unannotated_yield(
             x: pl.Tensor[[64], pl.FP32], n: pl.Scalar[pl.INT64]
         ) -> pl.Tensor[[64], pl.FP32]:
@@ -206,7 +206,7 @@ class TestComplexControlFlow:
     def test_loop_with_if_and_multiple_iter_args(self):
         """Test loop with if statement and multiple iter_args."""
 
-        @pl.function
+        @pl.function_parser
         def complex_flow(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[64], pl.FP32]:
             acc1: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
             acc2: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
@@ -237,7 +237,7 @@ class TestComplexControlFlow:
     def test_sequential_loops(self):
         """Test sequential (not nested) for loops."""
 
-        @pl.function
+        @pl.function_parser
         def sequential_loops(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[64], pl.FP32]:
             init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
 
@@ -265,7 +265,7 @@ class TestComplexControlFlow:
     def test_loop_without_iter_args(self):
         """Test loop without iter_args."""
 
-        @pl.function
+        @pl.function_parser
         def loop_without_iter_args(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = x
             for i in pl.range(3):
@@ -290,7 +290,7 @@ class TestParallelForLoops:
     def test_simple_parallel_for_loop(self):
         """Test simple parallel for loop with one iter_arg."""
 
-        @pl.function
+        @pl.function_parser
         def parallel_sum(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
             init: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
 
@@ -306,7 +306,7 @@ class TestParallelForLoops:
     def test_parallel_for_loop_without_iter_args(self):
         """Test parallel for loop without iter_args."""
 
-        @pl.function
+        @pl.function_parser
         def parallel_no_iter(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             result: pl.Tensor[[64], pl.FP32] = x
             for i in pl.parallel(3):
@@ -323,7 +323,7 @@ class TestParallelForLoops:
     def test_parallel_for_loop_with_range_params(self):
         """Test parallel for loop with start, stop, step parameters."""
 
-        @pl.function
+        @pl.function_parser
         def parallel_range(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[1], pl.INT32]:
             init: pl.Tensor[[1], pl.INT32] = pl.create_tensor([1], dtype=pl.INT32)
 
@@ -341,7 +341,7 @@ class TestParallelForLoops:
     def test_parallel_for_produces_parallel_kind(self):
         """Test that pl.parallel() produces ForKind.Parallel in the IR."""
 
-        @pl.function
+        @pl.function_parser
         def par_func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
             for i, (acc,) in pl.parallel(10, init_values=(init,)):
@@ -368,7 +368,7 @@ class TestParallelForLoops:
     def test_range_for_produces_sequential_kind(self):
         """Test that pl.range() produces ForKind.Sequential in the IR."""
 
-        @pl.function
+        @pl.function_parser
         def seq_func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
             for i, (acc,) in pl.range(10, init_values=(init,)):
@@ -395,9 +395,9 @@ class TestParallelForLoops:
     def test_parallel_for_printer_output(self):
         """Test that parallel for loop prints with pl.parallel()."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                 for i, (acc,) in pl.parallel(10, init_values=(init,)):
@@ -412,9 +412,9 @@ class TestParallelForLoops:
     def test_sequential_for_printer_no_parallel(self):
         """Test that sequential for loop does not print pl.parallel()."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                 for i, (acc,) in pl.range(10, init_values=(init,)):
@@ -429,9 +429,9 @@ class TestParallelForLoops:
     def test_parallel_for_structural_not_equal_to_sequential(self):
         """Test that parallel and sequential loops with same body are not structurally equal."""
 
-        @pl.program
+        @pl.program_parser
         class ParallelProg:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                 for i, (acc,) in pl.parallel(10, init_values=(init,)):
@@ -439,9 +439,9 @@ class TestParallelForLoops:
                     result = pl.yield_(new_acc)
                 return result
 
-        @pl.program
+        @pl.program_parser
         class SequentialProg:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                 for i, (acc,) in pl.range(10, init_values=(init,)):
@@ -455,7 +455,7 @@ class TestParallelForLoops:
         """Test that invalid iterator (not range or parallel) is rejected."""
         with pytest.raises(ParserSyntaxError):
 
-            @pl.function
+            @pl.function_parser
             def bad_func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 for i in pl.yield_(10):  # type: ignore
                     pass
@@ -547,7 +547,7 @@ class TestScalarRange:
     def test_scalar_param_as_stop(self):
         """Test pl.range(n) where n is a Scalar[INT64] parameter."""
 
-        @pl.function
+        @pl.function_parser
         def scalar_stop(n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             for i in pl.range(n):
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
@@ -563,7 +563,7 @@ class TestScalarRange:
     def test_scalar_param_as_start_stop(self):
         """Test pl.range(0, n) where n is a Scalar[INT64] parameter."""
 
-        @pl.function
+        @pl.function_parser
         def scalar_start_stop(
             n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]
         ) -> pl.Tensor[[64], pl.FP32]:
@@ -580,7 +580,7 @@ class TestScalarRange:
     def test_scalar_param_as_start_stop_step(self):
         """Test pl.range(0, n, s) where n and s are Scalar[INT64] parameters."""
 
-        @pl.function
+        @pl.function_parser
         def scalar_full_range(
             n: pl.Scalar[pl.INT64],
             s: pl.Scalar[pl.INT64],
@@ -601,7 +601,7 @@ class TestScalarRange:
     def test_scalar_expression_as_stop(self):
         """Test pl.range(n * 2) where n is a Scalar[INT64] parameter."""
 
-        @pl.function
+        @pl.function_parser
         def scalar_expr_stop(n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             for i in pl.range(n * 2):
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
@@ -617,7 +617,7 @@ class TestScalarRange:
     def test_scalar_complex_expression_as_stop(self):
         """Test pl.range(n * 2 + 1) where n is a Scalar[INT64] parameter."""
 
-        @pl.function
+        @pl.function_parser
         def scalar_complex_expr(
             n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]
         ) -> pl.Tensor[[64], pl.FP32]:
@@ -639,7 +639,7 @@ class TestScalarRange:
     def test_scalar_floordiv_expression_as_stop(self):
         """Test pl.range(n // 4) where n is a Scalar[INT64] parameter."""
 
-        @pl.function
+        @pl.function_parser
         def scalar_floordiv_expr(
             n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]
         ) -> pl.Tensor[[64], pl.FP32]:
@@ -657,7 +657,7 @@ class TestScalarRange:
     def test_scalar_range_with_iter_args(self):
         """Test pl.range(n, init_values=(init,)) where n is a Scalar[INT64] parameter."""
 
-        @pl.function
+        @pl.function_parser
         def scalar_range_iter(
             n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]
         ) -> pl.Tensor[[64], pl.FP32]:
@@ -676,7 +676,7 @@ class TestScalarRange:
     def test_scalar_parallel_range(self):
         """Test pl.parallel(n) where n is a Scalar[INT64] parameter."""
 
-        @pl.function
+        @pl.function_parser
         def scalar_parallel(n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             for i in pl.parallel(n):
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
@@ -695,7 +695,7 @@ class TestWhileLoops:
     def test_natural_while_loop(self):
         """Test natural while loop syntax (non-SSA form)."""
 
-        @pl.function
+        @pl.function_parser
         def natural_while(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             x: pl.Scalar[pl.INT64] = 0
             while x < n:
@@ -722,7 +722,7 @@ class TestWhileLoops:
     def test_natural_while_loop_with_initialization(self):
         """Test natural while loop with explicit initialization."""
 
-        @pl.function
+        @pl.function_parser
         def natural_while_init(limit: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             counter: pl.Scalar[pl.INT64] = 0
             sum_val: pl.Scalar[pl.INT64] = 0
@@ -746,7 +746,7 @@ class TestWhileLoops:
     def test_while_loop_with_tensors(self):
         """Test while loop with tensor operations."""
 
-        @pl.function
+        @pl.function_parser
         def while_tensors(n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             i: pl.Scalar[pl.INT64] = 0
             acc: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
@@ -768,7 +768,7 @@ class TestWhileLoops:
     def test_nested_while_loops(self):
         """Test nested while loops."""
 
-        @pl.function
+        @pl.function_parser
         def nested_while(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             x: pl.Scalar[pl.INT64] = 0
             while x < n:
@@ -801,7 +801,7 @@ class TestWhileLoops:
     def test_while_inside_for_loop(self):
         """Test while loop nested inside a for loop."""
 
-        @pl.function
+        @pl.function_parser
         def while_in_for(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             init_sum: pl.Scalar[pl.INT64] = 0
 
@@ -833,7 +833,7 @@ class TestWhileLoops:
     def test_for_inside_while_loop(self):
         """Test for loop nested inside a while loop."""
 
-        @pl.function
+        @pl.function_parser
         def for_in_while(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             x: pl.Scalar[pl.INT64] = 0
 
@@ -867,7 +867,7 @@ class TestWhileLoops:
     def test_while_with_multiple_updates(self):
         """Test while loop with multiple variable updates."""
 
-        @pl.function
+        @pl.function_parser
         def while_multi_update(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
             x: pl.Scalar[pl.INT64] = 0
             y: pl.Scalar[pl.INT64] = 1
@@ -897,9 +897,9 @@ class TestBreakContinue:
     def test_break_in_sequential_for_loop(self):
         """Test break in a sequential for loop with roundtrip."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 for i in pl.range(10):
@@ -915,9 +915,9 @@ class TestBreakContinue:
     def test_continue_in_sequential_for_loop(self):
         """Test continue in a sequential for loop with roundtrip."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 for i in pl.range(10):
@@ -932,9 +932,9 @@ class TestBreakContinue:
     def test_break_in_while_loop(self):
         """Test break in a while loop with roundtrip."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 while x < n:
@@ -950,9 +950,9 @@ class TestBreakContinue:
     def test_continue_in_while_loop(self):
         """Test continue in a while loop with roundtrip."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 while x < n:
@@ -968,9 +968,9 @@ class TestBreakContinue:
     def test_break_in_nested_loops(self):
         """Test break in inner sequential loop inside outer loop with roundtrip."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 for i in pl.range(5):
@@ -987,9 +987,9 @@ class TestBreakContinue:
     def test_break_and_continue_in_same_loop(self):
         """Test both break and continue in the same loop with roundtrip."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 for i in pl.range(10):
@@ -1008,9 +1008,9 @@ class TestBreakContinue:
     def test_break_in_seq_inside_parallel(self):
         """Test break in inner sequential loop inside outer parallel loop with roundtrip."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 for i in pl.parallel(5):
@@ -1033,7 +1033,7 @@ class TestBreakContinueErrors:
         """Test that break in parallel loop raises InvalidOperationError."""
         with pytest.raises(InvalidOperationError, match="parallel"):
 
-            @pl.function
+            @pl.function_parser
             def bad_parallel_break(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 for i in pl.parallel(10):
@@ -1044,7 +1044,7 @@ class TestBreakContinueErrors:
         """Test that continue in parallel loop raises InvalidOperationError."""
         with pytest.raises(InvalidOperationError, match="parallel"):
 
-            @pl.function
+            @pl.function_parser
             def bad_parallel_continue(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 for i in pl.parallel(10):
@@ -1055,7 +1055,7 @@ class TestBreakContinueErrors:
         """Test that break in unrolled loop raises InvalidOperationError."""
         with pytest.raises(InvalidOperationError, match="unrolled"):
 
-            @pl.function
+            @pl.function_parser
             def bad_unroll_break(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 for i in pl.unroll(4):
@@ -1066,7 +1066,7 @@ class TestBreakContinueErrors:
         """Test that continue in unrolled loop raises InvalidOperationError."""
         with pytest.raises(InvalidOperationError, match="unrolled"):
 
-            @pl.function
+            @pl.function_parser
             def bad_unroll_continue(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
                 x: pl.Scalar[pl.INT64] = 0
                 for i in pl.unroll(4):

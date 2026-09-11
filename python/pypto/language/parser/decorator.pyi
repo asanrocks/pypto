@@ -78,6 +78,9 @@ def function(
     external_source: str | Path | None = ...,
 ) -> DSLFunction[_R_co] | Callable[[Callable[..., _R_co]], DSLFunction[_R_co]]: ...
 def inline(func: Callable[..., Any]) -> InlineFunction: ...
+
+function_parser = function
+
 @overload
 def program(cls: type[Any], /, *, strict_ssa: bool = ...) -> ir.Program: ...
 @overload
@@ -87,3 +90,5 @@ def program(
     *,
     strict_ssa: bool = ...,
 ) -> ir.Program | Callable[[type[Any]], ir.Program]: ...
+
+program_parser = program

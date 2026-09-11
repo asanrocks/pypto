@@ -62,9 +62,9 @@ class TestCommentExtractor:
 
 class TestAttachInParsedProgram:
     def test_leading_comment(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                 # annotate
                 y = x
@@ -74,9 +74,9 @@ class TestAttachInParsedProgram:
         assert stmts[0].leading_comments == ["annotate"]
 
     def test_trailing_comment_promoted(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                 y = x  # trailing
                 return y
@@ -85,9 +85,9 @@ class TestAttachInParsedProgram:
         assert stmts[0].leading_comments == ["trailing"]
 
     def test_docstring_becomes_comment_on_next_stmt(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                 """hello world"""
                 y = x
@@ -97,9 +97,9 @@ class TestAttachInParsedProgram:
         assert stmts[0].leading_comments == ["hello world"]
 
     def test_mixed_docstring_and_hash_comment(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                 """doc"""
                 # hash
@@ -110,9 +110,9 @@ class TestAttachInParsedProgram:
         assert stmts[0].leading_comments == ["doc", "hash"]
 
     def test_compound_for_loop(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                 y = x
                 # main loop
@@ -139,9 +139,9 @@ class TestAttachInParsedProgram:
         assert body_stmts[0].leading_comments == ["body"]
 
     def test_if_else_branches(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                 # check positivity
                 if x > 0.0:  # positive
@@ -174,9 +174,9 @@ class TestTailOfBlockWarning:
     def test_tail_in_for_body_warns_and_drops(self):
         with pytest.warns(UserWarning, match="tail-of-block comment"):
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                     for i in pl.range(4):
                         x = x + 1.0
@@ -191,9 +191,9 @@ class TestTailOfBlockWarning:
     def test_tail_in_function_body_warns(self):
         with pytest.warns(UserWarning, match="tail-of-block comment"):
 
-            @pl.program
+            @pl.program_parser
             class P:  # noqa: F841
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                     y = x
                     return y
@@ -202,9 +202,9 @@ class TestTailOfBlockWarning:
     def test_tail_in_if_then_branch_warns(self):
         with pytest.warns(UserWarning, match="tail-of-block comment"):
 
-            @pl.program
+            @pl.program_parser
             class P:  # noqa: F841
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                     if x > 0.0:
                         y = x
@@ -221,9 +221,9 @@ class TestSiblingBlockAttribution:
     def test_sibling_for_loops_preserve_inner_leading(self):
         with pytest.warns(UserWarning, match="tail-of-block comment"):
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                     for i in pl.range(4):
                         x = x + 1.0
@@ -246,9 +246,9 @@ class TestSiblingBlockAttribution:
     def test_sibling_if_blocks_preserve_inner_leading(self):
         with pytest.warns(UserWarning, match="tail-of-block comment"):
 
-            @pl.program
+            @pl.program_parser
             class P:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                     if x > 0.0:
                         y = x
@@ -272,9 +272,9 @@ class TestWrappedHeaderComments:
     not to the first body stmt (regression for codex P2)."""
 
     def test_wrapped_for_header_comment_attaches_to_for(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                 for i in pl.range(
                     4,
@@ -294,9 +294,9 @@ class TestWrappedHeaderComments:
 
 class TestRoundTripIdempotency:
     def test_leading_and_trailing_roundtrip(self):
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Scalar[pl.FP32]) -> pl.Scalar[pl.FP32]:
                 # outer
                 y = x  # trailing

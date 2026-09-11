@@ -27,7 +27,7 @@ import pypto.language as pl
 import pytest
 from pypto import ir
 from pypto.ir import python_print
-from pypto.language.parser.diagnostics.exceptions import (
+from pypto.language.parser.diagnostics import (
     ParserSyntaxError,
     ParserTypeError,
     UnsupportedFeatureError,
@@ -109,21 +109,21 @@ def _program(predicate_src: str, deps_src: str = "[g_tid]", rc_dtype: str = "pl.
     default ``deps_src`` satisfies the "producer must be in deps=" contract.
     """
     src = f"""
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def expert(self, x: {_FP32_T}, out: pl.Out[{_FP32_T}]) -> {_FP32_T}:
         t = pl.load(x, [0, 0], [128, 128])
         out = pl.store(t, [0, 0], out)
         return out
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def gate(self, g: pl.Out[pl.Tensor[[512, 128], {rc_dtype}]]) -> pl.Tensor[[512, 128], {rc_dtype}]:
         t = pl.load(g, [0, 0], [128, 128])
         g = pl.store(t, [0, 0], g)
         return g
 
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(
         self,
         x: {_FP32_T},
@@ -346,9 +346,9 @@ def test_rebound_taskid_is_not_accepted_as_producer_dep():
     to the *second* gate submit and the predicate's producer is the first.
     """
     src = """
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def gate(
         self, g: pl.Out[pl.Tensor[[512, 128], pl.INT32]]
     ) -> pl.Tensor[[512, 128], pl.INT32]:
@@ -356,7 +356,7 @@ class Prog:
         g = pl.store(t, [0, 0], g)
         return g
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def expert(
         self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
     ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -364,7 +364,7 @@ class Prog:
         out = pl.store(t, [0, 0], out)
         return out
 
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(
         self,
         x: pl.Tensor[[512, 128], pl.FP32],
@@ -396,15 +396,15 @@ class Prog:
 # rejections specific to a scope (cluster nesting, producer-not-in-deps).
 
 _SCOPE_HEAD = f"""
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def expert(self, x: {_FP32_T}, out: pl.Out[{_FP32_T}]) -> {_FP32_T}:
         t = pl.load(x, [0, 0], [128, 128])
         out = pl.store(t, [0, 0], out)
         return out
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def gate(self, g: pl.Out[{_INT32_T}]) -> {_INT32_T}:
         t = pl.load(g, [0, 0], [128, 128])
         g = pl.store(t, [0, 0], g)
@@ -417,7 +417,7 @@ def _scope_program(predicate_src: str = "rc[0, 0] > 0", deps_src: str = "deps=[g
     return pl.parse_program(
         _SCOPE_HEAD
         + f"""
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(
         self, x: {_FP32_T}, out: pl.Out[{_FP32_T}], rc: pl.Out[{_INT32_T}]
     ) -> {_FP32_T}:
@@ -490,7 +490,7 @@ def test_scope_predicate_plain_with_form():
     prog = pl.parse_program(
         _SCOPE_HEAD
         + f"""
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(
         self, x: {_FP32_T}, out: pl.Out[{_FP32_T}], rc: {_INT32_T}
     ) -> {_FP32_T}:
@@ -511,7 +511,7 @@ def test_scope_predicate_for_form():
     prog = pl.parse_program(
         _SCOPE_HEAD
         + f"""
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(
         self, x: {_FP32_T}, out: pl.Out[{_FP32_T}], rc: {_INT32_T}
     ) -> {_FP32_T}:
@@ -540,7 +540,7 @@ def test_scope_predicate_rejected_inside_cluster():
         pl.parse_program(
             _SCOPE_HEAD
             + f"""
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(
         self, x: {_FP32_T}, out: pl.Out[{_FP32_T}], rc: {_INT32_T}
     ) -> {_FP32_T}:
@@ -564,7 +564,7 @@ def test_scope_without_predicate_has_no_attr():
     prog = pl.parse_program(
         _SCOPE_HEAD
         + f"""
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(self, x: {_FP32_T}, out: pl.Out[{_FP32_T}]) -> {_FP32_T}:
         with pl.spmd(1):
             out = self.expert(x, out)
@@ -603,7 +603,7 @@ def test_scope_producer_tracking_survives_tid_rebinding():
         pl.parse_program(
             _SCOPE_HEAD
             + f"""
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(
         self, x: {_FP32_T}, out: pl.Out[{_FP32_T}], rc: pl.Out[{_INT32_T}],
         rc2: pl.Out[{_INT32_T}]
@@ -635,7 +635,7 @@ def test_scope_predicate_deps_hint_matches_the_form():
     plain_src = (
         _SCOPE_HEAD
         + f"""
-    @pl.function(type=pl.FunctionType.Orchestration)
+    @pl.function_parser(type=pl.FunctionType.Orchestration)
     def main(
         self, x: {_FP32_T}, out: pl.Out[{_FP32_T}], rc: pl.Out[{_INT32_T}]
     ) -> {_FP32_T}:

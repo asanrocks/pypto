@@ -113,7 +113,7 @@ class TestParserSpanPassing:
 
         current_line = get_current_line()
 
-        @pl.function
+        @pl.function_parser
         def test_func(
             x: pl.Tensor[[64], pl.FP32],
             y: pl.Tensor[[64], pl.FP32],
@@ -133,7 +133,7 @@ class TestParserSpanPassing:
 
         current_line = get_current_line()
 
-        @pl.function
+        @pl.function_parser
         def test_mul(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             y: pl.Tensor[[64], pl.FP32] = pl.mul(x, 2.0)  # Line current_line + 4
             return y
@@ -149,7 +149,7 @@ class TestParserSpanPassing:
 
         current_line = get_current_line()
 
-        @pl.function
+        @pl.function_parser
         def test_create() -> pl.Tensor[[64, 32], pl.FP32]:
             x: pl.Tensor[[64, 32], pl.FP32] = pl.create_tensor([64, 32], dtype=pl.FP32)  # current_line + 4
             return x
@@ -165,7 +165,7 @@ class TestParserSpanPassing:
 
         current_line = get_current_line()
 
-        @pl.function
+        @pl.function_parser
         def test_multi(x: pl.Tensor[[32], pl.FP32]) -> pl.Tensor[[32], pl.FP32]:
             y: pl.Tensor[[32], pl.FP32] = pl.mul(x, 2.0)  # current_line + 4
             z: pl.Tensor[[32], pl.FP32] = pl.add(y, 1.0)  # current_line + 5
@@ -187,7 +187,7 @@ class TestParserSpanPassing:
 
         current_line = get_current_line()
 
-        @pl.function
+        @pl.function_parser
         def test_matmul(
             a: pl.Tensor[[64, 32], pl.FP32],
             b: pl.Tensor[[32, 16], pl.FP32],
@@ -205,7 +205,7 @@ class TestParserSpanPassing:
 
         current_line = get_current_line()
 
-        @pl.function
+        @pl.function_parser
         def test_cast(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP16]:
             y: pl.Tensor[[64], pl.FP16] = pl.cast(x, target_type=pl.FP16)  # current_line + 4
             return y
@@ -220,7 +220,7 @@ class TestParserSpanPassing:
 
         current_line = get_current_line()
 
-        @pl.function
+        @pl.function_parser
         def test_exp(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             y: pl.Tensor[[64], pl.FP32] = pl.exp(x)  # current_line + 4
             return y
@@ -235,7 +235,7 @@ class TestParserSpanPassing:
 
         current_line = get_current_line()
 
-        @pl.function
+        @pl.function_parser
         def test_comprehensive(
             x: pl.Tensor[[64], pl.FP32],
             y: pl.Tensor[[64], pl.FP32],

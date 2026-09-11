@@ -80,7 +80,7 @@ class TestTupleLiteralParsing:
     def test_parse_empty_tuple(self):
         """Test parsing empty tuple literal."""
 
-        @pl.function
+        @pl.function_parser
         def func():
             _ = ()
 
@@ -91,7 +91,7 @@ class TestTupleLiteralParsing:
     def test_parse_tuple_with_two_elements(self):
         """Test parsing tuple with two elements."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[10], pl.FP32], y: pl.Scalar[pl.INT64]):
             _ = (x, y)
 
@@ -105,7 +105,7 @@ class TestTupleLiteralParsing:
     def test_parse_tuple_with_constants(self):
         """Test parsing tuple with constant values."""
 
-        @pl.function
+        @pl.function_parser
         def func():
             _ = (1, 2, 3)
 
@@ -119,7 +119,7 @@ class TestTupleLiteralParsing:
     def test_parse_nested_tuple(self):
         """Test parsing nested tuples."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Scalar[pl.INT64]):
             inner = (x, x)
             _ = (inner, x)
@@ -136,7 +136,7 @@ class TestTupleLiteralParsing:
     def test_parse_singleton_tuple(self):
         """Test parsing single element tuple."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Scalar[pl.INT64]):
             _ = (x,)
 
@@ -152,7 +152,7 @@ class TestTupleSubscriptParsing:
     def test_parse_simple_subscript(self):
         """Test parsing simple tuple subscript - need to create tuple first."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Scalar[pl.INT64], y: pl.Scalar[pl.FP32]):
             my_tuple = (x, y)
             _first = my_tuple[0]
@@ -175,7 +175,7 @@ class TestTupleSubscriptParsing:
     def test_parse_nested_subscript(self):
         """Test parsing nested tuple subscript."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Scalar[pl.INT64], y: pl.Scalar[pl.FP32]):
             inner = (x, x)
             nested = (inner, y)
@@ -205,7 +205,7 @@ class TestTupleRoundTrip:
     def test_create_and_access_tuple(self):
         """Test creating tuple and accessing elements."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Scalar[pl.INT64], y: pl.Scalar[pl.FP32]):
             my_tuple = (x, y)
             _first = my_tuple[0]
@@ -223,7 +223,7 @@ class TestTupleRoundTrip:
     def test_tuple_in_operations(self):
         """Test using tuple elements in operations."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Scalar[pl.INT64], y: pl.Scalar[pl.INT64]):
             my_tuple = (x, y)
             # Access tuple elements

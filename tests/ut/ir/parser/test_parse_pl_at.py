@@ -45,7 +45,7 @@ def test_parse_pl_at_host_worker_rejected():
     """Inline ``with pl.at(role=SubWorker)`` is rejected; use @pl.function instead."""
     with pytest.raises(ParserSyntaxError, match="not supported"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.HOST, role=pl.Role.SubWorker):
                 _ = x
@@ -55,7 +55,7 @@ def test_parse_pl_at_host_worker_rejected():
 def test_parse_pl_at_global_orchestrator():
     """Parse with pl.at(level=GLOBAL, role=Orchestrator)."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.GLOBAL, role=pl.Role.Orchestrator):
             y = pl.add(x, x)
@@ -72,7 +72,7 @@ def test_parse_pl_at_global_orchestrator():
 def test_parse_pl_at_level_only():
     """Parse with pl.at(level=CHIP) — no role."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CHIP):
             y = pl.add(x, x)
@@ -89,7 +89,7 @@ def test_parse_pl_at_level_only():
 def test_parse_pl_at_alias_pod():
     """Parse with pl.at(level=POD) — alias for CLUSTER_0."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.POD, role=pl.Role.Orchestrator):
             y = pl.add(x, x)
@@ -109,7 +109,7 @@ def test_parse_pl_at_alias_pod():
 def test_parse_pl_at_nested():
     """Parse nested pl.at Hierarchy blocks (Orchestrator scopes)."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.GLOBAL, role=pl.Role.Orchestrator):
             with pl.at(level=pl.Level.HOST, role=pl.Role.Orchestrator):
@@ -137,7 +137,7 @@ def test_parse_pl_at_missing_level():
     """pl.at() without level= raises error."""
     with pytest.raises(ParserSyntaxError, match="level"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(role=pl.Role.SubWorker):
                 y = pl.add(x, x)
@@ -148,7 +148,7 @@ def test_parse_pl_at_unknown_kwarg():
     """pl.at() with unknown keyword raises error."""
     with pytest.raises(ParserSyntaxError, match="Unknown keyword"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.HOST, bogus=42):
                 y = pl.add(x, x)
@@ -161,7 +161,7 @@ def test_parse_pl_at_unknown_kwarg():
 def test_backward_compat_cluster():
     """Existing pl.cluster() still works."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.cluster():
             with pl.at(level=pl.Level.CORE_GROUP):
@@ -179,7 +179,7 @@ def test_backward_compat_cluster():
 def test_printer_hierarchy_scope_roundtrip():
     """Python printer renders Hierarchy scope with level/role."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.HOST, role=pl.Role.Orchestrator):
             _ = x
@@ -197,7 +197,7 @@ def test_printer_hierarchy_scope_roundtrip():
 def test_parse_pl_at_core_group_incore():
     """pl.at(level=CORE_GROUP) creates InCoreScopeStmt."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP):
             y = pl.add(x, x)
@@ -212,7 +212,7 @@ def test_parse_pl_at_role_with_core_group_errors():
     """role= combined with level=CORE_GROUP raises error."""
     with pytest.raises(ParserSyntaxError, match="role"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP, role=pl.Role.SubWorker):
                 y = pl.add(x, x)
@@ -225,7 +225,7 @@ def test_parse_pl_at_role_with_core_group_errors():
 def test_parse_pl_at_core_group_with_split():
     """pl.at(level=CORE_GROUP, optimizations=[pl.split(UP_DOWN)]) creates InCoreScopeStmt with split."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.UP_DOWN)]):
             y = pl.add(x, x)
@@ -240,7 +240,7 @@ def test_parse_pl_at_core_group_with_split():
 def test_parse_pl_at_core_group_with_split_left_right():
     """pl.at(CORE_GROUP, optimizations=[pl.split(LEFT_RIGHT)]) creates InCore scope with LEFT_RIGHT."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.LEFT_RIGHT)]):
             y = pl.add(x, x)
@@ -256,7 +256,7 @@ def test_parse_pl_at_split_on_non_core_group_errors():
     """optimizations=[pl.split(...)] is not supported for non-CORE_GROUP levels."""
     with pytest.raises(ParserSyntaxError, match="CORE_GROUP"):
 
-        @pl.function
+        @pl.function_parser
         def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             with pl.at(level=pl.Level.HOST, optimizations=[pl.split(pl.SplitMode.UP_DOWN)]):
                 y = pl.add(x, x)
@@ -266,7 +266,7 @@ def test_parse_pl_at_split_on_non_core_group_errors():
 def test_printer_incore_with_split_roundtrip():
     """Python printer renders InCore scope with split and it can be re-parsed."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.UP_DOWN)]):
             y = pl.add(x, x)

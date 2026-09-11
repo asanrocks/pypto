@@ -28,7 +28,7 @@ import pypto.language as pl
 import pypto.language.distributed as pld
 import pytest
 from pypto import ir
-from pypto.language.parser.diagnostics.exceptions import InvalidOperationError, ParserSyntaxError
+from pypto.language.parser.diagnostics import InvalidOperationError, ParserSyntaxError
 
 _OP_TILE_GET_SUBBLOCK_IDX = ir.get_op("tile.get_subblock_idx").name
 
@@ -124,9 +124,9 @@ class TestSplitAivBuildsNode:
         InCore scope carrying the legacy ``("split_aiv", True)`` attr.
         """
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[512, 128], pl.FP32],
@@ -164,9 +164,9 @@ class TestSplitAivBuildsNode:
         scope (InCoreScopeStmt{ body: SplitAivScopeStmt{...} }).
         """
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[512, 128], pl.FP32],
@@ -197,9 +197,9 @@ class TestSplitAivBuildsNode:
         separate placement rule, enforced by AivSplitValid check (h).
         """
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def main(
                 self,
                 a: pl.Tensor[[512, 128], pl.FP32],
@@ -228,9 +228,9 @@ class TestSplitAivBuildsNode:
         """``mode=pl.SplitMode.NONE`` builds a task-parallel region: split is
         NONE on the node, count stays 2, and aiv_id is still bound."""
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[512, 128], pl.FP32],
@@ -257,9 +257,9 @@ class TestSplitAivBuildsNode:
     def test_none_mode_print_roundtrips(self):
         """A NONE region prints as ``pl.split_aiv(2, mode=pl.SplitMode.NONE)``."""
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[512, 128], pl.FP32],
@@ -280,9 +280,9 @@ class TestSplitAivBuildsNode:
         rejected and does not open a fresh InCore.
         """
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Opaque)
+            @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -316,7 +316,7 @@ class TestSplitAivBuildsNode:
         """n must be hardware-fixed at 2."""
         with pytest.raises(ParserSyntaxError, match="requires n == 2"):
 
-            @pl.function
+            @pl.function_parser
             def bad(a: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 for aiv_id in pl.split_aiv(4, mode=pl.SplitMode.UP_DOWN):
                     _ = aiv_id
@@ -326,7 +326,7 @@ class TestSplitAivBuildsNode:
         """mode= is required — no silent default."""
         with pytest.raises(ParserSyntaxError, match="requires mode="):
 
-            @pl.function
+            @pl.function_parser
             def bad(a: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 for aiv_id in pl.split_aiv(2):  # type: ignore[call-arg]
                     _ = aiv_id
@@ -336,7 +336,7 @@ class TestSplitAivBuildsNode:
         """A pl.split_aiv loop cannot be nested inside another split_aiv body."""
         with pytest.raises(ParserSyntaxError, match="nested.*pl.split_aiv"):
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def bad(
                 a: pl.Tensor[[512, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
@@ -352,7 +352,7 @@ class TestSplitAivBuildsNode:
         """break inside a split_aiv body is rejected — the body is a scope, not a loop."""
         with pytest.raises(InvalidOperationError, match="'break' not supported inside"):
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def bad(
                 a: pl.Tensor[[512, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
@@ -368,7 +368,7 @@ class TestSplitAivBuildsNode:
         """continue inside a split_aiv body is rejected — the body is a scope, not a loop."""
         with pytest.raises(InvalidOperationError, match="'continue' not supported inside"):
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def bad(
                 a: pl.Tensor[[512, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
@@ -383,9 +383,9 @@ class TestSplitAivBuildsNode:
     def test_split_aiv_bare_form_merges_dump_tag(self):
         """Forward-sticky pl.dump_tag tensors are merged onto the bare split_aiv InCore scope."""
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[512, 128], pl.FP32],
@@ -416,7 +416,7 @@ class TestSplitAivValidation:
         """A loop-carried kwarg (init_values=) makes no sense for the split body."""
         with pytest.raises(ParserSyntaxError, match=r"does not accept 'init_values='"):
 
-            @pl.function
+            @pl.function_parser
             def bad(a: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 for aiv_id in pl.split_aiv(2, mode=pl.SplitMode.UP_DOWN, init_values=(0,)):  # type: ignore[call-arg]
                     _ = aiv_id
@@ -426,7 +426,7 @@ class TestSplitAivValidation:
         """pl.split_aiv() IS the split declaration; optimizations=[pl.split(...)] conflicts."""
         with pytest.raises(ParserSyntaxError, match=r"does not accept 'optimizations='"):
 
-            @pl.function
+            @pl.function_parser
             def bad(a: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 for aiv_id in pl.split_aiv(  # type: ignore[call-arg]
                     2,
@@ -440,7 +440,7 @@ class TestSplitAivValidation:
         """A tuple target on for-split_aiv is rejected (single loop var only)."""
         with pytest.raises(ParserSyntaxError, match="single loop variable"):
 
-            @pl.function
+            @pl.function_parser
             def bad(a: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 for i, j in pl.split_aiv(2, mode=pl.SplitMode.UP_DOWN):  # type: ignore[misc]
                     _ = i + j
@@ -453,9 +453,9 @@ class TestAivShardInheritsSplit:
     def test_aiv_shard_inherits_up_down_split(self):
         """pl.aiv_shard(tile) inside an UP_DOWN region carries split == 1."""
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[512, 128], pl.FP32],
@@ -476,9 +476,9 @@ class TestAivShardInheritsSplit:
     def test_aiv_shard_inherits_left_right_split(self):
         """pl.aiv_shard(tile) inside a LEFT_RIGHT region carries split == 2."""
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[512, 128], pl.FP32],
@@ -500,7 +500,7 @@ class TestAivShardInheritsSplit:
         """Passing mode= is rejected — the mode is inherited from pl.split_aiv."""
         with pytest.raises(ParserSyntaxError, match="does not take a mode"):
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def bad(
                 a: pl.Tensor[[512, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
@@ -516,7 +516,7 @@ class TestAivShardInheritsSplit:
         """pl.aiv_shard outside any split_aiv region has no mode to inherit -> error."""
         with pytest.raises(ParserSyntaxError, match="pl.split_aiv"):
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def bad(
                 a: pl.Tensor[[512, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
@@ -540,9 +540,9 @@ class TestSplitTransferTensorForm:
         """A Tensor operand (pl.matmul result) inside an UP_DOWN region parses to
         tensor.aiv_shard with the inherited split == 1."""
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[128, 128], pl.FP32],
@@ -567,9 +567,9 @@ class TestSplitTransferTensorForm:
         """A Tensor operand inside a LEFT_RIGHT region parses to tensor.aic_gather
         with the inherited split == 2."""
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[128, 128], pl.FP32],
@@ -592,9 +592,9 @@ class TestSplitTransferTensorForm:
         """A Tile operand still parses to tile.aiv_shard — the legacy
         ``@pl.program`` path is unchanged by the type dispatch."""
 
-        @pl.program
+        @pl.program_parser
         class TestProgram:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[512, 128], pl.FP32],
@@ -619,7 +619,7 @@ class TestSplitTransferTensorForm:
         high-level Tensor operand is rejected with a wrap-in-region hint."""
         with pytest.raises(ParserSyntaxError, match="tile-only"):
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def bad(
                 a: pl.Tensor[[512, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
@@ -633,7 +633,7 @@ class TestSplitTransferTensorForm:
         scope for AIV/AIC split."""
         with pytest.raises(ParserSyntaxError, match="distributed"):
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def bad(
                 out: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
                 data: pl.InOut[pld.DistributedTensor[[512, 128], pl.FP32]],

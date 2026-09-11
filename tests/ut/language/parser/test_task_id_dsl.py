@@ -59,13 +59,13 @@ class TestTaskIdNamespace:
     def test_none_sentinel_lowers_to_task_invalid(self):
         """The Python literal ``None`` in a TaskId position lowers to ``system.task_invalid``."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     prev_tid = None  # noqa: F841 — "no producer yet" sentinel
@@ -87,13 +87,13 @@ class TestSubmitParsing:
     def test_submit_augments_return_type_with_task_id(self):
         """``out, tid = pl.submit(self.k, x)`` builds one Call typed Tuple{<result>, TaskId}."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     a, tid = pl.submit(self.k1, x)  # noqa: F841 — tid checked via IR
@@ -117,9 +117,9 @@ class TestTaskDummyParsing:
     def test_task_dummy_accepts_task_id_array_dep(self):
         """``pl.system.task_dummy(deps=[tids])`` builds a marked dummy TaskId call."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self) -> pl.Scalar[pl.TASK_ID]:
                 with pl.manual_scope():
                     tids = pl.array.create(4, pl.TASK_ID)
@@ -141,17 +141,17 @@ class TestTaskDummyParsing:
     def test_task_dummy_return_can_feed_downstream_deps(self):
         """The dummy TaskId can be used as a later ``pl.submit(..., deps=[...])`` edge."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k2(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     a, tid = pl.submit(self.k1, x)
@@ -179,9 +179,9 @@ class TestTaskDummyParsing:
         """``pl.system.task_dummy`` reuses the normal TaskId deps validation."""
         with pytest.raises(ParserTypeError, match="TaskId"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Scalar[pl.TASK_ID]:
                     with pl.manual_scope():
                         barrier = pl.system.task_dummy(deps=[x])  # type: ignore[arg-type]
@@ -191,9 +191,9 @@ class TestTaskDummyParsing:
         """Empty fan-in is explicit: write ``deps=[]`` rather than omitting it."""
         with pytest.raises(ParserTypeError, match="requires keyword argument 'deps'"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self) -> pl.Scalar[pl.TASK_ID]:
                     with pl.manual_scope():
                         barrier = pl.system.task_dummy()
@@ -204,17 +204,17 @@ class TestDepsKwargAcceptsTaskId:
     def test_deps_accepts_submit_task_id(self):
         """``deps=[tid]`` where ``tid`` is a prior submit's producer TaskId."""
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k2(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 with pl.manual_scope():
                     a, tid = pl.submit(self.k1, x)
@@ -235,17 +235,17 @@ class TestDepsKwargAcceptsTaskId:
         """Tensor variables are not accepted in ``deps=[...]``."""
         with pytest.raises(ParserTypeError):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k2(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     with pl.manual_scope():
                         a, _ = pl.submit(self.k1, x)
@@ -257,13 +257,13 @@ class TestDepsKwargAcceptsTaskId:
         """``deps=[int_scalar]`` (a non-TaskId scalar) errors."""
         with pytest.raises(ParserTypeError):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k1(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                     return x
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self,
                     x: pl.Tensor[[64], pl.FP32],

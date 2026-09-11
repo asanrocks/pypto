@@ -29,8 +29,8 @@ from __future__ import annotations
 import pypto.language as pl
 import pytest
 from pypto import ir, passes
-from pypto.language.arg_direction import DIRECTION_TO_NAME, NAME_TO_DIRECTION
 from pypto.language.parser.diagnostics import InvalidOperationError, ParserSyntaxError, ParserTypeError
+from pypto.language.typing.arg_direction import DIRECTION_TO_NAME, NAME_TO_DIRECTION
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,9 +60,9 @@ def _make_two_callsite_program() -> ir.Program:
     ``[Input, OutputExisting]`` (param-rooted Out).
     """
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             x: pl.Tensor[[64], pl.FP32],
@@ -72,7 +72,7 @@ def _make_two_callsite_program() -> ir.Program:
             ret: pl.Tensor[[64], pl.FP32] = pl.store(t, [0], out)
             return ret
 
-        @pl.function
+        @pl.function_parser
         def main(
             self,
             x: pl.Tensor[[64], pl.FP32],
@@ -142,9 +142,9 @@ class TestPrinterEmitsAttrsKwarg:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[64], pl.FP32],
@@ -157,7 +157,7 @@ class Prog:
         t: pl.Tile[[64], pl.FP32] = pl.load(a, [0], [64])
         pl.store(t, [0], a)
 
-    @pl.function
+    @pl.function_parser
     def main(
         self,
         a: pl.Tensor[[64], pl.FP32],
@@ -216,9 +216,9 @@ class TestParserExtractsAttrsKwarg:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         x: pl.Tensor[[64], pl.FP32],
@@ -228,7 +228,7 @@ class Prog:
         ret: pl.Tensor[[64], pl.FP32] = pl.store(t, [0], out)
         return ret
 
-    @pl.function
+    @pl.function_parser
     def main(
         self,
         x: pl.Tensor[[64], pl.FP32],
@@ -251,15 +251,15 @@ class Prog:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         t: pl.Tile[[64], pl.FP32] = pl.load(x, [0], [64])
         ret: pl.Tensor[[64], pl.FP32] = pl.store(t, [0], x)
         return ret
 
-    @pl.function
+    @pl.function_parser
     def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         r: pl.Tensor[[64], pl.FP32] = self.kernel(x, attrs={"arg_directions": [pl.adir.bogus]})
         return r
@@ -271,9 +271,9 @@ class Prog:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         x: pl.Tensor[[64], pl.FP32],
@@ -283,7 +283,7 @@ class Prog:
         ret: pl.Tensor[[64], pl.FP32] = pl.store(t, [0], out)
         return ret
 
-    @pl.function
+    @pl.function_parser
     def main(
         self,
         x: pl.Tensor[[64], pl.FP32],
@@ -305,15 +305,15 @@ class Prog:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         t: pl.Tile[[64], pl.FP32] = pl.load(x, [0], [64])
         ret: pl.Tensor[[64], pl.FP32] = pl.store(t, [0], x)
         return ret
 
-    @pl.function
+    @pl.function_parser
     def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         r: pl.Tensor[[64], pl.FP32] = self.kernel(x, attrs={"arg_direction_overrides": [0]})
         return r
@@ -327,15 +327,15 @@ class Prog:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         t: pl.Tile[[64], pl.FP32] = pl.load(x, [0], [64])
         ret: pl.Tensor[[64], pl.FP32] = pl.store(t, [0], x)
         return ret
 
-    @pl.function
+    @pl.function_parser
     def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         r: pl.Tensor[[64], pl.FP32] = self.kernel(x, foo=1)
         return r
@@ -348,15 +348,15 @@ class Prog:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         t: pl.Tile[[64], pl.FP32] = pl.load(x, [0], [64])
         ret: pl.Tensor[[64], pl.FP32] = pl.store(t, [0], x)
         return ret
 
-    @pl.function
+    @pl.function_parser
     def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         r: pl.Tensor[[64], pl.FP32] = self.kernel(pl.adir.input(x))
         return r
@@ -440,9 +440,9 @@ class TestForwardReferencedCallee:
         code = """
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class Prog:
-    @pl.function
+    @pl.function_parser
     def main(
         self,
         x: pl.Tensor[[64], pl.FP32],
@@ -451,7 +451,7 @@ class Prog:
         r: pl.Tensor[[64], pl.FP32] = self.kernel(x, pl.no_dep(dst))
         return r
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         x: pl.Tensor[[64], pl.FP32],

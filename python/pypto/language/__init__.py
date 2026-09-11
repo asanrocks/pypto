@@ -251,7 +251,14 @@ from .op.unified_ops import (
     xors,
 )
 from .constructs.optimizations import cross_core_slot, split
-from .parser.decorator import InlineFunction, function, inline, program
+from .parser.decorator import (
+    InlineFunction,
+    function,
+    function_parser,
+    inline,
+    program,
+    program_parser,
+)
 from .parser.text_parser import loads, loads_program, parse, parse_program
 from .scope import ScopeMode, manual_scope, scope, spmd_submit, submit
 from .typing import (
@@ -315,8 +322,10 @@ __all__ = [
     "jit",
     "JITFunction",
     "function",
+    "function_parser",
     "inline",
     "program",
+    "program_parser",
     "InlineFunction",
     "parse",
     "parser",

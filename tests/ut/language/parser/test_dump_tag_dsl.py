@@ -43,9 +43,9 @@ def test_dump_tag_desugars_to_per_call_dump_vars() -> None:
     """Each ``pl.dump_tag(t)`` makes subsequent calls consuming ``t`` carry it
     in ``Call.attrs['dump_vars']`` (arg order, by Var identity)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.AIV)
+        @pl.function_parser(type=pl.FunctionType.AIV)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -58,7 +58,7 @@ def test_dump_tag_desugars_to_per_call_dump_vars() -> None:
             o: pl.Tensor[[16, 16], pl.FP32] = pl.store(r, [0, 0], output)
             return o
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -80,9 +80,9 @@ def test_dump_tag_desugars_to_per_call_dump_vars() -> None:
 def test_dump_tag_dedups_repeated_tags() -> None:
     """Marking the same Var twice merges it once into the call's dump_vars."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.AIV)
+        @pl.function_parser(type=pl.FunctionType.AIV)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -92,7 +92,7 @@ def test_dump_tag_dedups_repeated_tags() -> None:
             o: pl.Tensor[[16, 16], pl.FP32] = pl.store(t, [0, 0], output)
             return o
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -113,9 +113,9 @@ def test_dump_tag_is_forward_sticky() -> None:
     """A tag affects only *subsequent* calls — a call written before the marker
     does not carry the tagged Var."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.AIV)
+        @pl.function_parser(type=pl.FunctionType.AIV)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -125,7 +125,7 @@ def test_dump_tag_is_forward_sticky() -> None:
             o: pl.Tensor[[16, 16], pl.FP32] = pl.store(t, [0, 0], output)
             return o
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -146,9 +146,9 @@ def test_dump_tag_is_forward_sticky() -> None:
 def test_dump_tag_absent_when_unused() -> None:
     """No ``pl.dump_tag`` -> no ``dump_vars`` attr on the consuming call."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.AIV)
+        @pl.function_parser(type=pl.FunctionType.AIV)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -158,7 +158,7 @@ def test_dump_tag_absent_when_unused() -> None:
             o: pl.Tensor[[16, 16], pl.FP32] = pl.store(t, [0, 0], output)
             return o
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -180,9 +180,9 @@ def test_dump_tag_rejects_non_name_argument() -> None:
     """
     with pytest.raises(ParserSyntaxError, match="dump_tag.*bare variable name"):
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def kernel(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -192,7 +192,7 @@ def test_dump_tag_rejects_non_name_argument() -> None:
                 o: pl.Tensor[[16, 16], pl.FP32] = pl.store(t, [0, 0], output)
                 return o
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def orch(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -210,9 +210,9 @@ def test_dump_tag_rejects_too_many_args() -> None:
     exactly one positional arg is required."""
     with pytest.raises(ParserSyntaxError, match="dump_tag.*exactly one positional"):
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def kernel(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -222,7 +222,7 @@ def test_dump_tag_rejects_too_many_args() -> None:
                 o: pl.Tensor[[16, 16], pl.FP32] = pl.store(t, [0, 0], output)
                 return o
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def orch(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -241,9 +241,9 @@ def test_dump_tag_rejects_zero_args() -> None:
     exactly one positional arg is required."""
     with pytest.raises(ParserSyntaxError, match="dump_tag.*exactly one positional"):
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def kernel(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -253,7 +253,7 @@ def test_dump_tag_rejects_zero_args() -> None:
                 o: pl.Tensor[[16, 16], pl.FP32] = pl.store(t, [0, 0], output)
                 return o
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def orch(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -273,9 +273,9 @@ def test_dump_tag_rejects_non_orch_scope() -> None:
     so the mistake surfaces immediately."""
     with pytest.raises(ParserSyntaxError, match="dump_tag.*only valid inside an Orchestration"):
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def kernel(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -286,7 +286,7 @@ def test_dump_tag_rejects_non_orch_scope() -> None:
                 o: pl.Tensor[[16, 16], pl.FP32] = pl.store(t, [0, 0], output)
                 return o
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def orch(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],

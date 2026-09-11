@@ -86,9 +86,9 @@ def test_store_discard_form_preserves_distributed_tensor_type():
     ``DistributedTensorType`` so SSA-versioned uses of the destination
     retain their comm-group binding."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             inp: pl.Tensor[[1, 64], pl.FP32],
@@ -122,9 +122,9 @@ def test_store_capture_form_rebinds_distributed_tensor_var():
     because the wrapper's polymorphic return type matches the parameter type
     via ``_types_match`` — the rebound var stays a DistributedTensorType."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             inp: pl.Tensor[[1, 64], pl.FP32],
@@ -151,9 +151,9 @@ def test_store_plain_tensor_stays_tensor_type():
     """When the destination is a plain ``Tensor``, the Call's type must
     remain ``TensorType`` (not accidentally become DistributedTensorType)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             inp: pl.Tensor[[1, 64], pl.FP32],
@@ -182,9 +182,9 @@ def test_tensor_slice_on_distributed_tensor_preserves_kind():
     is still a DistributedTensorType — a slice is a view into the same
     comm-group window allocation."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             out: pl.Out[pl.Tensor[[1, 32], pl.FP32]],
@@ -209,9 +209,9 @@ def test_tensor_assemble_target_distributed_tensor_keeps_kind():
     """When the assemble target is a DistributedTensor, the result keeps
     the DistributedTensorType (and the target's window_buffer_)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             src: pl.Tensor[[1, 64], pl.FP32],
@@ -240,9 +240,9 @@ def test_subscript_write_distributed_target_plain_source():
     with a DistributedTensor target and a plain Tensor source. The parser's
     kind check must accept the mixed kinds (both are tensor-shaped)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             src: pl.Tensor[[1, 32], pl.FP32],
@@ -263,9 +263,9 @@ def test_subscript_write_distributed_target_plain_source():
 def test_subscript_write_plain_target_distributed_source_slice():
     """Reverse direction — plain Tensor target, DistributedTensor source slice."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             src_data: pl.InOut[pld.DistributedTensor[[1, 64], pl.FP32]],
@@ -300,9 +300,9 @@ def test_narrow_plain_source_into_distributed_target():
     16-wide slice of a DistributedTensor target (mirrors PR #1528 pattern
     with the destination promoted to a window-bound view)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             out: pl.Out[pl.Tensor[[1, 64], pl.FP32]],
@@ -326,9 +326,9 @@ def test_narrow_distributed_source_into_plain_target():
     target also lands cleanly — exercises ``_get_source_valid_shape`` on
     the DistributedTensorType path."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             dist_data: pl.InOut[pld.DistributedTensor[[1, 64], pl.FP32]],
@@ -362,9 +362,9 @@ def test_unified_pl_slice_dispatches_to_distributed_tensor_kind():
     end up with a ``DistributedTensorType`` Call — equivalent to calling
     ``pl.tensor.slice`` directly."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             out: pl.Out[pl.Tensor[[1, 32], pl.FP32]],

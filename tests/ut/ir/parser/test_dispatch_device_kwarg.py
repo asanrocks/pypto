@@ -67,13 +67,13 @@ def _find_callee_call(func: ir.Function, callee_name: str) -> ir.Call:
 def test_device_int_literal():
     """``device=0`` lifts to a ConstInt stored on call.attrs['device']."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def chip_orch(self, x: pl.Tensor[[64], pl.FP32]):
             return x
 
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self, x: pl.Tensor[[64], pl.FP32]):
             self.chip_orch(x, device=0)
             return 0
@@ -88,13 +88,13 @@ def test_device_int_literal():
 def test_device_uses_for_loop_induction_var():
     """``device=r`` parses to the IR Var of the enclosing ``for r in pl.range(...)``."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def chip_orch(self, x: pl.Tensor[[64], pl.FP32]):
             return x
 
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self, x: pl.Tensor[[64], pl.FP32]):
             for r in pl.range(pld.world_size()):  # type: ignore[arg-type]
                 self.chip_orch(x, device=r)
@@ -113,13 +113,13 @@ def test_device_accepts_locally_bound_constant():
     parses to a Var bound to ConstInt(3); the comm-collection pass folds it
     via simplify before deriving the device subset."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def chip_orch(self, x: pl.Tensor[[64], pl.FP32]):
             return x
 
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self, x: pl.Tensor[[64], pl.FP32]):
             other = 3
             self.chip_orch(x, device=other)
@@ -138,13 +138,13 @@ def test_device_accepts_arithmetic_expression():
     """``device=r + 1`` parses to an arithmetic IR expression. The
     comm-collection pass is responsible for any further validation."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def chip_orch(self, x: pl.Tensor[[64], pl.FP32]):
             return x
 
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self, x: pl.Tensor[[64], pl.FP32]):
             for r in pl.range(pld.world_size()):  # type: ignore[arg-type]
                 self.chip_orch(x, device=r + 1)
@@ -162,13 +162,13 @@ def test_device_accepts_explicit_level_role_orchestrator():
     two ways to declare the same role. Both must accept ``device=`` on
     dispatch sites — the parser predicate is on ``role``, not ``func_type``."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.CHIP, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.CHIP, role=pl.Role.Orchestrator)
         def chip_orch(self, x: pl.Tensor[[64], pl.FP32]):
             return x
 
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self, x: pl.Tensor[[64], pl.FP32]):
             self.chip_orch(x, device=2)
             return 0
@@ -191,13 +191,13 @@ def test_device_rejected_on_non_orchestrator_callee():
     not ``func_type``."""
     with pytest.raises(ParserTypeError, match="'device'"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch(self, x: pl.Tensor[[64], pl.FP32]):
                 self.kernel(x, device=0)
                 return 0

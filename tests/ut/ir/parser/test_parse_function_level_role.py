@@ -19,7 +19,7 @@ from pypto.pypto_core import ir
 def test_function_with_level_and_role():
     """@pl.function(level=HOST, role=Worker) sets both."""
 
-    @pl.function(level=pl.Level.HOST, role=pl.Role.SubWorker)
+    @pl.function_parser(level=pl.Level.HOST, role=pl.Role.SubWorker)
     def worker(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         return x
 
@@ -30,7 +30,7 @@ def test_function_with_level_and_role():
 def test_function_with_level_only():
     """@pl.function(level=GLOBAL) sets level, role defaults to None."""
 
-    @pl.function(level=pl.Level.GLOBAL)
+    @pl.function_parser(level=pl.Level.GLOBAL)
     def orch(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         return x
 
@@ -41,7 +41,7 @@ def test_function_with_level_only():
 def test_function_with_role_only():
     """@pl.function(role=Worker) sets role without level."""
 
-    @pl.function(role=pl.Role.SubWorker)
+    @pl.function_parser(role=pl.Role.SubWorker)
     def worker(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         return x
 
@@ -52,7 +52,7 @@ def test_function_with_role_only():
 def test_function_with_type_and_level():
     """@pl.function(type=Orchestration, level=CHIP) sets both."""
 
-    @pl.function(type=pl.FunctionType.Orchestration, level=pl.Level.CHIP)
+    @pl.function_parser(type=pl.FunctionType.Orchestration, level=pl.Level.CHIP)
     def orch(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         return x
 
@@ -66,7 +66,7 @@ def test_function_with_type_and_level():
 def test_function_backward_compat_no_level():
     """Existing @pl.function without level/role still works."""
 
-    @pl.function
+    @pl.function_parser
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         return x
 
@@ -78,7 +78,7 @@ def test_function_backward_compat_no_level():
 def test_function_backward_compat_type_only():
     """Existing @pl.function(type=InCore) still works."""
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def f(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         return x
 
@@ -94,13 +94,13 @@ def test_function_backward_compat_type_only():
 def test_program_with_level_role():
     """@pl.function(level=..., role=...) works inside @pl.program."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.SubWorker)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.SubWorker)
         def worker(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
-        @pl.function(level=pl.Level.POD, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.POD, role=pl.Role.Orchestrator)
         def orch(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
@@ -120,13 +120,13 @@ def test_program_with_level_role():
 def test_program_mixed_with_and_without_level():
     """Mix of @pl.function with and without level in @pl.program."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
-        @pl.function(level=pl.Level.HOST, role=pl.Role.SubWorker)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.SubWorker)
         def worker(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             return x
 
@@ -147,7 +147,7 @@ def test_program_mixed_with_and_without_level():
 def test_function_level_role_in_printer():
     """Function with level/role prints correctly."""
 
-    @pl.function(level=pl.Level.HOST, role=pl.Role.SubWorker)
+    @pl.function_parser(level=pl.Level.HOST, role=pl.Role.SubWorker)
     def worker(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         return x
 

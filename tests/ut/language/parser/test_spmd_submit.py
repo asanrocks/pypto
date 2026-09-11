@@ -18,7 +18,7 @@ same ``(result, task_id)`` surface and ``deps=[...]`` wiring.
 import pypto.language as pl
 import pytest
 from pypto import DataType, ir
-from pypto.language.parser.diagnostics.exceptions import ParserSyntaxError, ParserTypeError
+from pypto.language.parser.diagnostics import ParserSyntaxError, ParserTypeError
 
 
 def _flatten(stmt):
@@ -50,9 +50,9 @@ def _main_submits(prog) -> list:
 def _two_kernel_program():
     """A program with a producer + consumer InCore kernel and an orchestrator."""
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def producer(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -62,7 +62,7 @@ def _two_kernel_program():
             out = pl.store(t, [off, 0], out)
             return out
 
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def consumer(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -70,7 +70,7 @@ def _two_kernel_program():
             out = pl.store(t, [0, 0], out)
             return out
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(
             self, x: pl.Tensor[[512, 128], pl.FP32], out: pl.Out[pl.Tensor[[512, 128], pl.FP32]]
         ) -> pl.Tensor[[512, 128], pl.FP32]:
@@ -117,9 +117,9 @@ class TestSpmdSubmitParsing:
         assert deps[0].type.dtype == pl.TASK_ID
 
     def test_single_lhs_form(self):
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k(
                 self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
             ) -> pl.Tensor[[128], pl.FP32]:
@@ -127,7 +127,7 @@ class TestSpmdSubmitParsing:
                 out = pl.store(t, [0], out)
                 return out
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
             ) -> pl.Tensor[[128], pl.FP32]:
@@ -143,9 +143,9 @@ class TestSpmdSubmitParsing:
     def test_core_num_accepts_closure_constant(self):
         n_blocks = 16
 
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k(
                 self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
             ) -> pl.Tensor[[128], pl.FP32]:
@@ -153,7 +153,7 @@ class TestSpmdSubmitParsing:
                 out = pl.store(t, [0], out)
                 return out
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
             ) -> pl.Tensor[[128], pl.FP32]:
@@ -167,9 +167,9 @@ class TestSpmdSubmitParsing:
     def test_works_in_auto_scope(self):
         # spmd_submit is not restricted to manual_scope — like pl.submit, it
         # works in plain auto-tracked orchestration and preserves the launch spec.
-        @pl.program
+        @pl.program_parser
         class Prog:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def k(
                 self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
             ) -> pl.Tensor[[128], pl.FP32]:
@@ -177,7 +177,7 @@ class TestSpmdSubmitParsing:
                 out = pl.store(t, [0], out)
                 return out
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def main(
                 self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
             ) -> pl.Tensor[[128], pl.FP32]:
@@ -274,9 +274,9 @@ class TestSpmdSubmitErrors:
     def test_requires_core_num(self):
         with pytest.raises(ParserSyntaxError, match="requires the core_num"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -284,7 +284,7 @@ class TestSpmdSubmitErrors:
                     out = pl.store(t, [0], out)
                     return out
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -295,9 +295,9 @@ class TestSpmdSubmitErrors:
     def test_core_num_must_be_positive(self):
         with pytest.raises(ParserSyntaxError, match="positive"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -305,7 +305,7 @@ class TestSpmdSubmitErrors:
                     out = pl.store(t, [0], out)
                     return out
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -316,9 +316,9 @@ class TestSpmdSubmitErrors:
     def test_core_num_must_be_integer(self):
         with pytest.raises(ParserSyntaxError, match="integer"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -326,7 +326,7 @@ class TestSpmdSubmitErrors:
                     out = pl.store(t, [0], out)
                     return out
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -337,9 +337,9 @@ class TestSpmdSubmitErrors:
     def test_sync_start_must_be_bool_literal(self):
         with pytest.raises(ParserSyntaxError, match="boolean literal"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -347,7 +347,7 @@ class TestSpmdSubmitErrors:
                     out = pl.store(t, [0], out)
                     return out
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -358,9 +358,9 @@ class TestSpmdSubmitErrors:
     def test_plain_submit_rejects_core_num(self):
         with pytest.raises(ParserTypeError, match="core_num"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -368,7 +368,7 @@ class TestSpmdSubmitErrors:
                     out = pl.store(t, [0], out)
                     return out
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -379,9 +379,9 @@ class TestSpmdSubmitErrors:
     def test_bare_spmd_submit_must_be_unpacked(self):
         with pytest.raises(ParserSyntaxError, match="must be unpacked"):
 
-            @pl.program
+            @pl.program_parser
             class _Prog:
-                @pl.function(type=pl.FunctionType.InCore)
+                @pl.function_parser(type=pl.FunctionType.InCore)
                 def k(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:
@@ -389,7 +389,7 @@ class TestSpmdSubmitErrors:
                     out = pl.store(t, [0], out)
                     return out
 
-                @pl.function(type=pl.FunctionType.Orchestration)
+                @pl.function_parser(type=pl.FunctionType.Orchestration)
                 def main(
                     self, x: pl.Tensor[[128], pl.FP32], out: pl.Out[pl.Tensor[[128], pl.FP32]]
                 ) -> pl.Tensor[[128], pl.FP32]:

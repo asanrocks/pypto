@@ -15,7 +15,7 @@
 ``attrs['dump_vars']`` (a ``vector<VarPtr>``) as a ``pl.dump_tag`` declaration,
 so the dump target is tracked by Var identity (never by name). A plain
 ``self.kernel(...)`` call offers no ``dumps=`` surface; the printer surfaces a
-Call's ``dump_vars`` (seeded by ``pl.dump_tag``) as a ``dumps=[...]`` kwarg, the
+Call's ``dump_vars`` (populated by ``pl.dump_tag``) as a ``dumps=[...]`` kwarg, the
 same way it surfaces a Submit's. The forward-sticky ``pl.dump_tag`` statement
 itself is covered in ``test_dump_tag_dsl.py``.
 """
@@ -58,9 +58,9 @@ def test_submit_dumps_records_arg_vars_on_submit() -> None:
     ``attrs['dump_vars']`` — by identity, so the entries are the submit's own
     arg Vars."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -68,7 +68,7 @@ def test_submit_dumps_records_arg_vars_on_submit() -> None:
         ) -> pl.Tensor[[16, 16], pl.FP32]:
             return a
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -88,13 +88,13 @@ def test_submit_dumps_records_arg_vars_on_submit() -> None:
 def test_submit_dumps_absent_when_unused() -> None:
     """No ``dumps=`` kwarg -> no ``dump_vars`` attr on the Submit."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
             return a
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
             with pl.manual_scope():
                 out, _ = pl.submit(self.kernel, a)
@@ -109,13 +109,13 @@ def test_submit_dumps_dedups_repeated_arg() -> None:
     """Listing the same arg twice in ``dumps=`` records it once (dedup by
     Var identity)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
             return a
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
             with pl.manual_scope():
                 out, _ = pl.submit(self.kernel, a, dumps=[a, a])
@@ -131,13 +131,13 @@ def test_submit_dumps_roundtrips_through_printer() -> None:
     The parser records the listed args on the Submit's ``dump_vars`` and the
     printer round-trips them as a ``dumps=[...]`` kwarg."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
             return a
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
             with pl.manual_scope():
                 out, _ = pl.submit(self.kernel, a, dumps=[a])
@@ -148,14 +148,14 @@ def test_submit_dumps_roundtrips_through_printer() -> None:
 
 
 def test_dump_tag_call_roundtrips_via_attrs_dict() -> None:
-    """A ``pl.dump_tag`` seed on a plain ``self.kernel(...)`` Call is surfaced by
+    """A ``pl.dump_tag`` entry on a plain ``self.kernel(...)`` Call is surfaced by
     the printer inside the machine-only ``attrs={"dump_vars": [...]}`` dict — a
     plain Call exposes no user-facing ``dumps=`` kwarg; the dump targets live in
     IR only and round-trip via the same dict as ``arg_directions``."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.AIV)
+        @pl.function_parser(type=pl.FunctionType.AIV)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -168,7 +168,7 @@ def test_dump_tag_call_roundtrips_via_attrs_dict() -> None:
             o: pl.Tensor[[16, 16], pl.FP32] = pl.store(r, [0, 0], output)
             return o
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -194,9 +194,9 @@ def test_at_dumps_records_dump_vars_on_scope() -> None:
     """``pl.at(..., dumps=[t])`` records ``t`` on the ScopeStmt's ``dump_vars``
     attr — the scope-side explicit surface, symmetric with ``deps=``."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -214,9 +214,9 @@ def test_at_dumps_rejects_non_tensor() -> None:
     """A ``pl.at(dumps=[...])`` entry that is not a tensor Var is rejected."""
     with pytest.raises(ParserTypeError, match="dumps=.*not a tensor"):
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def orch(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -235,13 +235,13 @@ def test_submit_dumps_rejects_non_arg() -> None:
     rejected (strict arg-membership validation)."""
     with pytest.raises(ParserTypeError, match="dumps=.*not an argument of this submit"):
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
                 return a
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def orch(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -259,9 +259,9 @@ def test_dumps_rejected_on_plain_call() -> None:
     kernel call rejects it (declare the target with ``pl.dump_tag`` instead)."""
     with pytest.raises(ParserTypeError, match="does not accept keyword argument 'dumps'"):
 
-        @pl.program
+        @pl.program_parser
         class P:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def kernel(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],
@@ -271,7 +271,7 @@ def test_dumps_rejected_on_plain_call() -> None:
                 o: pl.Tensor[[16, 16], pl.FP32] = pl.store(t, [0, 0], output)
                 return o
 
-            @pl.function(type=pl.FunctionType.Orchestration)
+            @pl.function_parser(type=pl.FunctionType.Orchestration)
             def orch(
                 self,
                 a: pl.Tensor[[16, 16], pl.FP32],

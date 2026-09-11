@@ -76,9 +76,9 @@ def test_remote_store_lifts_to_op_call_with_unknown_return_type():
     """``pld.tile.remote_store`` parses to an IR call whose return type is
     UnknownType (side-effect only)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[64, 32], pl.FP16],
@@ -96,9 +96,9 @@ def test_remote_store_threads_args_positionally():
     """The parser packs ``[src_tile, target, peer, offsets]`` as positional args
     on the IR call (kwargs collapsed)."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[64, 32], pl.FP32],
@@ -125,9 +125,9 @@ def test_remote_store_round_trips_through_printer():
     """Printed IR round-trips through the parser: print → parse → print yields
     the same text for the kernel containing ``remote_store``."""
 
-    @pl.program
+    @pl.program_parser
     class Before:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[64, 32], pl.FP16],
@@ -153,9 +153,9 @@ def test_remote_store_atomic_round_trips_through_printer():
     an atomic-add store carries it explicitly.
     """
 
-    @pl.program
+    @pl.program_parser
     class Before:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             data: pld.DistributedTensor[[64, 32], pl.FP16],
@@ -180,9 +180,9 @@ def test_remote_store_atomic_round_trips_through_printer():
 def test_tensor_remote_store_lifts_to_op_call():
     """``pld.tensor.remote_store`` lifts to its own op with the same four args."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             x: pl.Tensor[[16, 8], pl.FP16],
@@ -207,9 +207,9 @@ def test_tensor_remote_store_lifts_to_op_call():
 def test_tensor_remote_store_round_trips_through_printer():
     """print → parse → print is stable for the tensor-level form."""
 
-    @pl.program
+    @pl.program_parser
     class Before:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             x: pl.Tensor[[16, 8], pl.FP16],
@@ -229,9 +229,9 @@ def test_tensor_remote_store_round_trips_through_printer():
 def test_tensor_remote_store_atomic_round_trips_through_printer():
     """The tensor form's ``atomic`` attr survives print → parse → print too."""
 
-    @pl.program
+    @pl.program_parser
     class Before:
-        @pl.function
+        @pl.function_parser
         def kernel(
             self,
             x: pl.Tensor[[16, 8], pl.FP16],
@@ -254,9 +254,9 @@ def test_short_form_remote_store_dispatches_on_operand_level():
     Both spellings are written the same way; only the level of ``src`` differs.
     """
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function
+        @pl.function_parser
         def tile_level(
             self,
             data: pld.DistributedTensor[[64, 32], pl.FP16],
@@ -265,7 +265,7 @@ def test_short_form_remote_store_dispatches_on_operand_level():
             tile = pld.tile.remote_load(data, peer=peer, offsets=[0, 0], shape=[32, 16])
             pld.remote_store(tile, data, peer, [0, 0])
 
-        @pl.function
+        @pl.function_parser
         def tensor_level(
             self,
             x: pl.Tensor[[16, 8], pl.FP16],
@@ -287,9 +287,9 @@ def test_tensor_remote_store_rejects_tile_src():
     """A tile operand in a tensor-level call names the tile-level entry point."""
     with pytest.raises(InvalidOperationError, match=r"pld\.tile\.remote_store"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64, 32], pl.FP16],
@@ -303,9 +303,9 @@ def test_tensor_remote_store_rejects_out_of_bounds_push():
     """The pushed region must fit inside the peer's slice at ``offsets``."""
     with pytest.raises(InvalidOperationError, match="push exceeds the peer's target region"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 x: pl.Tensor[[16, 8], pl.FP16],
@@ -319,9 +319,9 @@ def test_remote_store_rejects_plain_tensor_target():
     """The parser refuses a ``pl.Tensor`` target — must be window-bound."""
     with pytest.raises(InvalidOperationError, match="DistributedTensor"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pl.Tensor[[64], pl.FP32],
@@ -335,9 +335,9 @@ def test_remote_store_rejects_unknown_subop():
     """``pld.tile.<other>`` is rejected at 3-segment dispatch."""
     with pytest.raises(InvalidOperationError, match=r"pld\.tile"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function
+            @pl.function_parser
             def kernel(
                 self,
                 data: pld.DistributedTensor[[64], pl.FP32],

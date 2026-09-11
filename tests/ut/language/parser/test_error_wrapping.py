@@ -35,7 +35,7 @@ class TestOpErrorWrapping:
         """ValueError from tensor.cast gets wrapped with span in @pl.function."""
         with pytest.raises(InvalidOperationError, match="Invalid rounding mode") as exc_info:
 
-            @pl.function
+            @pl.function_parser
             def bad_cast(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                 result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(
                     x,
@@ -50,9 +50,9 @@ class TestOpErrorWrapping:
         """ValueError from tensor.cast gets wrapped with span in @pl.program."""
         with pytest.raises(InvalidOperationError, match="Invalid rounding mode") as exc_info:
 
-            @pl.program
+            @pl.program_parser
             class BadCastProgram:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                     result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(
                         x,
@@ -67,7 +67,7 @@ class TestOpErrorWrapping:
         """Wrapped error message includes the operation name for context."""
         with pytest.raises(InvalidOperationError, match="tensor operation 'cast'"):
 
-            @pl.function
+            @pl.function_parser
             def bad_cast(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                 result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(
                     x,
@@ -80,7 +80,7 @@ class TestOpErrorWrapping:
         """Wrapped error chains to the original exception via __cause__."""
         with pytest.raises(InvalidOperationError) as exc_info:
 
-            @pl.function
+            @pl.function_parser
             def bad_cast(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                 result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(
                     x,
@@ -96,7 +96,7 @@ class TestOpErrorWrapping:
         """ParserErrors from op dispatch are not re-wrapped."""
         with pytest.raises(InvalidOperationError, match=r"Unknown operation 'pl\.nonexistent_op'"):
 
-            @pl.function
+            @pl.function_parser
             def unknown(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result: pl.Tensor[[64], pl.FP32] = pl.nonexistent_op(x)  # type: ignore
                 return result
@@ -234,9 +234,9 @@ class TestProgramCatchAll:
         """@pl.program wraps unexpected exceptions as ParserError subclass."""
         with pytest.raises(ParserError):
 
-            @pl.program
+            @pl.program_parser
             class BadProgram:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                     result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(
                         x,
@@ -249,7 +249,7 @@ class TestProgramCatchAll:
         """@pl.function wraps unexpected exceptions as ParserError subclass."""
         with pytest.raises(ParserError):
 
-            @pl.function
+            @pl.function_parser
             def bad_func(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                 result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(
                     x,
@@ -262,9 +262,9 @@ class TestProgramCatchAll:
         """@pl.program attaches source lines to wrapped errors."""
         with pytest.raises(ParserError) as exc_info:
 
-            @pl.program
+            @pl.program_parser
             class SourceLinesProgram:
-                @pl.function
+                @pl.function_parser
                 def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.BF16]:
                     result: pl.Tensor[[64], pl.BF16] = pl.tensor.cast(
                         x,
@@ -282,7 +282,7 @@ class TestTypeMismatchReassignment:
     def test_reassign_same_type_succeeds(self):
         """Reassigning with the same type is allowed."""
 
-        @pl.function
+        @pl.function_parser
         def func(x: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
             t = pl.create_tensor([16, 16], dtype=pl.FP32)
             t = pl.mul(t, 2.0)  # same type, should succeed
@@ -300,7 +300,7 @@ class TestTypeMismatchReassignment:
 
         with pytest.raises(ParserTypeError, match="Cannot reassign"):
 
-            @pl.function
+            @pl.function_parser
             def func(  # noqa: F841
                 x: pl.Tensor[[16, 16], pl.FP32],
             ) -> pl.Tensor[[16, 16], pl.FP32]:

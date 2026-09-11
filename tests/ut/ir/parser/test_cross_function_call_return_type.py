@@ -55,9 +55,9 @@ def test_annotationless_callee_reassign_existing_var_roundtrips():
     (``UnknownType``) and the reparsed call (``TensorType``) diverge.
     """
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -65,7 +65,7 @@ def test_annotationless_callee_reassign_existing_var_roundtrips():
         ):
             return c
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -85,9 +85,9 @@ def test_annotationless_callee_reassign_existing_var_roundtrips():
 def test_annotationless_callee_fresh_var_binding_roundtrips():
     """``out = self.kernel(...)`` binding a fresh var round-trips and is typed."""
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -95,7 +95,7 @@ def test_annotationless_callee_fresh_var_binding_roundtrips():
         ):
             return c
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -118,9 +118,9 @@ def test_annotationless_callee_dynamic_shape_is_substituted():
     """
     N = pl.dynamic("N")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a: pl.Tensor[[N, 16], pl.FP32],
@@ -128,7 +128,7 @@ def test_annotationless_callee_dynamic_shape_is_substituted():
         ):
             return c
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[32, 16], pl.FP32],
@@ -146,9 +146,9 @@ def test_annotationless_callee_dynamic_shape_is_substituted():
 def test_explicit_return_annotation_still_roundtrips():
     """A callee with an explicit ``-> `` annotation is unaffected (control)."""
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -156,7 +156,7 @@ def test_explicit_return_annotation_still_roundtrips():
         ) -> pl.Tensor[[16, 16], pl.FP32]:
             return c
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -177,9 +177,9 @@ def test_submit_to_annotationless_callee_return_unchanged():
     callee's implicit return, so the recovery must not widen the submit tuple.
     """
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -187,7 +187,7 @@ def test_submit_to_annotationless_callee_return_unchanged():
         ):
             return c
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def orch(
             self,
             a: pl.Tensor[[16, 16], pl.FP32],
@@ -227,13 +227,13 @@ def test_symbolic_valid_shape_and_composite_return_metadata_are_substituted():
     """A DSL call rebuilds a composite valid-shape expression for the actual tensor shape."""
     n = pl.dynamic("N")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function
+        @pl.function_parser
         def view(self, arg: pl.Tensor[[n, 64], pl.FP32]):
             return pl.tensor.slice(arg, [n, 64], [0, 0], valid_shape=[n - 1, 64])
 
-        @pl.function
+        @pl.function_parser
         def main(self, actual: pl.Tensor[[32, 64], pl.FP32]):
             return self.view(actual)
 
@@ -252,13 +252,13 @@ def test_self_binding_is_refined_by_later_concrete_argument():
     """A shared placeholder does not hide a concrete binding from a later argument."""
     n = pl.dynamic("N")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function
+        @pl.function_parser
         def select(self, symbolic: pl.Tensor[[n], pl.FP32], concrete: pl.Tensor[[n], pl.FP32]):
             return concrete
 
-        @pl.function
+        @pl.function_parser
         def main(self, symbolic: pl.Tensor[[n], pl.FP32], concrete: pl.Tensor[[8], pl.FP32]):
             return self.select(symbolic, concrete)
 
@@ -274,9 +274,9 @@ def test_repeated_composite_binding_is_checked_after_transitive_substitution():
     total = pl.dynamic("TOTAL")
     actual_factor = pl.dynamic("ACTUAL_FACTOR")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function
+        @pl.function_parser
         def select(
             self,
             first: pl.Tensor[[total], pl.FP32],
@@ -285,7 +285,7 @@ def test_repeated_composite_binding_is_checked_after_transitive_substitution():
         ):
             return first
 
-        @pl.function
+        @pl.function_parser
         def main(
             self,
             first: pl.Tensor[[factor * 64], pl.FP32],
@@ -305,9 +305,9 @@ def test_composite_binding_skips_mismatched_nonvariable_operands():
     n = pl.dynamic("N")
     m = pl.dynamic("M")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function
+        @pl.function_parser
         def select(
             self,
             shifted: pl.Tensor[[n + 1], pl.FP32],
@@ -315,7 +315,7 @@ def test_composite_binding_skips_mismatched_nonvariable_operands():
         ):
             return marker
 
-        @pl.function
+        @pl.function_parser
         def main(
             self,
             shifted: pl.Tensor[[m + 2], pl.FP32],
@@ -333,15 +333,15 @@ def test_recursive_tuple_and_tile_return_metadata_are_substituted():
     """A DSL call recursively substitutes metadata on a Tile nested inside tuples."""
     n = pl.dynamic("N")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.InCore)
+        @pl.function_parser(type=pl.FunctionType.InCore)
         def load_tile(self, arg: pl.Tensor[[n, 64], pl.FP32]):
             tile = pl.load(arg, [0, 0], [n, 64], valid_shape=[n - 1, 64])
             status = pl.const(0, pl.INT64)
             return status, (tile,)
 
-        @pl.function
+        @pl.function_parser
         def main(self, actual: pl.Tensor[[32, 64], pl.FP32]):
             return self.load_tile(actual)
 
@@ -363,9 +363,9 @@ def test_distributed_return_kind_and_valid_shape_are_preserved():
     """A DSL call preserves DistributedTensorType while substituting its valid shape."""
     n = pl.dynamic("N")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function
+        @pl.function_parser
         def view(
             self,
             shape_source: pl.Tensor[[n], pl.FP32],
@@ -373,7 +373,7 @@ def test_distributed_return_kind_and_valid_shape_are_preserved():
         ):
             return pl.tensor.slice(arg, [64, 64], [0, 0], valid_shape=[n - 1, 64])
 
-        @pl.function
+        @pl.function_parser
         def main(
             self,
             actual_shape_source: pl.Tensor[[32], pl.FP32],
@@ -395,15 +395,15 @@ def test_distributed_return_kind_and_valid_shape_are_preserved():
 def test_tensor_dim_folds_onto_the_signature_dyn_symbol():
     """``pl.tensor.dim(x, i)`` in an Orchestration body IS the extent x's type names.
 
-    Re-reading a declared extent at runtime would mint a second scalar for the
+    Re-reading a declared extent at runtime would create a second scalar for the
     same quantity, and nothing downstream can prove the copy equal to the symbol
     the tensor types carry. Fold instead: one runtime extent, one IR name.
     """
     tokens = pl.dynamic("TOKENS_DYN")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(self, x: pl.Tensor[[tokens, 128], pl.FP32]):
             n = pl.tensor.dim(x, 0)
             return pl.create_tensor([n, 128], dtype=pl.FP32)
@@ -429,9 +429,9 @@ def test_dyn_symbol_survives_call_returning_into_a_loop_carried_var():
     """
     tokens = pl.dynamic("TOKENS_DYN")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.Inline, auto_scope=False)
+        @pl.function_parser(type=pl.FunctionType.Inline, auto_scope=False)
         def layer(
             self,
             hidden_states: pl.Tensor[[tokens, 128], pl.BF16],
@@ -439,7 +439,7 @@ def test_dyn_symbol_survives_call_returning_into_a_loop_carried_var():
         ) -> pl.Tensor[[tokens, 128], pl.BF16]:
             return out
 
-        @pl.function(type=pl.FunctionType.Orchestration, auto_scope=False)
+        @pl.function_parser(type=pl.FunctionType.Orchestration, auto_scope=False)
         def main(self, hidden_states: pl.Tensor[[tokens, 128], pl.BF16]) -> pl.Tensor[[tokens, 128], pl.BF16]:
             n = pl.tensor.dim(hidden_states, 0)
             for _ in pl.range(2):
@@ -468,9 +468,9 @@ def test_reassigning_a_folded_name_never_writes_into_the_symbol():
     tokens = pl.dynamic("TOKENS_DYN")
     cols = pl.dynamic("COLS_DYN")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def main(self, x: pl.Tensor[[tokens, cols], pl.FP32], flag: pl.Scalar[pl.BOOL]):
             n = pl.tensor.dim(x, 0)  # n -> TOKENS_DYN
             if flag:
@@ -499,24 +499,24 @@ def test_tensor_dim_folds_for_every_call_spelling():
     tokens = pl.dynamic("TOKENS_DYN")
     row_axis = 0
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def keyword_axis(self, x: pl.Tensor[[tokens, 128], pl.FP32]):
             n = pl.tensor.dim(x, axis=0)
             return pl.create_tensor([n, 128], dtype=pl.FP32)
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def keyword_tensor(self, x: pl.Tensor[[tokens, 128], pl.FP32]):
             n = pl.tensor.dim(tensor=x, axis=0)
             return pl.create_tensor([n, 128], dtype=pl.FP32)
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def named_const_axis(self, x: pl.Tensor[[tokens, 128], pl.FP32]):
             n = pl.tensor.dim(x, row_axis)
             return pl.create_tensor([n, 128], dtype=pl.FP32)
 
-        @pl.function(type=pl.FunctionType.Orchestration)
+        @pl.function_parser(type=pl.FunctionType.Orchestration)
         def annotated_target(self, x: pl.Tensor[[tokens, 128], pl.FP32]):
             n: pl.Scalar[pl.INDEX] = pl.tensor.dim(x, 0)
             return pl.create_tensor([n, 128], dtype=pl.FP32)
@@ -537,9 +537,9 @@ def test_tensor_dim_is_not_folded_in_an_inline_callee():
     """
     tokens = pl.dynamic("TOKENS_DYN")
 
-    @pl.program
+    @pl.program_parser
     class Prog:
-        @pl.function(type=pl.FunctionType.Inline)
+        @pl.function_parser(type=pl.FunctionType.Inline)
         def layer(self, x: pl.Tensor[[tokens, 128], pl.FP32]):
             n = pl.tensor.dim(x, 0)
             return pl.create_tensor([n, 128], dtype=pl.FP32)

@@ -78,9 +78,9 @@ def _find_alloc_var(func: ir.Function) -> ir.Var:
 def test_window_returns_distributed_tensor_type_no_buffer_yet():
     """Parse-time: result type carries shape + dtype; window_buffer is None."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self):
             buf = pld.alloc_window_buffer(1024)
             data = pld.window(buf, [256], dtype=pl.FP32)
@@ -102,9 +102,9 @@ def test_window_returns_distributed_tensor_type_no_buffer_yet():
 def test_window_input_is_alloc_ptr_var():
     """The window op's first input is the plain Ptr Var bound by alloc."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self):
             buf = pld.alloc_window_buffer(64)
             data = pld.window(buf, [16], dtype=pl.FP32)
@@ -125,9 +125,9 @@ def test_window_input_is_alloc_ptr_var():
 
 
 def test_window_propagates_multi_dim_shape():
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self):
             buf = pld.alloc_window_buffer(2048)
             data = pld.window(buf, [8, 64], dtype=pl.FP16)
@@ -146,9 +146,9 @@ def test_window_rejects_non_ptr_arg():
     """A non-Ptr-typed Var cannot stand in for a Ptr handle."""
     with pytest.raises(InvalidOperationError, match="Ptr handle"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch(self, x: pl.Tensor[[64], pl.FP32]):
                 data = pld.window(x, [16], dtype=pl.FP32)  # type: ignore[arg-type]  # noqa: F841
                 return 0
@@ -157,9 +157,9 @@ def test_window_rejects_non_ptr_arg():
 def test_window_rejects_unknown_kwarg():
     with pytest.raises(InvalidOperationError, match=r"unexpected keyword argument|does not accept kwarg"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch(self):
                 buf = pld.alloc_window_buffer(8)
                 data = pld.window(buf, [8], dtype=pl.FP32, target_memory=pl.Mem.DDR)  # noqa: F841
@@ -169,9 +169,9 @@ def test_window_rejects_unknown_kwarg():
 def test_window_rejects_missing_shape_arg():
     with pytest.raises(InvalidOperationError, match=r"missing.*positional argument|2 positional"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch(self):
                 buf = pld.alloc_window_buffer(8)
                 data = pld.window(buf, dtype=pl.FP32)  # noqa: F841
@@ -181,9 +181,9 @@ def test_window_rejects_missing_shape_arg():
 def test_window_rejects_missing_dtype_kwarg():
     with pytest.raises(InvalidOperationError, match="dtype"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch(self):
                 buf = pld.alloc_window_buffer(8)
                 data = pld.window(buf, [8])  # noqa: F841
@@ -191,9 +191,9 @@ def test_window_rejects_missing_dtype_kwarg():
 
 
 def test_window_can_be_called_inside_for_loop():
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self):
             buf = pld.alloc_window_buffer(64)
             for _ in pl.range(0, 4):
@@ -209,9 +209,9 @@ def test_window_long_form():
     """``pld.tensor.window`` canonical form parses to the same registered op
     as the short form."""
 
-    @pl.program
+    @pl.program_parser
     class P:
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+        @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
         def host_orch(self):
             buf = pld.tensor.alloc_window_buffer(32)
             data = pld.tensor.window(buf, [8], dtype=pl.FP32)
@@ -227,14 +227,14 @@ def test_alloc_names_globally_unique_across_functions():
     """A second function in the same @pl.program cannot reuse a buffer name."""
     with pytest.raises(ParserSyntaxError, match="already declared"):
 
-        @pl.program
+        @pl.program_parser
         class P:  # noqa: F841
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch(self):
                 buf = pld.alloc_window_buffer(8)
                 return buf
 
-            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            @pl.function_parser(level=pl.Level.HOST, role=pl.Role.Orchestrator)
             def host_orch_2(self):
                 buf = pld.alloc_window_buffer(8)
                 return buf

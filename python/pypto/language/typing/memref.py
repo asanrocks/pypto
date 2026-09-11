@@ -26,6 +26,7 @@ from typing import Any, overload
 from pypto.pypto_core.ir import (
     Expr,
     MemorySpace,
+    PtrType,
     Span,
     Var,
 )

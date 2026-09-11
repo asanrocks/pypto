@@ -38,7 +38,7 @@ def _static_shape(type_: "ir.TensorType | ir.TileType") -> list[int]:
     return dims
 
 
-@pl.function
+@pl.function_parser
 def flash_attn(
     q_13: pl.Tensor[[64, 128], pl.FP16],
     k_16: pl.Tensor[[1024, 128], pl.FP16],
@@ -141,7 +141,7 @@ class TestFlashAttention:
 
     def test_flash_attention_parses(self):
         """Test that flash_attention.py parses successfully."""
-        # Import the flash_attention module which has @pl.function decorator
+        # Import the flash_attention module which has @pl.function_parser decorator
         assert isinstance(flash_attn, ir.Function)
         assert flash_attn.name == "flash_attn"
 
@@ -189,7 +189,7 @@ class TestFlashAttention:
     def test_flash_attention_with_multiple_iter_args(self):
         """Test flash attention pattern with multiple iteration arguments."""
 
-        @pl.function
+        @pl.function_parser
         def multi_iter_attn(
             q: pl.Tensor[[64, 128], pl.FP16],
         ) -> pl.Tensor[[64, 128], pl.FP32]:
@@ -218,7 +218,7 @@ class TestFlashAttention:
     def test_flash_attention_ops(self):
         """Test individual operations used in flash attention."""
 
-        @pl.function
+        @pl.function_parser
         def test_ops(x: pl.Tensor[[64, 128], pl.FP16]) -> pl.Tensor[[64, 128], pl.FP32]:
             # Test operations used in flash attention
 
@@ -266,7 +266,7 @@ class TestParserRobustness:
     def test_large_tensor_shapes(self):
         """Test parsing with large tensor shapes."""
 
-        @pl.function
+        @pl.function_parser
         def large_shapes(
             x: pl.Tensor[[1024, 2048, 512], pl.FP32],
         ) -> pl.Tensor[[1024, 2048, 512], pl.FP32]:
@@ -279,7 +279,7 @@ class TestParserRobustness:
     def test_many_parameters(self):
         """Test function with many parameters."""
 
-        @pl.function
+        @pl.function_parser
         def many_params(
             a: pl.Tensor[[64], pl.FP32],
             b: pl.Tensor[[64], pl.FP32],
@@ -298,7 +298,7 @@ class TestParserRobustness:
     def test_deep_nesting(self):
         """Test deeply nested control flow."""
 
-        @pl.function
+        @pl.function_parser
         def deep_nesting(n: pl.Tensor[[1], pl.INT32]) -> pl.Tensor[[64], pl.FP32]:
             init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
 
@@ -331,7 +331,7 @@ class TestParserRobustness:
     def test_long_function(self):
         """Test function with many statements."""
 
-        @pl.function
+        @pl.function_parser
         def long_function(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
             v1: pl.Tensor[[64], pl.FP32] = pl.add(x, 1.0)
             v2: pl.Tensor[[64], pl.FP32] = pl.add(v1, 1.0)
