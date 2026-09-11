@@ -77,7 +77,9 @@ class TestFoldNoOpReshape:
                 input_a: pl.Tensor[[64, 64], pl.FP32],
                 output: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
             ) -> pl.Tensor[[64, 64], pl.FP32]:
-                tile_a: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(input_a, [0, 0], [64, 64])
+                tile_a: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
+                    input_a, [0, 0], [64, 64], target_memory=pl.MemorySpace.Vec
+                )
                 # Identical shape + same MemRef after MemoryReuse → no-op reshape.
                 tile_b: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tile.reshape(tile_a, [64, 64])
                 result: pl.Tensor[[64, 64], pl.FP32] = pl.store(tile_b, [0, 0], output)
@@ -91,7 +93,9 @@ class TestFoldNoOpReshape:
                 input_a: pl.Tensor[[64, 64], pl.FP32],
                 output: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
             ) -> pl.Tensor[[64, 64], pl.FP32]:
-                tile_a: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(input_a, [0, 0], [64, 64])
+                tile_a: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
+                    input_a, [0, 0], [64, 64], target_memory=pl.MemorySpace.Vec
+                )
                 # FoldNoOpReshape rewrites the no-op reshape into a Var-to-Var alias.
                 tile_b: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = tile_a
                 result: pl.Tensor[[64, 64], pl.FP32] = pl.store(tile_b, [0, 0], output)
@@ -112,7 +116,9 @@ class TestFoldNoOpReshape:
                 input_a: pl.Tensor[[64, 64], pl.FP32],
                 output: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
             ) -> pl.Tensor[[64, 64], pl.FP32]:
-                tile_a: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(input_a, [0, 0], [64, 64])
+                tile_a: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
+                    input_a, [0, 0], [64, 64], target_memory=pl.MemorySpace.Vec
+                )
                 reshaped: pl.Tile[[4096, 1], pl.FP32, pl.MemorySpace.Vec] = pl.tile.reshape(tile_a, [4096, 1])
                 flat: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tile.reshape(reshaped, [64, 64])
                 result: pl.Tensor[[64, 64], pl.FP32] = pl.store(flat, [0, 0], output)
@@ -163,7 +169,9 @@ class TestFoldNoOpReshape:
                 x: pl.Tensor[[64, 64], pl.FP32],
                 output: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
             ) -> pl.Tensor[[64, 64], pl.FP32]:
-                t: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(x, [0, 0], [64, 64])
+                t: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
+                    x, [0, 0], [64, 64], target_memory=pl.MemorySpace.Vec
+                )
                 y: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.add(t, t)
                 result: pl.Tensor[[64, 64], pl.FP32] = pl.store(y, [0, 0], output)
                 return result

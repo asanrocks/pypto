@@ -833,7 +833,9 @@ class TestTileTargetMemoryParsing:
                 x: pl.Tensor[[64], pl.FP32],
                 out_0: pl.Out[pl.Tensor[[64], pl.FP32]],
             ) -> pl.Tensor[[64], pl.FP32]:
-                x_tile: pl.Tile[[64], pl.FP32, pl.MemorySpace.Vec] = pl.load(x, [0], [64])
+                x_tile: pl.Tile[[64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
+                    x, [0], [64], target_memory=pl.MemorySpace.Vec
+                )
                 out_0: pl.Tensor[[64], pl.FP32] = pl.store(x_tile, [0], out_0)
                 return out_0
 
@@ -1680,12 +1682,13 @@ class TestAutoMoveInsertion:
                 )
                 seed: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Acc] = pl.matmul(x_tile, y_tile)
                 if flag < 1:
-                    acc = pl.yield_(seed)
+                    pl.intrin.yield_(seed)
                 else:
                     acc_more: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Acc] = pl.matmul_acc(
                         seed, x_tile, y_tile
                     )
-                    acc = pl.yield_(acc_more)
+                    pl.intrin.yield_(acc_more)
+                (acc,) = pl.intrin.leak()
                 narrowed: pl.Tile[[16, 128], pl.BF16] = pl.cast(acc, pl.BF16, mode="rint")
                 out_0: pl.Tensor[[16, 128], pl.BF16] = pl.store(narrowed, [0, 0], out_0)
                 return out_0
@@ -1725,12 +1728,13 @@ class TestAutoMoveInsertion:
                 )
                 seed: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Acc] = pl.matmul(x_tile_Left, y_tile_Right)
                 if flag < 1:
-                    acc: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Acc] = pl.yield_(seed)
+                    pl.intrin.yield_(seed)
                 else:
                     acc_more: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Acc] = pl.matmul_acc(
                         seed, x_tile_Left, y_tile_Right
                     )
-                    acc: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Acc] = pl.yield_(acc_more)
+                    pl.intrin.yield_(acc_more)
+                (acc,) = pl.intrin.leak()
                 # The move this test guards: the phi operand is narrowed to Vec
                 # before the cast, giving ExpandMixedKernel a real CV boundary.
                 acc_Vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec] = pl.move(
@@ -1789,13 +1793,16 @@ class TestAutoMoveInsertion:
                 yt: pl.Tile[[128, 128], pl.BF16, pl.MemorySpace.Mat] = pl.load(
                     y, [0, 0], [128, 128], target_memory=pl.MemorySpace.Mat
                 )
-                zt: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec] = pl.load(z, [0, 0], [16, 128])
+                zt: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec] = pl.load(
+                    z, [0, 0], [16, 128], target_memory=pl.MemorySpace.Vec
+                )
                 if flag < 1:
                     a: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Acc] = pl.matmul(xt, yt)
-                    phi = pl.yield_(a)
+                    pl.intrin.yield_(a)
                 else:
                     b: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec] = pl.add(zt, zt)
-                    phi = pl.yield_(b)
+                    pl.intrin.yield_(b)
+                (phi,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 128], pl.FP32] = pl.store(phi, [0, 0], out_0)
                 return out_0
 
@@ -2027,9 +2034,11 @@ class TestInferTileMemorySpaceLoopCarried:
                 )
                 lhs_l: pl.Tile[[16, 32], pl.BF16] = pl.move(lhs_m, target_memory=pl.MemorySpace.Left)
                 rhs_r: pl.Tile[[32, 16], pl.BF16] = pl.move(rhs_m, target_memory=pl.MemorySpace.Right)
-                for i, (acc,) in pl.range(0, 4, 1, init_values=(acc0,)):
+                (acc,) = pl.intrin.carry(acc0)
+                for i in pl.range(0, 4, 1):
                     acc_next: pl.Tile[[16, 16], pl.FP32] = pl.matmul_acc(acc, lhs_l, rhs_r)
-                    r = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (r,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 16], pl.FP32] = pl.store(r, [0, 0], out_0)
                 return out_0
 
@@ -2068,11 +2077,13 @@ class TestInferTileMemorySpaceLoopCarried:
                     rhs_m, target_memory=pl.MemorySpace.Right
                 )
                 # iter_arg acc and return_var r both back-propagated to Acc.
-                for i, (acc,) in pl.range(0, 4, 1, init_values=(acc0,)):
+                (acc,) = pl.intrin.carry(acc0)
+                for i in pl.range(0, 4, 1):
                     acc_next: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Acc] = pl.matmul_acc(
                         acc, lhs_l, rhs_r
                     )
-                    r = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (r,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 16], pl.FP32] = pl.store(r, [0, 0], out_0)
                 return out_0
 
@@ -2138,15 +2149,18 @@ class TestInferTileMemorySpaceLoopCarried:
                     a: pl.Tile[[16, 16], pl.FP32] = pl.tile.create(
                         [16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc
                     )
-                    sel = pl.yield_(a)
+                    pl.intrin.yield_(a)
                 else:
                     b: pl.Tile[[16, 16], pl.FP32] = pl.tile.create(
                         [16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc
                     )
-                    sel = pl.yield_(b)
-                for i, (acc,) in pl.range(0, 4, 1, init_values=(sel,)):
+                    pl.intrin.yield_(b)
+                (sel,) = pl.intrin.leak()
+                (acc,) = pl.intrin.carry(sel)
+                for i in pl.range(0, 4, 1):
                     acc_next: pl.Tile[[16, 16], pl.FP32] = pl.matmul_acc(acc, lhs_l, rhs_r)
-                    r = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (r,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 16], pl.FP32] = pl.store(r, [0, 0], out_0)
                 return out_0
 
@@ -2187,17 +2201,20 @@ class TestInferTileMemorySpaceLoopCarried:
                         [16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc
                     )
                     # sel (IfStmt return_var) resolved to Acc by ForStmt back-prop.
-                    sel: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Acc] = pl.yield_(a)
+                    pl.intrin.yield_(a)
                 else:
                     b: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Acc] = pl.tile.create(
                         [16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc
                     )
-                    sel: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Acc] = pl.yield_(b)
-                for i, (acc,) in pl.range(0, 4, 1, init_values=(sel,)):
+                    pl.intrin.yield_(b)
+                (sel,) = pl.intrin.leak()
+                (acc,) = pl.intrin.carry(sel)
+                for i in pl.range(0, 4, 1):
                     acc_next: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Acc] = pl.matmul_acc(
                         acc, lhs_l, rhs_r
                     )
-                    r = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (r,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 16], pl.FP32] = pl.store(r, [0, 0], out_0)
                 return out_0
 
@@ -2257,9 +2274,11 @@ class TestInferTileMemorySpaceLoopCarried:
                 seed: pl.Tile[[16, 16], pl.FP32] = pl.matmul_acc(acc0, lhs_l, rhs_r)
                 v0: pl.Tile[[64], pl.FP32] = pl.load(v, [0], [64])
                 # Slot 0 is held across the loop, so its yield value is the IterArg.
-                for i, (a, b) in pl.range(0, 4, 1, init_values=(seed, v0)):
+                (a, b) = pl.intrin.carry(seed, v0)
+                for i in pl.range(0, 4, 1):
                     b_next: pl.Tile[[64], pl.FP32] = pl.tile.add(b, b)
-                    r_a, r_b = pl.yield_(a, b_next)
+                    pl.intrin.yield_(a, b_next)
+                (r_a, r_b) = pl.intrin.leak()
                 z: pl.Tile[[256], pl.FP32] = pl.tile.reshape(r_a, [256])
                 out_0: pl.Tensor[[256], pl.FP32] = pl.store(z, [0], out_0)
                 return out_0
@@ -2303,9 +2322,11 @@ class TestInferTileMemorySpaceLoopCarried:
                 v0: pl.Tile[[64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
                     v, [0], [64], target_memory=pl.Mem.Vec
                 )
-                for i, (a, b) in pl.range(0, 4, 1, init_values=(seed, v0)):
+                (a, b) = pl.intrin.carry(seed, v0)
+                for i in pl.range(0, 4, 1):
                     b_next: pl.Tile[[64], pl.FP32, pl.MemorySpace.Vec] = pl.tile.add(b, b)
-                    r_a, r_b = pl.yield_(a, b_next)
+                    pl.intrin.yield_(a, b_next)
+                (r_a, r_b) = pl.intrin.leak()
                 # z inherits r_a, which only carries Acc if the IterArg yield was read.
                 z: pl.Tile[[256], pl.FP32, pl.MemorySpace.Acc] = pl.tile.reshape(r_a, [256])
                 out_0: pl.Tensor[[256], pl.FP32] = pl.store(z, [0], out_0)
@@ -2363,13 +2384,17 @@ class TestInferTileMemorySpaceLoopCarried:
                 )
                 lhs_l: pl.Tile[[16, 32], pl.BF16] = pl.move(lhs_m, target_memory=pl.MemorySpace.Left)
                 rhs_r: pl.Tile[[32, 16], pl.BF16] = pl.move(rhs_m, target_memory=pl.MemorySpace.Right)
-                for o, (acc_o,) in pl.range(0, 2, 1, init_values=(acc0,)):
-                    for i, (acc_i,) in pl.range(0, 4, 1, init_values=(acc_o,)):
+                (acc_o,) = pl.intrin.carry(acc0)
+                for o in pl.range(0, 2, 1):
+                    (acc_i,) = pl.intrin.carry(acc_o)
+                    for i in pl.range(0, 4, 1):
                         acc_next: pl.Tile[[16, 16], pl.FP32] = pl.matmul_acc(acc_i, lhs_l, rhs_r)
-                        r_i = pl.yield_(acc_next)
+                        pl.intrin.yield_(acc_next)
+                    (r_i,) = pl.intrin.leak()
                     flat: pl.Tile[[256], pl.FP32] = pl.tile.reshape(acc_o, [256])
                     out_1: pl.Tensor[[256], pl.FP32] = pl.store(flat, [0], out_1)
-                    r_o = pl.yield_(r_i)
+                    pl.intrin.yield_(r_i)
+                (r_o,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 16], pl.FP32] = pl.store(r_o, [0, 0], out_0)
                 return out_0
 
@@ -2408,16 +2433,20 @@ class TestInferTileMemorySpaceLoopCarried:
                 rhs_r: pl.Tile[[32, 16], pl.BF16, pl.MemorySpace.Right] = pl.move(
                     rhs_m, target_memory=pl.MemorySpace.Right
                 )
-                for o, (acc_o,) in pl.range(0, 2, 1, init_values=(acc0,)):
-                    for i, (acc_i,) in pl.range(0, 4, 1, init_values=(acc_o,)):
+                (acc_o,) = pl.intrin.carry(acc0)
+                for o in pl.range(0, 2, 1):
+                    (acc_i,) = pl.intrin.carry(acc_o)
+                    for i in pl.range(0, 4, 1):
                         acc_next: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Acc] = pl.matmul_acc(
                             acc_i, lhs_l, rhs_r
                         )
-                        r_i = pl.yield_(acc_next)
+                        pl.intrin.yield_(acc_next)
+                    (r_i,) = pl.intrin.leak()
                     # Acc only if the inner back-prop reached the outer IterArg.
                     flat: pl.Tile[[256], pl.FP32, pl.MemorySpace.Acc] = pl.tile.reshape(acc_o, [256])
                     out_1: pl.Tensor[[256], pl.FP32] = pl.store(flat, [0], out_1)
-                    r_o = pl.yield_(r_i)
+                    pl.intrin.yield_(r_i)
+                (r_o,) = pl.intrin.leak()
                 out_0: pl.Tensor[[16, 16], pl.FP32] = pl.store(r_o, [0, 0], out_0)
                 return out_0
 
@@ -2925,9 +2954,11 @@ class TestInferTileMemorySpaceLoopCarriedOperand:
                     target_memory=pl.MemorySpace.Right,
                 )
                 acc0: pl.Tile[[16, 16], pl.FP32] = pl.tile.create([16, 16], dtype=pl.FP32)
-                for _i, (a,) in pl.range(0, 4, 1, init_values=(acc0,)):
+                (a,) = pl.intrin.carry(acc0)
+                for _i in pl.range(0, 4, 1):
                     _tmp = pl.matmul_acc(a, lhs_l, rhs_r)
-                    r = pl.yield_(a)
+                    pl.intrin.yield_(a)
+                (r,) = pl.intrin.leak()
                 out = pl.store(pl.move(r, target_memory=pl.MemorySpace.Vec), [0, 0], out)
                 return out
 
@@ -2965,12 +2996,13 @@ class TestInferTileMemorySpaceLoopCarriedOperand:
                 a_mat = pl.load(a, [0, 0], [64, 64], target_memory=pl.MemorySpace.Mat)
                 w0 = pl.load(b, [0, 0], [64, 64], target_memory=pl.MemorySpace.Vec)
                 acc0 = pl.tile.create([64, 64], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
-                for acc, w in pl.while_(init_values=(acc0, w0)):
-                    pl.cond(keep_going)
+                (acc, w) = pl.intrin.carry(acc0, w0)
+                while keep_going:
                     a_l = pl.move(a_mat, target_memory=pl.MemorySpace.Left)
                     c = pl.matmul(a_l, w)
                     nxt = pl.tile.add(acc, pl.move(c, target_memory=pl.MemorySpace.Vec))
-                    (acc_rv, w_rv) = pl.yield_(nxt, w)
+                    pl.intrin.yield_(nxt, w)
+                (acc_rv, w_rv) = pl.intrin.leak()
                 out = pl.store(acc_rv, [0, 0], out)
                 return out
 
@@ -3278,11 +3310,13 @@ class MarkerOnlyScalarCall:
                 rhs: pl.Tensor[[128, 256], pl.BF16],
                 out: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
-                for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for n in pl.range(0, 256, 128):
                     rhs_n: pl.Tensor[[128, 128], pl.BF16] = pl.slice(rhs, [128, 128], [0, n])
                     c_n: pl.Tensor[[16, 128], pl.FP32] = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
                     acc_next: pl.Tensor[[16, 256], pl.FP32] = pl.assemble(acc, c_n, [0, n])
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -3328,11 +3362,13 @@ class MarkerOnlyScalarCall:
                 rhs: pl.Tensor[[256, 256], pl.BF16],
                 out: pl.Out[pl.Tensor[[256, 256], pl.FP32]],
             ) -> pl.Tensor[[256, 256], pl.FP32]:
-                for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for n in pl.range(0, 256, 128):
                     rhs_n = pl.slice(rhs, [256, 128], [0, n])
                     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
                     acc_next = pl.assemble(acc, c_n, [0, n])
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -3372,11 +3408,13 @@ class MarkerOnlyScalarCall:
                 rhs: pl.Tensor[[128, 256], pl.BF16],
                 out: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
-                for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for n in pl.range(0, 256, 128):
                     rhs_n = pl.slice(rhs, [128, 128], [0, n])
                     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
                     acc_next = pl.assemble(acc, c_n, [0, n])
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
         printed = ir.python_print(self._run_tensor_infer(Before))
@@ -3973,11 +4011,13 @@ with pl.manual_scope():
                 rhs: pl.Tensor[[128, 256], pl.BF16],
                 out: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
-                for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for n in pl.range(0, 256, 128):
                     rhs_n = pl.slice(rhs, [128, 128], [0, n])
                     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
                     acc_next = pl.assemble(acc, c_n, [0, n])
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -4009,11 +4049,13 @@ with pl.manual_scope():
                 unused_offset: pl.Scalar[pl.INDEX],
                 out: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
-                for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for n in pl.range(0, 256, 128):
                     rhs_n = pl.slice(rhs, [128, 128], [0, n])
                     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
                     acc_next = pl.assemble(acc, c_n, [0, n])
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -4042,11 +4084,13 @@ with pl.manual_scope():
                 rhs: pl.Tensor[[128, 256], pl.BF16],
                 out: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
-                for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for n in pl.range(0, 256, 128):
                     rhs_n = pl.slice(rhs, [128, 128], [0, n])
                     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
                     acc_next = pl.assemble(acc, c_n, [0, n])
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -4074,12 +4118,14 @@ with pl.manual_scope():
                 rhs: pl.Tensor[[128, 256], pl.BF16],
                 out: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
-                for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for n in pl.range(0, 256, 128):
                     rhs_n = pl.slice(rhs, [128, 128], [0, n])
                     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
                     activated = pl.exp(c_n)
                     acc_next = pl.assemble(acc, activated, [0, n])
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -4207,11 +4253,13 @@ out: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
                 rhs: pl.Tensor[[128, 256], pl.BF16],
                 out: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
-                for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for n in pl.range(0, 256, 128):
                     rhs_n = pl.slice(rhs, [128, 128], [0, n])
                     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
                     acc_next = pl.assemble(acc, c_n, [0, n])
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -4244,11 +4292,13 @@ out: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
                 rhs: pl.Tensor[[128, 256], pl.BF16],
                 out: pl.Out[pl.Tensor[[16, 256], pl.FP32]],
             ) -> pl.Tensor[[16, 256], pl.FP32]:
-                for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for n in pl.range(0, 256, 128):
                     rhs_n = pl.slice(rhs, [128, 128], [0, n])
                     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
                     acc_next = pl.assemble(acc, c_n, [0, n])
-                    result = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (result,) = pl.intrin.leak()
                 return result
 
             @pl.function(type=pl.FunctionType.Orchestration)

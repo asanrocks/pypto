@@ -43,11 +43,11 @@ CO_LIVE = pl.MemRef(slots=2)
 SIBLING_LOOPS = pl.MemRef(slots=2)
 
 
-@pl.program
+@pl.program_parser
 class RotatingSlot:
     """The ping-pong: one allocation, the slot alternating per iteration."""
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[256, 64], pl.FP32],
@@ -64,11 +64,11 @@ class RotatingSlot:
         return out
 
 
-@pl.program
+@pl.program_parser
 class ConstantSlots:
     """Two constant slots of one allocation — no rotation, still one region."""
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[64, 64], pl.FP32],
@@ -79,7 +79,7 @@ class ConstantSlots:
         return pl.store(t1, [0, 0], output)
 
 
-@pl.program
+@pl.program_parser
 class TooManySlots:
     """17 slots — one past ptoas's `multi_tile_buf` bound.
 
@@ -88,7 +88,7 @@ class TooManySlots:
     slot-count bound.
     """
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[32, 32], pl.FP32],
@@ -99,11 +99,11 @@ class TooManySlots:
         return pl.store(t1, [0, 0], output)
 
 
-@pl.program
+@pl.program_parser
 class MixedSlotShapes:
     """Slots holding differently shaped tiles — ptoas slots are uniform."""
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[64, 64], pl.FP32],
@@ -117,7 +117,7 @@ class MixedSlotShapes:
         return r_big, r_small
 
 
-@pl.program
+@pl.program_parser
 class MixedSlotValidShapes:
     """Slots of one physical shape but different valid extents.
 
@@ -126,7 +126,7 @@ class MixedSlotValidShapes:
     the second slot would silently take the first's.
     """
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[64, 64], pl.FP32],
@@ -142,7 +142,7 @@ class MixedSlotValidShapes:
         return pl.store(t2, [0, 0], output)
 
 
-@pl.program
+@pl.program_parser
 class CoLiveSlotsInLoop:
     """Two slots of one allocation live at the same time inside a loop.
 
@@ -153,7 +153,7 @@ class CoLiveSlotsInLoop:
     region form accelerates takes one slot per iteration.
     """
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[256, 64], pl.FP32],
@@ -172,7 +172,7 @@ class CoLiveSlotsInLoop:
         return output
 
 
-@pl.program
+@pl.program_parser
 class SequentialSlotsInSiblingLoops:
     """One slot per loop body, in two sibling loops — never live together.
 
@@ -180,7 +180,7 @@ class SequentialSlotsInSiblingLoops:
     at the same time still describe a region.
     """
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[256, 64], pl.FP32],
@@ -201,7 +201,7 @@ class SequentialSlotsInSiblingLoops:
         return output
 
 
-@pl.program
+@pl.program_parser
 class RuntimeValidShapeSlots:
     """Slots whose valid extent is only known at runtime.
 
@@ -209,7 +209,7 @@ class RuntimeValidShapeSlots:
     is not yet in scope — so there is no extent to state for the slots at all.
     """
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[64, 64], pl.FP32],
@@ -226,11 +226,11 @@ class RuntimeValidShapeSlots:
         return pl.store(t2, [0, 0], output)
 
 
-@pl.program
+@pl.program_parser
 class UnsubscriptedBinding:
     """One tile takes a slot, another binds the allocation whole."""
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[64, 64], pl.FP32],
@@ -241,11 +241,11 @@ class UnsubscriptedBinding:
         return pl.store(t1, [0, 0], output)
 
 
-@pl.program
+@pl.program_parser
 class SingleSlotDeclaration:
     """An unsubscripted declaration is one buffer, not a region."""
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[64, 64], pl.FP32],
@@ -486,7 +486,7 @@ class TestSlotGeometrySurvivesInitMemRef:
         ir.assert_structural_equal(pl.parse_program(dumped), after)
 
 
-@pl.program
+@pl.program_parser
 class PipelinedLoad:
     """``pl.pipeline`` with no hand-written declaration.
 
@@ -495,7 +495,7 @@ class PipelinedLoad:
     codegen in the same shape.
     """
 
-    @pl.function(type=pl.FunctionType.InCore)
+    @pl.function_parser(type=pl.FunctionType.InCore)
     def kernel(
         self,
         a: pl.Tensor[[256, 64], pl.FP32],

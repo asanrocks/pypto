@@ -234,7 +234,8 @@ class TestAutoTileMatmulL0KOnly:
                 )
                 # Full K-loop; the ko == 0 predicate overwrites the accumulator
                 # on the first iteration and accumulates into it afterwards.
-                for ko, (c_iter,) in pl.pipeline(0, 2048, 256, init_values=(c_init,), stage=2):
+                (c_iter,) = pl.intrin.carry(c_init)
+                for ko in pl.pipeline(0, 2048, 256, stage=2):
                     sa: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -244,7 +245,8 @@ class TestAutoTileMatmulL0KOnly:
                     c_acc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c_iter, sa, sb, ko == 0
                     )
-                    c: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(c_acc)
+                    pl.intrin.yield_(c_acc)
+                (c,) = pl.intrin.leak()
                 out = pl.store(c, [0, 0], out)
                 return out
 
@@ -357,7 +359,8 @@ class TestAutoTileMatmulL0KOnly:
                     rhs, [0, 0], [2048, 64], target_memory=pl.Mem.Mat
                 )
                 # No Vec placeholder: the iter-arg init is the caller's acc_init.
-                for ko, (c_iter,) in pl.pipeline(0, 2048, 256, init_values=(acc_init,), stage=2):
+                (c_iter,) = pl.intrin.carry(acc_init)
+                for ko in pl.pipeline(0, 2048, 256, stage=2):
                     sa: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -365,7 +368,8 @@ class TestAutoTileMatmulL0KOnly:
                         rhs_mat, ko, 0, shape=[256, 64], target_memory=pl.Mem.Right
                     )
                     c_acc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(c_iter, sa, sb)
-                    c: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(c_acc)
+                    pl.intrin.yield_(c_acc)
+                (c,) = pl.intrin.leak()
                 out = pl.store(c, [0, 0], out)
                 return out
 
@@ -394,7 +398,9 @@ class TestAutoTileMatmulL0KOnly:
                 out: pl.Out[pl.Tensor[[16, 64], pl.FP32]],
             ) -> pl.Tensor[[16, 64], pl.FP32]:
                 # Default tile.load lands in Vec — the PV / score·V operand.
-                lhs_vec: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Vec] = pl.tile.load(lhs, [0, 0], [16, 2048])
+                lhs_vec: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Vec] = pl.tile.load(
+                    lhs, [0, 0], [16, 2048], target_memory=pl.Mem.Vec
+                )
                 rhs_mat: pl.Tile[[2048, 64], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     rhs, [0, 0], [2048, 64], target_memory=pl.Mem.Mat
                 )
@@ -411,7 +417,9 @@ class TestAutoTileMatmulL0KOnly:
                 rhs: pl.Tensor[[2048, 64], pl.BF16],
                 out: pl.Out[pl.Tensor[[16, 64], pl.FP32]],
             ) -> pl.Tensor[[16, 64], pl.FP32]:
-                lhs_vec: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Vec] = pl.tile.load(lhs, [0, 0], [16, 2048])
+                lhs_vec: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Vec] = pl.tile.load(
+                    lhs, [0, 0], [16, 2048], target_memory=pl.Mem.Vec
+                )
                 rhs_mat: pl.Tile[[2048, 64], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     rhs, [0, 0], [2048, 64], target_memory=pl.Mem.Mat
                 )
@@ -423,8 +431,8 @@ class TestAutoTileMatmulL0KOnly:
                 lhs_mat: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Mat] = pl.tile.move(
                     lhs_vec, target_memory=pl.Mem.Mat
                 )
-                for ko, (c_iter,) in pl.pipeline(0, 2048, 256, init_values=(c_init,), stage=2):
-                    # lhs sub-tile extracted from the *staged Mat* tile, not from Vec.
+                (c_iter,) = pl.intrin.carry(c_init)
+                for ko in pl.pipeline(0, 2048, 256, stage=2):
                     sa: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -434,7 +442,8 @@ class TestAutoTileMatmulL0KOnly:
                     c_acc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c_iter, sa, sb, ko == 0
                     )
-                    c: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(c_acc)
+                    pl.intrin.yield_(c_acc)
+                (c,) = pl.intrin.leak()
                 out = pl.store(c, [0, 0], out)
                 return out
 
@@ -467,7 +476,9 @@ class TestAutoTileMatmulL0KOnly:
                 out: pl.Out[pl.Tensor[[16, 64], pl.FP32]],
             ) -> pl.Tensor[[16, 64], pl.FP32]:
                 # Default tile.load lands in Vec — the PV / score·V operand.
-                lhs_vec: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Vec] = pl.tile.load(lhs, [0, 0], [16, 2048])
+                lhs_vec: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Vec] = pl.tile.load(
+                    lhs, [0, 0], [16, 2048], target_memory=pl.Mem.Vec
+                )
                 rhs_mat: pl.Tile[[2048, 64], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     rhs, [0, 0], [2048, 64], target_memory=pl.Mem.Mat
                 )
@@ -485,7 +496,9 @@ class TestAutoTileMatmulL0KOnly:
                 acc_init: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc],
                 out: pl.Out[pl.Tensor[[16, 64], pl.FP32]],
             ) -> pl.Tensor[[16, 64], pl.FP32]:
-                lhs_vec: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Vec] = pl.tile.load(lhs, [0, 0], [16, 2048])
+                lhs_vec: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Vec] = pl.tile.load(
+                    lhs, [0, 0], [16, 2048], target_memory=pl.Mem.Vec
+                )
                 rhs_mat: pl.Tile[[2048, 64], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     rhs, [0, 0], [2048, 64], target_memory=pl.Mem.Mat
                 )
@@ -494,8 +507,8 @@ class TestAutoTileMatmulL0KOnly:
                 lhs_mat: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Mat] = pl.tile.move(
                     lhs_vec, target_memory=pl.Mem.Mat
                 )
-                for ko, (c_iter,) in pl.pipeline(0, 2048, 256, init_values=(acc_init,), stage=2):
-                    # lhs sub-tile extracted from the staged Mat tile, not Vec.
+                (c_iter,) = pl.intrin.carry(acc_init)
+                for ko in pl.pipeline(0, 2048, 256, stage=2):
                     sa: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -504,7 +517,8 @@ class TestAutoTileMatmulL0KOnly:
                     )
                     # Uniform matmul_acc body — no init_cond predicate.
                     c_acc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(c_iter, sa, sb)
-                    c: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(c_acc)
+                    pl.intrin.yield_(c_acc)
+                (c,) = pl.intrin.leak()
                 out = pl.store(c, [0, 0], out)
                 return out
 
@@ -576,7 +590,8 @@ class TestAutoTileMatmulL0KOnly:
                 c0_init: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [16, 64], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko0, (c0_iter,) in pl.pipeline(0, 2048, 256, init_values=(c0_init,), stage=2):
+                (c0_iter,) = pl.intrin.carry(c0_init)
+                for ko0 in pl.pipeline(0, 2048, 256, stage=2):
                     sa0: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         a0, 0, ko0, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -586,7 +601,8 @@ class TestAutoTileMatmulL0KOnly:
                     c0_acc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c0_iter, sa0, sb0, ko0 == 0
                     )
-                    c0: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(c0_acc)
+                    pl.intrin.yield_(c0_acc)
+                (c0,) = pl.intrin.leak()
                 out0 = pl.store(c0, [0, 0], out0)
                 a1: pl.Tile[[16, 2048], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     lhs1, [0, 0], [16, 2048], target_memory=pl.Mem.Mat
@@ -597,7 +613,8 @@ class TestAutoTileMatmulL0KOnly:
                 c1_init: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [16, 64], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko1, (c1_iter,) in pl.pipeline(0, 2048, 256, init_values=(c1_init,), stage=2):
+                (c1_iter,) = pl.intrin.carry(c1_init)
+                for ko1 in pl.pipeline(0, 2048, 256, stage=2):
                     sa1: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         a1, 0, ko1, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -607,7 +624,8 @@ class TestAutoTileMatmulL0KOnly:
                     c1_acc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c1_iter, sa1, sb1, ko1 == 0
                     )
-                    c1: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(c1_acc)
+                    pl.intrin.yield_(c1_acc)
+                (c1,) = pl.intrin.leak()
                 out1 = pl.store(c1, [0, 0], out1)
                 return out0, out1
 
@@ -1156,7 +1174,8 @@ class TestAutoTileMatmulL0PredicatedAcc:
                 # Iter-arg init is the caller's acc_init, exactly as for the
                 # unpredicated 3-operand spelling — only the call gains a 4th
                 # operand.
-                for ko, (c_iter,) in pl.pipeline(0, 2048, 256, init_values=(acc_init,), stage=2):
+                (c_iter,) = pl.intrin.carry(acc_init)
+                for ko in pl.pipeline(0, 2048, 256, stage=2):
                     sa: pl.Tile[[16, 256], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko, shape=[16, 256], target_memory=pl.Mem.Left
                     )
@@ -1166,7 +1185,8 @@ class TestAutoTileMatmulL0PredicatedAcc:
                     c_acc: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c_iter, sa, sb, first_k == 0 and ko == 0
                     )
-                    c: pl.Tile[[16, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(c_acc)
+                    pl.intrin.yield_(c_acc)
+                (c,) = pl.intrin.leak()
                 out = pl.store(c, [0, 0], out)
                 return out
 
@@ -1201,7 +1221,8 @@ class TestAutoTileMatmulL0PredicatedAcc:
                 )
                 # Two full 192-wide blocks: the body ANDs the caller's predicate
                 # with the ko == 0 this loop introduces.
-                for ko, (c_iter,) in pl.pipeline(0, 384, 192, init_values=(acc_init,), stage=2):
+                (c_iter,) = pl.intrin.carry(acc_init)
+                for ko in pl.pipeline(0, 384, 192, stage=2):
                     sa: pl.Tile[[64, 192], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko, shape=[64, 192], target_memory=pl.Mem.Left
                     )
@@ -1211,7 +1232,8 @@ class TestAutoTileMatmulL0PredicatedAcc:
                     c_acc: pl.Tile[[64, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c_iter, sa, sb, first_k == 0 and ko == 0
                     )
-                    c_main: pl.Tile[[64, 64], pl.FP32, pl.Mem.Acc] = pl.yield_(c_acc)
+                    pl.intrin.yield_(c_acc)
+                (c_main,) = pl.intrin.leak()
                 # The 160-wide tail runs at K offset 384, so it is never the
                 # first block: it carries no predicate at all.
                 sa_t: pl.Tile[[64, 160], pl.BF16, pl.Mem.Left] = pl.tile.extract(
@@ -1562,18 +1584,13 @@ class TestAutoTileMatmulL0MNTiling:
                 rhs_mat: pl.Tile[[32, 528], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     rhs, [0, 0], [32, 528], [32, 528], target_memory=pl.Mem.Mat
                 )
-                for c_o, (c_oc,) in pl.range(0, 528, 528, init_values=(out,)):
+                (c_oc,) = pl.intrin.carry(out)
+                for c_o in pl.range(0, 528, 528):
                     c_a: pl.Tile[
                         [528, 32], pl.BF16, pl.Mem.Left, pl.TileView(blayout=pl.TileLayout.row_major)
                     ] = pl.tile.extract(lhs_mat, c_o, 0, [528, 32], target_memory=pl.Mem.Left)
-                    for c_i, (c_ic,) in pl.pipeline(
-                        0,
-                        512,
-                        64,
-                        stage=2,
-                        init_values=(c_oc,),
-                        attrs={"pipeline_overlap_stores": False},
-                    ):
+                    (c_ic,) = pl.intrin.carry(c_oc)
+                    for c_i in pl.pipeline(0, 512, 64, stage=2, attrs={"pipeline_overlap_stores": False}):
                         c_b: pl.Tile[[32, 64], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                             rhs_mat, 0, c_i, [32, 64], target_memory=pl.Mem.Right
                         )
@@ -1590,8 +1607,10 @@ class TestAutoTileMatmulL0MNTiling:
                         )
                         c_c: pl.Tile[[528, 64], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_bias(c_a, c_b, c_bias)
                         out_t0: pl.Tensor[[528, 528], pl.FP32] = pl.tile.store(c_c, [c_o, c_i], c_ic)
-                        c_irv = pl.yield_(out_t0)
-                    c_orv = pl.yield_(c_irv)
+                        pl.intrin.yield_(out_t0)
+                    (c_irv,) = pl.intrin.leak()
+                    pl.intrin.yield_(c_irv)
+                (c_orv,) = pl.intrin.leak()
                 # The peeled 16-column tail.
                 c_ta1: pl.Tile[
                     [528, 32], pl.BF16, pl.Mem.Left, pl.TileView(blayout=pl.TileLayout.row_major)
@@ -1851,7 +1870,8 @@ class TestAutoTileMatmulL0MNTiling:
                 c0_init: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [256, 256], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko0, (c0_iter,) in pl.pipeline(0, 512, 32, init_values=(c0_init,), stage=2):
+                (c0_iter,) = pl.intrin.carry(c0_init)
+                for ko0 in pl.pipeline(0, 512, 32, stage=2):
                     a0: pl.Tile[[256, 32], pl.FP32, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko0, shape=[256, 32], target_memory=pl.Mem.Left
                     )
@@ -1861,13 +1881,15 @@ class TestAutoTileMatmulL0MNTiling:
                     c0_acc: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c0_iter, a0, b0, ko0 == 0
                     )
-                    c0: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.yield_(c0_acc)
+                    pl.intrin.yield_(c0_acc)
+                (c0,) = pl.intrin.leak()
                 out_t0: pl.Tensor[[512, 512], pl.FP32] = pl.store(c0, [0, 0], out)
                 # Sub-tile (mi=256, ni=0).
                 c1_init: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [256, 256], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko1, (c1_iter,) in pl.pipeline(0, 512, 32, init_values=(c1_init,), stage=2):
+                (c1_iter,) = pl.intrin.carry(c1_init)
+                for ko1 in pl.pipeline(0, 512, 32, stage=2):
                     a1: pl.Tile[[256, 32], pl.FP32, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 256, ko1, shape=[256, 32], target_memory=pl.Mem.Left
                     )
@@ -1877,13 +1899,15 @@ class TestAutoTileMatmulL0MNTiling:
                     c1_acc: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c1_iter, a1, b1, ko1 == 0
                     )
-                    c1: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.yield_(c1_acc)
+                    pl.intrin.yield_(c1_acc)
+                (c1,) = pl.intrin.leak()
                 out_t1: pl.Tensor[[512, 512], pl.FP32] = pl.store(c1, [256, 0], out_t0)
                 # Sub-tile (mi=0, ni=256).
                 c2_init: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [256, 256], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko2, (c2_iter,) in pl.pipeline(0, 512, 32, init_values=(c2_init,), stage=2):
+                (c2_iter,) = pl.intrin.carry(c2_init)
+                for ko2 in pl.pipeline(0, 512, 32, stage=2):
                     a2: pl.Tile[[256, 32], pl.FP32, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 0, ko2, shape=[256, 32], target_memory=pl.Mem.Left
                     )
@@ -1893,13 +1917,15 @@ class TestAutoTileMatmulL0MNTiling:
                     c2_acc: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c2_iter, a2, b2, ko2 == 0
                     )
-                    c2: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.yield_(c2_acc)
+                    pl.intrin.yield_(c2_acc)
+                (c2,) = pl.intrin.leak()
                 out_t2: pl.Tensor[[512, 512], pl.FP32] = pl.store(c2, [0, 256], out_t1)
                 # Sub-tile (mi=256, ni=256).
                 c3_init: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.tile.create(
                     [256, 256], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
-                for ko3, (c3_iter,) in pl.pipeline(0, 512, 32, init_values=(c3_init,), stage=2):
+                (c3_iter,) = pl.intrin.carry(c3_init)
+                for ko3 in pl.pipeline(0, 512, 32, stage=2):
                     a3: pl.Tile[[256, 32], pl.FP32, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, 256, ko3, shape=[256, 32], target_memory=pl.Mem.Left
                     )
@@ -1909,7 +1935,8 @@ class TestAutoTileMatmulL0MNTiling:
                     c3_acc: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c3_iter, a3, b3, ko3 == 0
                     )
-                    c3: pl.Tile[[256, 256], pl.FP32, pl.Mem.Acc] = pl.yield_(c3_acc)
+                    pl.intrin.yield_(c3_acc)
+                (c3,) = pl.intrin.leak()
                 out_t3: pl.Tensor[[512, 512], pl.FP32] = pl.store(c3, [256, 256], out_t2)
                 return out_t3
 
@@ -2372,21 +2399,23 @@ class TestAutoTileMatmulL0MNTiling:
                     rhs, [0, 0], [128, 544], target_memory=pl.Mem.Mat
                 )
                 # Sequential outer (M) loop holds the single-buffered A panel (full L0A).
-                for mo, (out_o,) in pl.range(0, 256, 256, init_values=(out,)):
+                (out_o,) = pl.intrin.carry(out)
+                for mo in pl.range(0, 256, 256):
                     a_held: pl.Tile[[256, 128], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         lhs_mat, mo, 0, [256, 128], target_memory=pl.Mem.Left
                     )
                     # Pipelined inner (N) loop over the 4 full 128-wide blocks; B double-buffered.
-                    for ni, (out_i,) in pl.pipeline(
-                        0, 512, 128, stage=2, init_values=(out_o,), attrs={"pipeline_overlap_stores": False}
-                    ):
+                    (out_i,) = pl.intrin.carry(out_o)
+                    for ni in pl.pipeline(0, 512, 128, stage=2, attrs={"pipeline_overlap_stores": False}):
                         b_mov: pl.Tile[[128, 128], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                             rhs_mat, 0, ni, [128, 128], target_memory=pl.Mem.Right
                         )
                         c_sub: pl.Tile[[256, 128], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(a_held, b_mov)
                         out_s: pl.Tensor[[256, 544], pl.FP32] = pl.store(c_sub, [mo, ni], out_i)
-                        out_iy = pl.yield_(out_s)
-                    out_oy = pl.yield_(out_iy)
+                        pl.intrin.yield_(out_s)
+                    (out_iy,) = pl.intrin.leak()
+                    pl.intrin.yield_(out_iy)
+                (out_oy,) = pl.intrin.leak()
                 # N-boundary peel: the last 32-wide block (544 = 4*128 + 32), straight-line.
                 a_peel: pl.Tile[[256, 128], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                     lhs_mat, 0, 0, [256, 128], target_memory=pl.Mem.Left
@@ -2471,21 +2500,23 @@ class TestAutoTileMatmulL0MNTiling:
                     rhs, [0, 0], [64, 512], target_memory=pl.Mem.Mat
                 )
                 # Sequential outer (N) loop holds the single-buffered B panel (full L0B).
-                for no, (out_o,) in pl.range(0, 512, 512, init_values=(out,)):
+                (out_o,) = pl.intrin.carry(out)
+                for no in pl.range(0, 512, 512):
                     b_held: pl.Tile[[64, 512], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                         rhs_mat, 0, no, [64, 512], target_memory=pl.Mem.Right
                     )
                     # Pipelined inner (M) loop streams A double-buffered over 3 m-blocks.
-                    for mi, (out_i,) in pl.pipeline(
-                        0, 192, 64, stage=2, init_values=(out_o,), attrs={"pipeline_overlap_stores": False}
-                    ):
+                    (out_i,) = pl.intrin.carry(out_o)
+                    for mi in pl.pipeline(0, 192, 64, stage=2, attrs={"pipeline_overlap_stores": False}):
                         a_mov: pl.Tile[[64, 64], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                             lhs_mat, mi, 0, [64, 64], target_memory=pl.Mem.Left
                         )
                         c_sub: pl.Tile[[64, 512], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(a_mov, b_held)
                         out_s: pl.Tensor[[192, 512], pl.FP32] = pl.store(c_sub, [mi, no], out_i)
-                        out_iy = pl.yield_(out_s)
-                    out_oy = pl.yield_(out_iy)
+                        pl.intrin.yield_(out_s)
+                    (out_iy,) = pl.intrin.leak()
+                    pl.intrin.yield_(out_iy)
+                (out_oy,) = pl.intrin.leak()
                 return out_oy
 
         After = passes.auto_tile_matmul_l0()(Before)
@@ -3140,13 +3171,13 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 q_l0: pl.Tile[[tile_m, 128], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                     q_mat, 0, 0, [tile_m, 128], target_memory=pl.Mem.Left
                 )
-                for stack, (out_o,) in pl.pipeline(0, stacks, 1, stage=2, init_values=(out,)):
+                (out_o,) = pl.intrin.carry(out)
+                for stack in pl.pipeline(0, stacks, 1, stage=2):
                     b_mat: pl.Tile[[128, width], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                         b, [stack * 128, 0], [128, width], target_memory=pl.Mem.Mat
                     )
-                    for ni, (out_i,) in pl.pipeline(
-                        0, width, tile_n, stage=inner_stage, init_values=(out_o,)
-                    ):
+                    (out_i,) = pl.intrin.carry(out_o)
+                    for ni in pl.pipeline(0, width, tile_n, stage=inner_stage):
                         b_l0: pl.Tile[[128, tile_n], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                             b_mat, 0, ni, [128, tile_n], target_memory=pl.Mem.Right
                         )
@@ -3154,8 +3185,10 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                         out_s: pl.Tensor[[total_m, width], pl.FP32] = pl.store(
                             c_l0, [stack * tile_m, ni], out_i
                         )
-                        out_iy = pl.yield_(out_s)
-                    out_oy = pl.yield_(out_iy)
+                        pl.intrin.yield_(out_s)
+                    (out_iy,) = pl.intrin.leak()
+                    pl.intrin.yield_(out_iy)
+                (out_oy,) = pl.intrin.leak()
                 return out_oy
 
         return Before
@@ -3185,7 +3218,8 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 scratch: pl.Tile[[tile_m, width], pl.BF16, pl.Mem.Mat] = pl.tile.create(
                     [tile_m, width], dtype=pl.BF16, target_memory=pl.Mem.Mat
                 )
-                for ni, (scratch_i,) in pl.pipeline(0, width, tile_n, stage=2, init_values=(scratch,)):
+                (scratch_i,) = pl.intrin.carry(scratch)
+                for ni in pl.pipeline(0, width, tile_n, stage=2):
                     b_l0: pl.Tile[[128, tile_n], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                         b_mat, 0, ni, [128, tile_n], target_memory=pl.Mem.Right
                     )
@@ -3193,7 +3227,8 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                     scratch_s: pl.Tile[[tile_m, width], pl.BF16, pl.Mem.Mat] = pl.tile.assemble(
                         scratch_i, c, [0, ni]
                     )
-                    scratch_r = pl.yield_(scratch_s)
+                    pl.intrin.yield_(scratch_s)
+                (scratch_r,) = pl.intrin.leak()
                 return scratch_r
 
         return Before
@@ -3219,13 +3254,15 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 b_mat: pl.Tile[[32, width], pl.INT8, pl.Mem.Mat] = pl.tile.load(
                     b, [0, 0], [32, width], target_memory=pl.Mem.Mat
                 )
-                for ni, (out_i,) in pl.pipeline(0, width, tile_n, stage=2, init_values=(out,)):
+                (out_i,) = pl.intrin.carry(out)
+                for ni in pl.pipeline(0, width, tile_n, stage=2):
                     b_l0: pl.Tile[[32, tile_n], pl.INT8, pl.Mem.Right] = pl.tile.extract(
                         b_mat, 0, ni, [32, tile_n], target_memory=pl.Mem.Right
                     )
                     c: pl.Tile[[16, tile_n], pl.INT32, pl.Mem.Acc] = pl.tile.matmul(q_l0, b_l0)
                     out_s: pl.Tensor[[16, width], pl.INT32] = pl.tile.store(c, [0, ni], out_i)
-                    out_r = pl.yield_(out_s)
+                    pl.intrin.yield_(out_s)
+                (out_r,) = pl.intrin.leak()
                 return out_r
 
         return Before
@@ -3464,13 +3501,15 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 b_l0: pl.Tile[[128, 16], pl.BF16, pl.Mem.Right] = pl.tile.move(
                     b_mat, target_memory=pl.Mem.Right
                 )
-                for mi, (out_i,) in pl.pipeline(0, 512, 128, stage=2, init_values=(out,)):
+                (out_i,) = pl.intrin.carry(out)
+                for mi in pl.pipeline(0, 512, 128, stage=2):
                     a_l0: pl.Tile[[128, 128], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         a_mat, mi, 0, [128, 128], target_memory=pl.Mem.Left
                     )
                     c: pl.Tile[[128, 16], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(a_l0, b_l0)
                     out_s: pl.Tensor[[512, 16], pl.FP32] = pl.store(c, [mi, 0], out_i)
-                    out_r = pl.yield_(out_s)
+                    pl.intrin.yield_(out_s)
+                (out_r,) = pl.intrin.leak()
                 return out_r
 
         After = passes.auto_tile_matmul_l0()(Before)
@@ -3536,13 +3575,15 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 b_mat: pl.Tile[[128, 512], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     b, [0, 0], [128, 512], target_memory=pl.Mem.Mat
                 )
-                for ni, (q_i, out_i) in pl.pipeline(0, 512, 128, stage=2, init_values=(q_l0, out)):
+                (q_i, out_i) = pl.intrin.carry(q_l0, out)
+                for ni in pl.pipeline(0, 512, 128, stage=2):
                     b_l0: pl.Tile[[128, 128], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                         b_mat, 0, ni, [128, 128], target_memory=pl.Mem.Right
                     )
                     c: pl.Tile[[16, 128], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(q_i, b_l0)
                     out_s: pl.Tensor[[16, 512], pl.FP32] = pl.store(c, [0, ni], out_i)
-                    _q_r, out_r = pl.yield_(q_i, out_s)
+                    pl.intrin.yield_(q_i, out_s)
+                (_q_r, out_r) = pl.intrin.leak()
                 return out_r
 
         After = passes.auto_tile_matmul_l0()(Before)
@@ -3615,13 +3656,15 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 b_mat: pl.Tile[[128, 512], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     b, [0, 0], [128, 512], target_memory=pl.Mem.Mat
                 )
-                for ni, (out_i,) in pl.pipeline(0, 512, 128, stage=2, init_values=(out,)):
+                (out_i,) = pl.intrin.carry(out)
+                for ni in pl.pipeline(0, 512, 128, stage=2):
                     b_l0: pl.Tile[[128, 128], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                         b_mat, 0, ni, [128, 128], target_memory=pl.Mem.Right
                     )
                     c: pl.Tile[[16, 128], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(q_l0, b_l0)
                     out_s: pl.Tensor[[16, 512], pl.FP32] = pl.store(c, [0, ni], out_i)
-                    out_r = pl.yield_(out_s)
+                    pl.intrin.yield_(out_s)
+                (out_r,) = pl.intrin.leak()
                 spare_r: pl.Tensor[[128, 240], pl.FP32] = pl.store(spare, [0, 0], spare_out)
                 return out_r, spare_r
 
@@ -3663,9 +3706,8 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                     [staged_rows, staged_width],
                     target_memory=pl.Mem.Mat,
                 )
-                for sj, (staged_i,) in pl.pipeline(
-                    0, staged_width, staged_cols, stage=2, init_values=(staged_out,)
-                ):
+                (staged_i,) = pl.intrin.carry(staged_out)
+                for sj in pl.pipeline(0, staged_width, staged_cols, stage=2):
                     staged_acc: pl.Tile[[staged_rows, staged_cols], pl.BF16, pl.Mem.Acc] = pl.tile.extract(
                         staged_mat,
                         0,
@@ -3676,7 +3718,8 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                     staged_s: pl.Tensor[[staged_rows, staged_width], pl.BF16] = pl.store(
                         staged_acc, [0, sj], staged_i
                     )
-                    staged_r = pl.yield_(staged_s)
+                    pl.intrin.yield_(staged_s)
+                (staged_r,) = pl.intrin.leak()
 
                 q_mat: pl.Tile[[16, 128], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     q, [0, 0], [16, 128], target_memory=pl.Mem.Mat
@@ -3687,13 +3730,15 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 b_mat: pl.Tile[[128, 512], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     b, [0, 0], [128, 512], target_memory=pl.Mem.Mat
                 )
-                for ni, (out_i,) in pl.pipeline(0, 512, 128, stage=2, init_values=(out,)):
+                (out_i,) = pl.intrin.carry(out)
+                for ni in pl.pipeline(0, 512, 128, stage=2):
                     b_l0: pl.Tile[[128, 128], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                         b_mat, 0, ni, [128, 128], target_memory=pl.Mem.Right
                     )
                     c: pl.Tile[[16, 128], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(q_l0, b_l0)
                     out_s: pl.Tensor[[16, 512], pl.FP32] = pl.store(c, [0, ni], out_i)
-                    out_r = pl.yield_(out_s)
+                    pl.intrin.yield_(out_s)
+                (out_r,) = pl.intrin.leak()
                 return staged_r, out_r
 
         After = passes.auto_tile_matmul_l0()(Before)
@@ -3722,7 +3767,8 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 b_mat: pl.Tile[[128, 512], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     b, [0, 0], [128, 512], target_memory=pl.Mem.Mat
                 )
-                for ni, (out_i,) in pl.pipeline(0, 512, 128, stage=2, init_values=(out,)):
+                (out_i,) = pl.intrin.carry(out)
+                for ni in pl.pipeline(0, 512, 128, stage=2):
                     b_l0: pl.Tile[[128, 128], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                         b_mat, 0, ni, [128, 128], target_memory=pl.Mem.Right
                     )
@@ -3731,7 +3777,8 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                     )
                     c: pl.Tile[[16, 128], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(q_l0, b_l0)
                     out_s: pl.Tensor[[16, 512], pl.FP32] = pl.store(c, [0, ni], out_i)
-                    out_r = pl.yield_(out_s)
+                    pl.intrin.yield_(out_s)
+                (out_r,) = pl.intrin.leak()
                 return out_r
 
         After = passes.auto_tile_matmul_l0()(Before)
@@ -3761,14 +3808,16 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 b_mat: pl.Tile[[128, 512], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     b, [0, 0], [128, 512], target_memory=pl.Mem.Mat
                 )
-                for ni, (out_i, copied_i) in pl.pipeline(0, 512, 128, stage=2, init_values=(out, copied_b)):
+                (out_i, copied_i) = pl.intrin.carry(out, copied_b)
+                for ni in pl.pipeline(0, 512, 128, stage=2):
                     b_l0: pl.Tile[[128, 128], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                         b_mat, 0, ni, [128, 128], target_memory=pl.Mem.Right
                     )
                     c: pl.Tile[[16, 128], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(q_l0, b_l0)
                     out_s: pl.Tensor[[16, 512], pl.FP32] = pl.store(c, [0, ni], out_i)
                     copied_s: pl.Tensor[[128, 512], pl.BF16] = pl.store(b_l0, [0, ni], copied_i)
-                    out_r, copied_r = pl.yield_(out_s, copied_s)
+                    pl.intrin.yield_(out_s, copied_s)
+                (out_r, copied_r) = pl.intrin.leak()
                 return out_r, copied_r
 
         After = passes.auto_tile_matmul_l0()(Before)
@@ -3804,14 +3853,16 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 b_mat: pl.Tile[[128, 512], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     b, [0, 0], [128, 512], target_memory=pl.Mem.Mat
                 )
-                for ni, (out_i,) in pl.pipeline(0, 512, 128, stage=2, init_values=(out,)):
+                (out_i,) = pl.intrin.carry(out)
+                for ni in pl.pipeline(0, 512, 128, stage=2):
                     b_l0: pl.Tile[[128, 128], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                         b_mat, 0, ni, [128, 128], target_memory=pl.Mem.Right
                     )
                     _other: pl.Tile[[16, 128], pl.FP32, pl.Mem.Acc] = pl.tile.gemv(q_row_l0, b_l0)
                     c: pl.Tile[[16, 128], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(q_l0, b_l0)
                     out_s: pl.Tensor[[16, 512], pl.FP32] = pl.store(c, [0, ni], out_i)
-                    out_r = pl.yield_(out_s)
+                    pl.intrin.yield_(out_s)
+                (out_r,) = pl.intrin.leak()
                 return out_r
 
         After = passes.auto_tile_matmul_l0()(Before)
@@ -3857,7 +3908,8 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                 b_mat: pl.Tile[[128, 512], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                     b, [0, 0], [128, 512], target_memory=pl.Mem.Mat
                 )
-                for ni, (out0_i, out1_i) in pl.pipeline(0, 512, 128, stage=2, init_values=(out0, out1)):
+                (out0_i, out1_i) = pl.intrin.carry(out0, out1)
+                for ni in pl.pipeline(0, 512, 128, stage=2):
                     b_l0: pl.Tile[[128, 128], pl.BF16, pl.Mem.Right] = pl.tile.extract(
                         b_mat, 0, ni, [128, 128], target_memory=pl.Mem.Right
                     )
@@ -3865,7 +3917,8 @@ class TestAutoTileMatmulL0ExistingPipelineDbC:
                     out0_s: pl.Tensor[[16, 512], pl.FP32] = pl.store(c0, [0, ni], out0_i)
                     c1: pl.Tile[[16, 128], pl.FP32, pl.Mem.Acc] = pl.tile.matmul(q1_l0, b_l0)
                     out1_s: pl.Tensor[[16, 512], pl.FP32] = pl.store(c1, [0, ni], out1_i)
-                    out0_rv, out1_rv = pl.yield_(out0_s, out1_s)
+                    pl.intrin.yield_(out0_s, out1_s)
+                (out0_rv, out1_rv) = pl.intrin.leak()
                 return out0_rv, out1_rv
 
         After = passes.auto_tile_matmul_l0()(Before)
@@ -4732,7 +4785,8 @@ class TestAutoTileMatmulL0FitsL0cCastFold:
                     [128, 128], dtype=pl.FP32, target_memory=pl.Mem.Acc
                 )
                 # Producer K-loop: the Acc result `c` is what the fold assembles.
-                for ko, (c_iter,) in pl.pipeline(0, 512, 128, stage=2, init_values=(c_init,)):
+                (c_iter,) = pl.intrin.carry(c_init)
+                for ko in pl.pipeline(0, 512, 128, stage=2):
                     a_sub: pl.Tile[[128, 128], pl.BF16, pl.Mem.Left] = pl.tile.extract(
                         a_mat, 0, ko, shape=[128, 128], target_memory=pl.Mem.Left
                     )
@@ -4742,7 +4796,8 @@ class TestAutoTileMatmulL0FitsL0cCastFold:
                     c_acc: pl.Tile[[128, 128], pl.FP32, pl.Mem.Acc] = pl.tile.matmul_acc(
                         c_iter, a_sub, b_sub, ko == 0
                     )
-                    c: pl.Tile[[128, 128], pl.FP32, pl.Mem.Acc] = pl.yield_(c_acc)
+                    pl.intrin.yield_(c_acc)
+                (c,) = pl.intrin.leak()
                 c_mat: pl.Tile[[128, 128], pl.BF16, pl.Mem.Mat] = pl.tile.create(
                     [128, 128], dtype=pl.BF16, target_memory=pl.Mem.Mat
                 )

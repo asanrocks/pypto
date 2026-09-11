@@ -9,6 +9,13 @@
 
 """Tests for author-declared allocations (``pl.Tile[..., pl.MemRef("name"), ...]``).
 
+.. note:: Parser-owned, temporarily. The declared-allocation authoring channel
+   exists only as a type annotation (``pl.MemRef(...)`` / slot references inside
+   a ``pl.Tile[...]`` annotation), and local annotations never flow into IR
+   under the tracing frontend. Until the tracing surface for declared
+   allocations is designed (an explicit producer-side channel, not an
+   annotation fold), these fixtures collect through the AST parser.
+
 The one-argument ``pl.MemRef`` form is manual memory-reuse control: tiles bound
 to the same declared allocation share it, and ``MemoryReuse`` never packs
 anything else in. The point is to stop the packer from coalescing tiles whose
@@ -121,9 +128,9 @@ class TestBinding:
     def test_same_name_shares_one_allocation(self):
         """Two tiles naming one allocation end up on one base Ptr, so one alloc."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -144,9 +151,9 @@ class TestBinding:
     def test_distinct_names_stay_distinct(self):
         """Different names are different allocations, even with disjoint lifetimes."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -178,9 +185,9 @@ class TestBinding:
 import pypto.language as pl
 
 
-@pl.program
+@pl.program_parser
 class Collide:
-    @pl.function
+    @pl.function_parser
     def main(self, a: pl.Tensor[[64, 64], pl.FP32],
              out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]) -> pl.Tensor[[64, 64], pl.FP32]:
         t0: pl.Tile[[64, 64], pl.FP32, pl.MemRef("a"), pl.Mem.Vec] = pl.load(a, [0, 0], [64, 64])
@@ -204,9 +211,9 @@ class Collide:
         ping = pl.MemRef()
         pong = pl.MemRef()
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -229,9 +236,9 @@ class Collide:
         """An explicit name overrides the variable the declaration is bound to."""
         slot = pl.MemRef("l0c_ping")
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -256,9 +263,9 @@ class Collide:
 import pypto.language as pl
 
 
-@pl.program
+@pl.program_parser
 class Zero:
-    @pl.function
+    @pl.function_parser
     def main(self, a: pl.Tensor[[64, 64], pl.FP32],
              out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]) -> pl.Tensor[[64, 64], pl.FP32]:
         t0: pl.Tile[[64, 64], pl.FP32, pl.MemRef("mybuf", 0, 0), pl.Mem.Vec] = pl.load(a, [0, 0], [64, 64])
@@ -277,9 +284,9 @@ class Zero:
         would lose the distinction on reparse.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -305,9 +312,9 @@ class Zero:
         hardware has no problem with.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 32], pl.FP32],
@@ -325,9 +332,9 @@ class Zero:
     def test_size_is_the_largest_bound_tile(self):
         """The author writes no byte count: it is sized to hold any member."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -354,9 +361,9 @@ class Zero:
     def test_allocation_is_marked_pinned(self):
         """The alloc carries `pinned=True` so later passes can tell it apart."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -375,9 +382,9 @@ class Zero:
     def test_pinned_allocation_round_trips(self):
         """The printed `pinned=True` form re-parses to a structurally equal program."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -405,9 +412,9 @@ class TestSlots:
         """N slots become one allocation of N x slot, addressed by offset."""
         l0c = pl.MemRef(slots=2)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -439,9 +446,9 @@ class TestSlots:
         """
         buf = pl.MemRef(slots=2)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -476,9 +483,9 @@ class TestSlots:
         """
         l0c = pl.MemRef(slots=2)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[256, 64], pl.FP32],
@@ -516,9 +523,9 @@ class TestSlots:
         """A declaration with one slot behaves exactly as before slots existed."""
         scratch = pl.MemRef()
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -541,9 +548,9 @@ class TestSlots:
         """
         l0c = pl.MemRef(slots=2)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -574,9 +581,9 @@ class TestSlots:
         """
         aaa = pl.MemRef(slots=2)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -629,9 +636,9 @@ class TestSlots:
         """
         l0c = pl.MemRef(slots=2)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -664,9 +671,9 @@ class TestSlots:
           fine either way.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -705,9 +712,9 @@ class TestSlots:
         """
         l0c = pl.MemRef(slots=2)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[256, 64], pl.FP32],
@@ -781,9 +788,9 @@ class TestSlotInvariants:
         """
         huge = pl.MemRef(slots=2**60)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -807,9 +814,9 @@ class TestSlotInvariants:
         """
         big = pl.MemRef(slots=12)  # 12 x 16 KB = 192 KB > the Vec space
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -832,9 +839,9 @@ class TestSlotInvariants:
         """
         big = pl.MemRef(slots=12)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 a: pl.Tensor[[768, 64], pl.FP32],
@@ -859,9 +866,9 @@ class TestSlotInvariants:
         """
         hi = pl.MemRef(slots=8)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -885,9 +892,9 @@ class TestSlotRejects:
 
         with pytest.raises(ParserTypeError, match="out of range"):
 
-            @pl.program
+            @pl.program_parser
             class Before:
-                @pl.function
+                @pl.function_parser
                 def main(
                     self,
                     a: pl.Tensor[[64, 64], pl.FP32],
@@ -914,9 +921,9 @@ class TestSlotRejects:
         """
         with pytest.raises(ValueError, match="disagree on how many slots"):
 
-            @pl.program
+            @pl.program_parser
             class Before:
-                @pl.function
+                @pl.function_parser
                 def main(
                     self,
                     a: pl.Tensor[[64, 64], pl.FP32],
@@ -948,9 +955,9 @@ class TestSlotRejects:
 
         with pytest.raises(ParserTypeError, match="single slot"):
 
-            @pl.program
+            @pl.program_parser
             class Before:
-                @pl.function
+                @pl.function_parser
                 def main(
                     self,
                     a: pl.Tensor[[64, 64], pl.FP32],
@@ -965,9 +972,9 @@ class TestSlotRejects:
         """Same slot, overlapping lifetimes — still data corruption."""
         l0c = pl.MemRef(slots=2)
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -990,9 +997,9 @@ class TestReuseControl:
     def test_unbound_tiles_are_still_packed(self, ascend_backend):
         """Baseline: without bindings the packer coalesces the whole chain."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1011,9 +1018,9 @@ class TestReuseControl:
     def test_bound_tiles_are_not_packed(self, ascend_backend):
         """The same chain, declared: three allocations survive — no false deps."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1039,9 +1046,9 @@ class TestReuseControl:
         the pair rather than treating the shared allocation as a conflict.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1061,9 +1068,9 @@ class TestReuseControl:
     def test_dsa_rp_preserves_legal_explicit_sharing(self, ascend_backend):
         """DSA-RP accepts non-co-live values explicitly sharing one allocation."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1088,9 +1095,9 @@ class TestReuseControl:
     def test_unbound_tiles_never_join_a_declared_alloc(self, ascend_backend):
         """An unbound tile packs with other unbound tiles, never into a declared one."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1116,9 +1123,9 @@ class TestReuseControl:
         must remain disjoint from each other and from the unbound allocation.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1169,9 +1176,9 @@ class TestPipeline:
     def test_binding_survives_the_default_pipeline(self, ascend_backend):
         """ConvertToSSA and friends must carry the MemRef through, not drop it."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1194,9 +1201,9 @@ class TestPipeline:
         silently un-bind every ND user-bound tile — no diagnostic, feature gone.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[4, 16, 64], pl.FP32],
@@ -1229,9 +1236,9 @@ class TestPipeline:
         """
         m, k, n = 16, 128, 128
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 q: pl.Tensor[[m, k], pl.BF16],
@@ -1277,9 +1284,9 @@ class TestPipeline:
         tile.load and generic-op paths — and the deduced type carries no MemRef.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[4, 16, 64], pl.FP32],
@@ -1306,9 +1313,9 @@ class TestPipeline:
         promote its compiler allocations into pinned, un-reusable ones.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1333,9 +1340,9 @@ class TestPipeline:
         allocator assigns each base its own address range from there.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1373,9 +1380,9 @@ ping = pl.MemRef()
 alias = ping
 
 
-@pl.program
+@pl.program_parser
 class Aliased:
-    @pl.function
+    @pl.function_parser
     def main(self, a: pl.Tensor[[64, 64], pl.FP32],
              out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]) -> pl.Tensor[[64, 64], pl.FP32]:
         t0: pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec] = pl.load(a, [0, 0], [64, 64])
@@ -1394,9 +1401,9 @@ first = pl.MemRef("shared")
 second = pl.MemRef("shared")
 
 
-@pl.program
+@pl.program_parser
 class Collide:
-    @pl.function
+    @pl.function_parser
     def main(self, a: pl.Tensor[[64, 64], pl.FP32],
              out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]) -> pl.Tensor[[64, 64], pl.FP32]:
         t0: pl.Tile[[64, 64], pl.FP32, first, pl.Mem.Vec] = pl.load(a, [0, 0], [64, 64])
@@ -1417,9 +1424,9 @@ class Collide:
         either corrupt data or quietly drop the binding.
         """
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[256, 64], pl.FP32],
@@ -1440,9 +1447,9 @@ class Collide:
     def test_rejects_overlapping_lifetimes(self, ascend_backend):
         """Two co-live tiles on one allocation would corrupt data, not reuse it."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1465,9 +1472,9 @@ class Collide:
     def test_rejects_mixed_memory_space(self):
         """One allocation lives in one memory space; bound tiles must agree."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP16],
@@ -1488,9 +1495,9 @@ class Collide:
     def test_rejects_binding_a_view_output(self):
         """A view already IS its source's allocation; it cannot be given its own."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[64, 64], pl.FP32],
@@ -1513,9 +1520,9 @@ class Collide:
 import pypto.language as pl
 
 
-@pl.program
+@pl.program_parser
 class Bad:
-    @pl.function
+    @pl.function_parser
     def main(self, a: pl.Tensor[[64, 64], pl.FP32],
              out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]) -> pl.Tensor[[64, 64], pl.FP32]:
         t0: pl.Tile[[64, 64], pl.FP32, pl.MemRef("scratch")] = pl.load(a, [0, 0], [64, 64])
@@ -1532,9 +1539,9 @@ import pypto.language as pl
 NAME = "scratch"
 
 
-@pl.program
+@pl.program_parser
 class Bad:
-    @pl.function
+    @pl.function_parser
     def main(self, a: pl.Tensor[[64, 64], pl.FP32],
              out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]) -> pl.Tensor[[64, 64], pl.FP32]:
         t0: pl.Tile[[64, 64], pl.FP32, pl.MemRef(NAME), pl.Mem.Vec] = pl.load(a, [0, 0], [64, 64])
@@ -1556,9 +1563,9 @@ class TestLoopCarryRoundtrip:
 
     @staticmethod
     def _carry_program():
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(
                 self,
                 a: pl.Tensor[[256, 64], pl.FP32],
