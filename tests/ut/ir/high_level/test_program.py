@@ -9,8 +9,6 @@
 
 """Unit tests for Program class."""
 
-from typing import cast
-
 import pytest
 from pypto import DataType, ir
 
@@ -49,8 +47,8 @@ class TestProgram:
         assert len(program.functions) == 2
         # Functions are stored in a map, sorted by name
         func_list = list(program.functions.values())
-        assert cast(ir.Function, func_list[0]).name == "func1"
-        assert cast(ir.Function, func_list[1]).name == "func2"
+        assert func_list[0].name == "func1"
+        assert func_list[1].name == "func2"
 
     def test_program_is_irnode(self):
         """Test that Program is an instance of IRNode."""
@@ -105,9 +103,9 @@ class TestProgram:
         assert len(program.functions) == 3
         # Functions are stored in a map, sorted by name
         func_list = list(program.functions.values())
-        assert cast(ir.Function, func_list[0]).name == "func1"
-        assert cast(ir.Function, func_list[1]).name == "func2"
-        assert cast(ir.Function, func_list[2]).name == "func3"
+        assert func_list[0].name == "func1"
+        assert func_list[1].name == "func2"
+        assert func_list[2].name == "func3"
 
     def test_program_string_representation(self):
         """Test Program string representation."""

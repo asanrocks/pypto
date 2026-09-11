@@ -68,7 +68,7 @@ class TestBasicSerialization:
         ir.assert_structural_equal(iter_arg, restored, enable_auto_mapping=True)
         assert restored_iter_arg.name_hint == "iter_arg"
         assert isinstance(restored_iter_arg.initValue, ir.ConstInt)
-        assert cast(ir.ConstInt, restored_iter_arg.initValue).value == 5
+        assert restored_iter_arg.initValue.value == 5
 
     def test_serialize_iter_arg_with_expr_init_value(self):
         """Test serialization of IterArg with expression as initValue."""
@@ -775,7 +775,7 @@ class TestFunctionSerialization:
 
         ir.assert_structural_equal(func, restored)
         assert isinstance(restored_func.body, ir.ReturnStmt)
-        assert len(cast(ir.ReturnStmt, restored_func.body).value) == 1
+        assert len(restored_func.body.value) == 1
 
     def test_serialize_program(self):
         """Test serialization of Program."""

@@ -102,7 +102,7 @@ def test_array_create_op():
     assert isinstance(call, ir.Call)
     assert call.op.name == ir.get_op("array.create").name
     assert isinstance(call.type, ir.ArrayType)
-    array_type = cast(ir.ArrayType, call.type)
+    array_type = call.type
     assert array_type.dtype == DataType.INT32
     assert _extent(array_type) == 16
     assert array_type.memory_space == ir.MemorySpace.ScalarLocal

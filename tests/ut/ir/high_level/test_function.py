@@ -120,7 +120,7 @@ class TestFunction:
         assert len(func.params) == 1
         assert len(func.return_types) == 1
         assert isinstance(func.body, ir.SeqStmts)
-        assert len(cast(ir.SeqStmts, func.body).stmts) == 2
+        assert len(func.body.stmts) == 2
 
     def test_function_with_multiple_params(self):
         """Test Function with multiple parameters."""

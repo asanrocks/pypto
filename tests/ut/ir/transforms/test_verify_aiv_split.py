@@ -585,7 +585,7 @@ def _has_tensor_call(program, op_name) -> bool:
     found = []
 
     def walk(n):
-        if isinstance(n, ir.Call) and isinstance(n.op, ir.Op) and n.op.name == op_name:
+        if isinstance(n, ir.Call) and n.op.name == op_name:
             found.append(n)
         if isinstance(n, ir.SeqStmts):
             for s in n.stmts:

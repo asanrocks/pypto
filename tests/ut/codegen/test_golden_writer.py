@@ -9,6 +9,8 @@
 
 """Unit tests for pypto.runtime.golden_writer."""
 
+from typing import Any
+
 import pytest
 from pypto.runtime.golden_writer import (
     _extract_callable_expr,
@@ -173,7 +175,7 @@ class TestGoldenWriterScalar:
 
         assert "import struct" in src
 
-        namespace: dict[str, object] = {}
+        namespace: dict[str, Any] = {}
         exec(src, namespace)  # noqa: S102 - Test verifies generated source executes correctly.
 
         tensors = {
@@ -196,7 +198,7 @@ class TestGoldenWriterScalar:
         assert "2.5" in compute_golden_src
 
         src = generate_golden_source(specs, None, 1e-5, 1e-5, compute_golden_src=compute_golden_src)
-        namespace: dict[str, object] = {}
+        namespace: dict[str, Any] = {}
         exec(src, namespace)  # noqa: S102 - Test verifies generated source executes correctly.
 
         tensors = {
@@ -236,7 +238,7 @@ class TestCallableInitValue:
         ]
         src = generate_golden_source(specs, _dummy_golden, 1e-5, 1e-5)
 
-        namespace: dict[str, object] = {}
+        namespace: dict[str, Any] = {}
         exec(src, namespace)  # noqa: S102 - Test verifies generated source executes correctly.
 
         result = namespace["generate_inputs"](None)
@@ -466,7 +468,7 @@ class TestExtractClosureConstants:
 
         src = _extract_compute_golden(compute_expected)
         # Module namespace mimics the runtime: only torch is pre-imported.
-        ns: dict[str, object] = {"torch": torch}
+        ns: dict[str, Any] = {"torch": torch}
         exec(src, ns)
         tensors = {
             "a": torch.tensor([1.0, 2.0, 3.0]),
@@ -578,7 +580,7 @@ class TestDataFileMode:
         src = golden_path.read_text(encoding="utf-8")
         assert '_DATA_DIR = Path(__file__).parent / "data"' in src
 
-        namespace: dict[str, object] = {"__file__": str(golden_path)}
+        namespace: dict[str, Any] = {"__file__": str(golden_path)}
         exec(compile(src, str(golden_path), "exec"), namespace)  # noqa: S102
 
         result = namespace["generate_inputs"](None)
@@ -629,7 +631,7 @@ class TestDataFileMode:
         saved = torch.load(tmp_path / "data" / "in" / "r.pt", weights_only=True)
 
         src = golden_path.read_text(encoding="utf-8")
-        namespace: dict[str, object] = {"__file__": str(golden_path)}
+        namespace: dict[str, Any] = {"__file__": str(golden_path)}
         exec(compile(src, str(golden_path), "exec"), namespace)  # noqa: S102
         result = namespace["generate_inputs"](None)
         loaded = result[0][1]
@@ -697,7 +699,7 @@ class TestDataFileMode:
         assert not (golden_path.parent / "data").exists()
 
         src = golden_path.read_text(encoding="utf-8")
-        namespace: dict[str, object] = {"__file__": str(golden_path)}
+        namespace: dict[str, Any] = {"__file__": str(golden_path)}
         exec(compile(src, str(golden_path), "exec"), namespace)  # noqa: S102
 
         result = namespace["generate_inputs"](None)
@@ -724,7 +726,7 @@ class TestDataFileMode:
         src = golden_path.read_text(encoding="utf-8")
         assert f'_DATA_DIR = Path("{ext_dir.resolve()}")' in src
 
-        namespace: dict[str, object] = {"__file__": str(golden_path)}
+        namespace: dict[str, Any] = {"__file__": str(golden_path)}
         exec(compile(src, str(golden_path), "exec"), namespace)  # noqa: S102
         result = namespace["generate_inputs"](None)
         a_tensor = result[0][1]
@@ -810,7 +812,7 @@ class TestDataFileMode:
 
         for gp in (golden_path_1, golden_path_2):
             src = gp.read_text(encoding="utf-8")
-            ns: dict[str, object] = {"__file__": str(gp)}
+            ns: dict[str, Any] = {"__file__": str(gp)}
             exec(compile(src, str(gp), "exec"), ns)  # noqa: S102
             result = ns["generate_inputs"](None)
             assert torch.equal(result[0][1], saved_a)

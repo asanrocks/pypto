@@ -72,7 +72,7 @@ def test_visitor_custom_subclass_sees_window_buffer():
 
 def test_mutator_identity_returns_same_instance():
     """The base ``IRMutator`` is copy-on-write: if no child changed, it must
-    return the original ``WindowBuffer`` instance, not mint a fresh one."""
+    return the original ``WindowBuffer`` instance, not create a fresh one."""
     wb = WindowBuffer(_ptr("data"), _const(256))
     mutator = IRMutator()
     result = mutator.visit_expr(wb)
@@ -81,7 +81,7 @@ def test_mutator_identity_returns_same_instance():
 
 def test_mutator_remaps_base_via_var_substitution():
     """When the mutator's ``var_remap_`` (seeded through a subclass) swaps
-    the underlying Ptr ``base``, the WindowBuffer override must mint a fresh
+    the underlying Ptr ``base``, the WindowBuffer override must create a fresh
     ``WindowBuffer`` referencing the substituted base."""
 
     old_base = _ptr("data")

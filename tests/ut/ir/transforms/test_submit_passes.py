@@ -312,9 +312,7 @@ def test_ssa_predicate_operand_matches_the_gate_scope_result():
     operand = _predicate_operand(expert_scope)
 
     produced = [
-        stmt.var.unique_id
-        for stmt in _flatten_stmts(gate_scope.body)
-        if isinstance(stmt, ir.AssignStmt) and isinstance(stmt.var, ir.Var)
+        stmt.var.unique_id for stmt in _flatten_stmts(gate_scope.body) if isinstance(stmt, ir.AssignStmt)
     ]
     assert operand.unique_id in produced, (
         "predicate operand should be the gate scope's SSA result, "

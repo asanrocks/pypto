@@ -82,7 +82,7 @@ class TestAssignStmt:
 
         assert assign is not None
         assert assign.span.filename == "test.py"
-        assert cast(ir.Var, assign.var).name_hint == "x"
+        assert assign.var.name_hint == "x"
         assert cast(ir.Var, assign.value).name_hint == "y"
 
     def test_assign_stmt_has_lhs_rhs(self):
@@ -95,7 +95,7 @@ class TestAssignStmt:
 
         assert assign.var is not None
         assert assign.value is not None
-        assert cast(ir.Var, assign.var).name_hint == "a"
+        assert assign.var.name_hint == "a"
         assert cast(ir.Var, assign.value).name_hint == "b"
 
     def test_assign_stmt_is_stmt(self):
@@ -132,13 +132,13 @@ class TestAssignStmt:
         x = ir.Var("x", ir.ScalarType(dtype), span)
         y = ir.Var("y", ir.ScalarType(dtype), span)
         assign1 = ir.AssignStmt(x, y, span)
-        assert cast(ir.Var, assign1.var).name_hint == "x"
+        assert assign1.var.name_hint == "x"
         assert cast(ir.Var, assign1.value).name_hint == "y"
 
         # Test with ConstInt on value
         c5 = ir.ConstInt(5, dtype, span)
         assign2 = ir.AssignStmt(x, c5, span)
-        assert cast(ir.Var, assign2.var).name_hint == "x"
+        assert assign2.var.name_hint == "x"
         assert cast(ir.ConstInt, assign2.value).value == 5
 
         # Test with Call on value
@@ -146,13 +146,13 @@ class TestAssignStmt:
         z = ir.Var("z", ir.ScalarType(dtype), span)
         call = ir.Call(op, [x, z], span)
         assign3 = ir.AssignStmt(y, call, span)
-        assert cast(ir.Var, assign3.var).name_hint == "y"
+        assert assign3.var.name_hint == "y"
         assert isinstance(assign3.value, ir.Call)
 
         # Test with binary expression on value
         add_expr = ir.Add(x, z, dtype, span)
         assign4 = ir.AssignStmt(x, add_expr, span)
-        assert cast(ir.Var, assign4.var).name_hint == "x"
+        assert assign4.var.name_hint == "x"
         assert isinstance(assign4.value, ir.Add)
 
 
@@ -261,7 +261,7 @@ class TestReturnStmt:
         assert return_stmt.span.filename == "test.py"
         assert len(return_stmt.value) == 1
         assert isinstance(return_stmt.value[0], ir.Var)
-        assert cast(ir.Var, return_stmt.value[0]).name_hint == "x"
+        assert return_stmt.value[0].name_hint == "x"
 
     def test_return_stmt_creation_without_value(self):
         """Test creating a ReturnStmt instance without a value."""
@@ -281,7 +281,7 @@ class TestReturnStmt:
 
         assert len(return_stmt.value) == 1
         assert isinstance(return_stmt.value[0], ir.Var)
-        assert cast(ir.Var, return_stmt.value[0]).name_hint == "a"
+        assert return_stmt.value[0].name_hint == "a"
 
     def test_return_stmt_is_stmt(self):
         """Test that ReturnStmt is an instance of Stmt."""
@@ -343,7 +343,7 @@ class TestReturnStmt:
         return_stmt1 = ir.ReturnStmt([const_val], span)
         assert len(return_stmt1.value) == 1
         assert isinstance(return_stmt1.value[0], ir.ConstInt)
-        assert cast(ir.ConstInt, return_stmt1.value[0]).value == 42
+        assert return_stmt1.value[0].value == 42
 
         # Test with binary expression
         add_expr = ir.Add(x, y, dtype, span)

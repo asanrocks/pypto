@@ -345,9 +345,9 @@ def test_return_implicit_host_allreduce_synthesizes_signal_then_lowers():
                 self.chip_orch(data, device=r)
             return pld.tensor.allreduce(data, op=pld.ReduceOp.Sum)
 
-    program = cast(ir.Program, passes.synthesize_allreduce_signals()(P))
-    program = cast(ir.Program, passes.materialize_comm_domain_scopes()(program))
-    result = cast(ir.Program, passes.lower_host_tensor_collectives()(program))
+    program = passes.synthesize_allreduce_signals()(P)
+    program = passes.materialize_comm_domain_scopes()(program)
+    result = passes.lower_host_tensor_collectives()(program)
     host = _get_func(result, "host_orch")
 
     returns = [
@@ -390,9 +390,9 @@ def test_return_explicit_host_allreduce_lowers_with_user_signal():
                 self.chip_orch(data, device=r)
             return pld.tensor.allreduce(data, signal, op=pld.ReduceOp.Sum)
 
-    program = cast(ir.Program, passes.synthesize_allreduce_signals()(P))
-    program = cast(ir.Program, passes.materialize_comm_domain_scopes()(program))
-    result = cast(ir.Program, passes.lower_host_tensor_collectives()(program))
+    program = passes.synthesize_allreduce_signals()(P)
+    program = passes.materialize_comm_domain_scopes()(program)
+    result = passes.lower_host_tensor_collectives()(program)
     host = _get_func(result, "host_orch")
 
     returns = [

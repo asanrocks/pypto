@@ -230,7 +230,9 @@ class TestTensorGatherCompareTypes:
                     idx: pl.Tensor[[32, 8], pl.INT32],
                     kv: pl.Scalar[pl.FP32],
                 ) -> pl.Tensor[[32, 8], pl.FP32]:
-                    return pl.tensor.gather(src, dim=-1, index=idx, kvalue=kv, cmp_mode="eq", out_cols=8)
+                    return pl.tensor.gather(  # pyright: ignore[reportCallIssue]  # intentional: index+compare forms are mutually exclusive
+                        src, dim=-1, index=idx, kvalue=kv, cmp_mode="eq", out_cols=8
+                    )
 
     def test_mutually_exclusive_mask_and_compare(self):
         with pytest.raises(InvalidOperationError, match="mutually exclusive"):
@@ -243,7 +245,9 @@ class TestTensorGatherCompareTypes:
                     src: pl.Tensor[[32, 64], pl.FP32],
                     kv: pl.Scalar[pl.FP32],
                 ) -> pl.Tensor[[32, 8], pl.INT32]:
-                    return pl.tensor.gather(src, mask_pattern=1, kvalue=kv, cmp_mode="eq", out_cols=8)
+                    return pl.tensor.gather(  # pyright: ignore[reportCallIssue]  # intentional: mask+compare forms are mutually exclusive
+                        src, mask_pattern=1, kvalue=kv, cmp_mode="eq", out_cols=8
+                    )
 
 
 if __name__ == "__main__":

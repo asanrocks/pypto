@@ -210,7 +210,7 @@ class TestIterArgEquality:
         iter_arg = ir.IterArg("arr_iter", array_ty, init_value, span)
 
         assert isinstance(iter_arg.type, ir.ArrayType)
-        array_type = cast(ir.ArrayType, iter_arg.type)
+        array_type = iter_arg.type
         assert array_type.dtype == DataType.INT32
         assert iter_arg.initValue is init_value
 
@@ -225,7 +225,7 @@ class TestIterArgEquality:
         iter_arg = ir.IterArg("arr_iter", array_ty, init_value, span)
 
         assert isinstance(iter_arg.type, ir.ArrayType)
-        array_type = cast(ir.ArrayType, iter_arg.type)
+        array_type = iter_arg.type
         assert array_type.dtype == DataType.TASK_ID
 
     def test_iter_arg_array_type_structural_equal(self):
