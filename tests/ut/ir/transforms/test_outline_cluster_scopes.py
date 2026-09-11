@@ -180,8 +180,7 @@ class TestOutlineClusterScopes:
                 x: pl.Tensor[[64], pl.FP32],
                 out: pl.Out[pl.Tensor[[64], pl.FP32]],
             ) -> pl.Tensor[[64], pl.FP32]:
-                with pl.spmd(4, sync_start=True):
-                    out = self.kernel(x, out)
+                out = pl.intrin.spmd_direct_call(self.kernel, x, out, core_num=4, sync_start=True)
                 return out
 
         @pl.program
@@ -860,10 +859,12 @@ class TestOutlineClusterScopes:
 
             @pl.function
             def main(self, out: pl.Out[pl.Tensor[[16, 128], pl.FP32]]) -> pl.Tensor[[16, 128], pl.FP32]:
-                for i, (acc,) in pl.range(3, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.range(3):
                     with pl.cluster():
                         updated = self.writes(acc)
-                    acc_rv = pl.yield_(updated)
+                    pl.intrin.yield_(updated)
+                (acc_rv,) = pl.intrin.leak()
                 return acc_rv
 
         After = passes.outline_cluster_scopes()(passes.convert_to_ssa()(Before))

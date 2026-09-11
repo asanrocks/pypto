@@ -7,7 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Orchestration codegen for ``with pl.spmd(...) as tid:`` — the SPMD producer-TaskId capture.
+"""Orchestration codegen for assembly ``pl.intrin.spmd_direct(...)`` dispatches.
 
 A captured SPMD dispatch lowers to an ``ir.Submit`` whose own ``core_num`` is None
 (it rides on the outlined ``Spmd`` Function attrs), so the launch spec must come
@@ -26,7 +26,7 @@ from pypto.pypto_core import ir
 
 
 class TestSpmdScopeTaskIdCodegen:
-    """Codegen for the captured ``with pl.spmd(...) as tid:`` SPMD dispatch."""
+    """Codegen for captured direct ``SpmdScopeStmt(Call)`` dispatches."""
 
     @staticmethod
     def _mixed_spmd_pipeline(program):
@@ -102,8 +102,7 @@ class TestSpmdScopeTaskIdCodegen:
                 bias: pl.Tensor[[64, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
             ) -> pl.Tensor[[64, 64], pl.FP32]:
-                with pl.spmd(4, sync_start=True) as tid:  # captured grid dispatch TaskId
-                    out = self.kernel(a, b, bias, out)
+                out, tid = pl.intrin.spmd_direct(self.kernel, a, b, bias, out, core_num=4, sync_start=True)
                 return out
 
         transformed = self._mixed_spmd_pipeline(P)
@@ -145,10 +144,10 @@ class TestSpmdScopeTaskIdCodegen:
                 out1: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
                 out2: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
             ) -> pl.Tensor[[512, 128], pl.FP32]:
-                with pl.spmd(4, name_hint="stage1") as tid0:
-                    out1 = self.vkernel(a, out1)
-                with pl.spmd(4, name_hint="stage2", deps=[tid0]) as tid1:
-                    out2 = self.vkernel(a, out2)
+                out1, tid0 = pl.intrin.spmd_direct(self.vkernel, a, out1, core_num=4, name_hint="stage1")
+                out2, tid1 = pl.intrin.spmd_direct(
+                    self.vkernel, a, out2, core_num=4, name_hint="stage2", deps=[tid0]
+                )
                 return out2
 
         transformed = self._mixed_spmd_pipeline(P)
@@ -202,11 +201,10 @@ class TestSpmdScopeTaskIdCodegen:
                 out1: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
                 out2: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
             ) -> pl.Tensor[[512, 128], pl.FP32]:
-                with pl.spmd(4, name_hint="stage1") as tid0:
-                    out1 = self.vkernel(a, out1)
-                # No ``as tid`` — the edge is declared, the TaskId is not needed.
-                with pl.spmd(4, name_hint="stage2", deps=[tid0]):
-                    out2 = self.vkernel(a, out2)
+                out1, tid0 = pl.intrin.spmd_direct(self.vkernel, a, out1, core_num=4, name_hint="stage1")
+                out2 = pl.intrin.spmd_direct_call(
+                    self.vkernel, a, out2, core_num=4, name_hint="stage2", deps=[tid0]
+                )
                 return out2
 
         transformed = self._mixed_spmd_pipeline(P)
@@ -434,10 +432,8 @@ class TestSpmdScopeTaskIdCodegen:
                 bias: pl.Tensor[[64, 64], pl.FP32],
                 out: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
             ) -> pl.Tensor[[64, 64], pl.FP32]:
-                with pl.spmd(4, sync_start=True) as tid0:
-                    out = self.kernel(a, b, bias, out)
-                with pl.spmd(4, deps=[tid0]) as tid1:
-                    out = self.kernel(out, b, bias, out)
+                out, tid0 = pl.intrin.spmd_direct(self.kernel, a, b, bias, out, core_num=4, sync_start=True)
+                out, tid1 = pl.intrin.spmd_direct(self.kernel, out, b, bias, out, core_num=4, deps=[tid0])
                 return out
 
         transformed = self._mixed_spmd_pipeline(P)
@@ -493,8 +489,9 @@ class TestSpmdScopeTaskIdCodegen:
                 a: pl.Tensor[[512, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
             ) -> pl.Tensor[[512, 128], pl.FP32]:
-                with pl.spmd(4, name_hint="stage1", allow_early_resolve=True) as tid:
-                    out = self.vkernel(a, out)
+                out, tid = pl.intrin.spmd_direct(
+                    self.vkernel, a, out, core_num=4, name_hint="stage1", allow_early_resolve=True
+                )
                 return out
 
         transformed = self._mixed_spmd_pipeline(P)
@@ -524,8 +521,7 @@ class TestSpmdScopeTaskIdCodegen:
                 a: pl.Tensor[[512, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
             ) -> pl.Tensor[[512, 128], pl.FP32]:
-                with pl.spmd(4, name_hint="stage1") as tid:
-                    out = self.vkernel(a, out)
+                out, tid = pl.intrin.spmd_direct(self.vkernel, a, out, core_num=4, name_hint="stage1")
                 return out
 
         transformed = self._mixed_spmd_pipeline(P)
