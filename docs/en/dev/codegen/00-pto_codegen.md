@@ -190,8 +190,8 @@ or call `set_validshape` on the source tile before taking the view.
 | --------------- | ----------------- | ----------- |
 | `tile.tpush_to_aiv(tile, split=N[, id=I])` | `pto.tpush_to_aiv ins(%tile : type) {[id = I, ]split = N}` | Cube → Vector push |
 | `tile.tpush_to_aic(tile, split=N[, id=I])` | `pto.tpush_to_aic ins(%tile : type) {[id = I, ]split = N}` | Vector → Cube push |
-| `tile.tpop_from_aic(split=N[, id=I])` | `%buf = pto.tpop_from_aic {[id = I, ]split = N} -> type` | Pop from Cube pipe |
-| `tile.tpop_from_aiv(split=N[, id=I])` | `%buf = pto.tpop_from_aiv {[id = I, ]split = N} -> type` | Pop from Vector pipe |
+| `tile.tpop_from_aic(shape, dtype=D[, split=N][, id=I])` | `%buf = pto.tpop_from_aic {[id = I, ]split = N} -> type` | Pop from Cube pipe |
+| `tile.tpop_from_aiv(shape, dtype=D[, split=N][, id=I])` | `%buf = pto.tpop_from_aiv {[id = I, ]split = N} -> type` | Pop from Vector pipe |
 | `system.tfree_to_aic(tile_from_tpop[, id=I])` | `pto.tfree_from_aic {[id = I, ]split = N}` | Release a consumer slot back to Cube |
 | `system.tfree_to_aiv(tile_from_tpop[, id=I])` | `pto.tfree_from_aiv {[id = I, ]split = N}` | Release a consumer slot back to Vector |
 | `system.aic_initialize_pipe(...)` | `pto.aic_initialize_pipe {[id = I, ]dir_mask = D, slot_size = S[, slot_num = N][, local_slot_num = L]} (c2v_consumer_buf = %ssa : i32, v2c_consumer_buf = %ssa : i32)` | Cube pipe init (`slot_num`/`local_slot_num` emitted only when set; otherwise PTOAS uses its defaults) |

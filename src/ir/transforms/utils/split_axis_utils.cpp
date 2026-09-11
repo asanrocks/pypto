@@ -726,6 +726,13 @@ CallPtr RebuildTpopWithHalvedShape(const CallPtr& call, int split_code, int spli
   // this path.
   auto new_result_type = HalveTileShape(call->GetType(), split_dim, subblock_idx, lane_stride);
 
+  // Keep the explicit physical shape operand synchronized with the halved
+  // result type so print -> parse reproduces the same producer type.
+  std::vector<ExprPtr> new_args = call->args_;
+  if (!new_args.empty()) {
+    new_args[0] = HalveTupleElement(new_args[0], split_dim);
+  }
+
   std::vector<std::pair<std::string, std::any>> new_kwargs;
   bool has_split = false;
   for (const auto& [key, val] : call->kwargs_) {
@@ -740,7 +747,8 @@ CallPtr RebuildTpopWithHalvedShape(const CallPtr& call, int split_code, int spli
     new_kwargs.emplace_back("split", std::any(split_code));
   }
 
-  return std::make_shared<Call>(call->op_, call->args_, std::move(new_kwargs), new_result_type, call->span_);
+  return std::make_shared<Call>(call->op_, std::move(new_args), std::move(new_kwargs), new_result_type,
+                                call->span_);
 }
 
 // The two AIV lanes' split-axis extents for a boundary tile, when the box, the

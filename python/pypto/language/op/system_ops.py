@@ -11,13 +11,14 @@
 
 Sync/barrier ops are straight pass-through (no Tensor/Tile args).
 tpush ops wrap the IR-level functions, unwrapping Tile to Expr.
-tpop ops accept optional shape/dtype kwargs to create typed results.
+tpop ops require explicit shape/dtype value-producer inputs.
 """
 
 from collections.abc import Sequence
 from typing import Any, overload
 
 from pypto.ir.op import system_ops as _ir_ops
+from pypto.ir.op import tile_ops as _ir_tile_ops
 from pypto.ir.op.system_ops import (
     _SYNC_EVENT_KERNELS,
     _SYNC_EVENT_MIX_HINT,
@@ -378,15 +379,19 @@ def tfree_to_aiv(
 
 
 def tpop_from_aic(
+    shape: list[int],
     *,
-    shape: list[int] | None = None,
-    dtype: DataType | None = None,
+    dtype: DataType,
     split: int = 0,
     lane_stride: int | None = None,
     id: int | None = None,
     span: Span | None = None,
 ) -> Tile:
     """Pop tile data from AIC cross-core pipe into AIV.
+
+    ``shape`` and ``dtype`` are explicit value-producer inputs. The result
+    type is deduced from those inputs, and the consuming-side Vec memory is
+    stamped by the IR op registry.
 
     Args:
         shape: Shape of the tile to receive
@@ -398,31 +403,29 @@ def tpop_from_aic(
         id: Optional frontend pipe id. Omit to use PTOAS default id 0.
         span: Optional source span
     """
-    call = _ir_ops.tpop_from_aic(
-        shape=shape, dtype=dtype, split=split, lane_stride=lane_stride, id=id, span=span
+    actual_span = _get_span_or_capture(span)
+    call = _ir_tile_ops.tpop_from_aic(
+        shape, dtype=dtype, split=split, lane_stride=lane_stride, id=id, span=actual_span
     )
     return Tile(expr=call)
 
 
 def tpop_from_aiv(
+    shape: list[int],
     *,
-    shape: list[int] | None = None,
-    dtype: DataType | None = None,
+    dtype: DataType,
     split: int = 0,
     id: int | None = None,
     span: Span | None = None,
 ) -> Tile:
     """Pop tile data from AIV cross-core pipe into AIC.
 
-    Args:
-        shape: Shape of the tile to receive
-        dtype: Data type of the tile to receive
-        split: Split mode (0=none, 1=up-down, 2=left-right)
-        id: Optional frontend pipe id. Omit to use PTOAS default id 0.
-        span: Optional source span
+    ``shape`` and ``dtype`` are explicit value-producer inputs. The result
+    type is deduced from those inputs, and the consuming-side Mat memory is
+    stamped by the IR op registry.
     """
-    call = _ir_ops.tpop_from_aiv(shape=shape, dtype=dtype, split=split, id=id, span=span)
-    return Tile(expr=call)
+    actual_span = _get_span_or_capture(span)
+    return Tile(expr=_ir_tile_ops.tpop_from_aiv(shape, dtype=dtype, split=split, id=id, span=actual_span))
 
 
 def reserve_buffer(*, name: str, size: int, base: int = AUTO, span: Span | None = None) -> Scalar:

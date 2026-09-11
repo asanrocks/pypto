@@ -69,7 +69,9 @@ class TestSkewCrossCorePipeline:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [i * 16, 0], [16, 64])
                     rs: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aiv(rs, split=0)
-                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e, e)
                     pl.tile.store(oi, [i * 16, 0], out)
 
@@ -96,17 +98,21 @@ class TestSkewCrossCorePipeline:
                     qa3: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [(i + 1) * 16, 0], [16, 64])
                     rs3: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa3, qa3)
                     pl.tile.tpush_to_aiv(rs3, split=0)
-                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e0, e0)
                     pl.tile.store(oi0, [(i - 2) * 16, 0], out)
-                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e1, e1)
                     pl.tile.store(oi1, [(i - 1) * 16, 0], out)
                 # epilogue: consume(2), consume(3)
-                e2: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                e2: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[16, 64], dtype=pl.FP32, split=0)
                 oi2: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e2, e2)
                 pl.tile.store(oi2, [pl.const(2, pl.INDEX) * pl.const(16, pl.INDEX), 0], out)
-                e3: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                e3: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[16, 64], dtype=pl.FP32, split=0)
                 oi3: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e3, e3)
                 pl.tile.store(oi3, [pl.const(3, pl.INDEX) * pl.const(16, pl.INDEX), 0], out)
 
@@ -125,7 +131,9 @@ class TestSkewCrossCorePipeline:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [i * 16, 0], [16, 64])
                     rs: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aic(rs, split=0)  # PRODUCE first (V->C)
-                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(split=0)
+                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e, e)
                     pl.tile.store(oi, [i * 16, 0], out)
 
@@ -152,17 +160,21 @@ class TestSkewCrossCorePipeline:
                     qa3: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [(i + 1) * 16, 0], [16, 64])
                     rs3: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa3, qa3)
                     pl.tile.tpush_to_aic(rs3, split=0)
-                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(split=0)
+                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e0, e0)
                     pl.tile.store(oi0, [(i - 2) * 16, 0], out)
-                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(split=0)
+                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e1, e1)
                     pl.tile.store(oi1, [(i - 1) * 16, 0], out)
                 # epilogue: consume(2), consume(3)
-                e2: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(split=0)
+                e2: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(shape=[16, 64], dtype=pl.FP32, split=0)
                 oi2: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e2, e2)
                 pl.tile.store(oi2, [pl.const(2, pl.INDEX) * pl.const(16, pl.INDEX), 0], out)
-                e3: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(split=0)
+                e3: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(shape=[16, 64], dtype=pl.FP32, split=0)
                 oi3: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e3, e3)
                 pl.tile.store(oi3, [pl.const(3, pl.INDEX) * pl.const(16, pl.INDEX), 0], out)
 
@@ -185,7 +197,9 @@ class TestSkewCrossCorePipeline:
                     ka: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(kv, [off, 0], [16, 64])  # K-load (produce)
                     rs: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(ka, ka)
                     pl.tile.tpush_to_aiv(rs, split=0)
-                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     va: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(kv, [off, 0], [16, 64])  # V-load REUSES off
                     oi: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e, va)
                     pl.tile.store(oi, [off, 0], out)
@@ -214,23 +228,27 @@ class TestSkewCrossCorePipeline:
                     rs3: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(ka3, ka3)
                     pl.tile.tpush_to_aiv(rs3, split=0)
                     offc0: pl.Scalar[pl.INDEX] = (i - 2) * 16
-                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     va0: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(kv, [offc0, 0], [16, 64])
                     oi0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e0, va0)
                     pl.tile.store(oi0, [offc0, 0], out)
                     offc1: pl.Scalar[pl.INDEX] = (i - 1) * 16
-                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     va1: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(kv, [offc1, 0], [16, 64])
                     oi1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e1, va1)
                     pl.tile.store(oi1, [offc1, 0], out)
                 # epilogue: consume(2), consume(3) — off recomputed at 2 and 3
                 off2: pl.Scalar[pl.INDEX] = pl.const(2, pl.INDEX) * pl.const(16, pl.INDEX)
-                e2: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                e2: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[16, 64], dtype=pl.FP32, split=0)
                 va2: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(kv, [off2, 0], [16, 64])
                 oi2: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e2, va2)
                 pl.tile.store(oi2, [off2, 0], out)
                 off3: pl.Scalar[pl.INDEX] = pl.const(3, pl.INDEX) * pl.const(16, pl.INDEX)
-                e3: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                e3: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[16, 64], dtype=pl.FP32, split=0)
                 va3: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(kv, [off3, 0], [16, 64])
                 oi3: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e3, va3)
                 pl.tile.store(oi3, [off3, 0], out)
@@ -247,11 +265,15 @@ class TestSkewCrossCorePipeline:
             @pl.function(strict_ssa=True)
             def main(self, q: pl.Tensor[[64, 64], pl.FP32], out: pl.Tensor[[64, 64], pl.FP32]):
                 for i in pl.pipeline(0, 4, 1, stage=2):
-                    s0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(split=0)
+                    s0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     c0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(s0, s0)
                     pl.tile.tpush_to_aic(c0, split=0)
                     c1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(c0, c0)
-                    s1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(split=0)
+                    s1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     o0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(s1, c1)
                     pl.tile.store(o0, [i * 16, 0], out)
 
@@ -260,11 +282,15 @@ class TestSkewCrossCorePipeline:
             @pl.function(strict_ssa=True)
             def main(self, q: pl.Tensor[[64, 64], pl.FP32], out: pl.Tensor[[64, 64], pl.FP32]):
                 for i in pl.range(0, 4, 1):
-                    s0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(split=0)
+                    s0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     c0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(s0, s0)
                     pl.tile.tpush_to_aic(c0, split=0)
                     c1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(c0, c0)
-                    s1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(split=0)
+                    s1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aic(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     o0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(s1, c1)
                     pl.tile.store(o0, [i * 16, 0], out)
 
@@ -283,10 +309,14 @@ class TestSkewCrossCorePipeline:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [i * 16, 0], [16, 64])
                     p0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aiv(p0, split=0)
-                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     p1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e0, e0)
                     pl.tile.tpush_to_aiv(p1, split=0)
-                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     o0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e1, e1)
                     pl.tile.store(o0, [i * 16, 0], out)
 
@@ -298,10 +328,14 @@ class TestSkewCrossCorePipeline:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [i * 16, 0], [16, 64])
                     p0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aiv(p0, split=0)
-                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     p1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e0, e0)
                     pl.tile.tpush_to_aiv(p1, split=0)
-                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     o0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e1, e1)
                     pl.tile.store(o0, [i * 16, 0], out)
 
@@ -345,7 +379,9 @@ class TestSkewCrossCorePipeline:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [i * 16, 0], [16, 64])
                     rs: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aiv(rs, split=0)
-                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e, e)
                     pl.tile.store(oi, [i * 16, 0], out)
 
@@ -364,11 +400,13 @@ class TestSkewCrossCorePipeline:
                     qa1: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [i * 16, 0], [16, 64])
                     rs1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa1, qa1)
                     pl.tile.tpush_to_aiv(rs1, split=0)
-                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e0, e0)
                     pl.tile.store(oi0, [(i - 1) * 16, 0], out)
                 # epilogue: consume(2)
-                e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[16, 64], dtype=pl.FP32, split=0)
                 oi1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e1, e1)
                 pl.tile.store(oi1, [pl.const(2, pl.INDEX) * pl.const(16, pl.INDEX), 0], out)
 
@@ -388,7 +426,9 @@ class TestSkewCrossCorePipeline:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [i * 16, 0], [16, 64])
                     rs: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aiv(rs, split=0)
-                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e, e)
                     pl.tile.store(oi, [i * 16, 0], out)
 
@@ -423,23 +463,29 @@ class TestSkewCrossCorePipeline:
                     qa5: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [(i + 2) * 16, 0], [16, 64])
                     rs5: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa5, qa5)
                     pl.tile.tpush_to_aiv(rs5, split=0)
-                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e0, e0)
                     pl.tile.store(oi0, [(i - 3) * 16, 0], out)
-                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e1, e1)
                     pl.tile.store(oi1, [(i - 2) * 16, 0], out)
-                    e2: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e2: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi2: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e2, e2)
                     pl.tile.store(oi2, [(i - 1) * 16, 0], out)
                 # epilogue: consume(3), consume(4), consume(5)
-                e3: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                e3: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[16, 64], dtype=pl.FP32, split=0)
                 oi3: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e3, e3)
                 pl.tile.store(oi3, [pl.const(3, pl.INDEX) * pl.const(16, pl.INDEX), 0], out)
-                e4: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                e4: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[16, 64], dtype=pl.FP32, split=0)
                 oi4: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e4, e4)
                 pl.tile.store(oi4, [pl.const(4, pl.INDEX) * pl.const(16, pl.INDEX), 0], out)
-                e5: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                e5: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[16, 64], dtype=pl.FP32, split=0)
                 oi5: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e5, e5)
                 pl.tile.store(oi5, [pl.const(5, pl.INDEX) * pl.const(16, pl.INDEX), 0], out)
 
@@ -460,7 +506,9 @@ class TestSkewCrossCorePipeline:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [i * 16, 0], [16, 64])
                     rs: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aiv(rs, split=0)
-                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e, e)
                     pl.tile.store(oi, [i * 16, 0], out)
 

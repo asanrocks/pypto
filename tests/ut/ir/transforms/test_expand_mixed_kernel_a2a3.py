@@ -59,7 +59,7 @@ def _op_name(stmt: ir.Stmt) -> str:
         call = stmt.value
     elif isinstance(stmt, ir.EvalStmt) and isinstance(stmt.expr, ir.Call):
         call = stmt.expr
-    if call is not None and isinstance(call.op, ir.Op):
+    if call is not None:
         return call.op.name
     return ""
 
@@ -586,7 +586,9 @@ def test_v2c_boundary_uses_nz_layout_on_a2a3():
                 slot_size=4096,
                 slot_num=2,
             )
-            x_left_mat: pl.Tile[[16, 128], pl.BF16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            x_left_mat: pl.Tile[[16, 128], pl.BF16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 128], dtype=pl.BF16, split=0
+            )
             x_left: pl.Tile[[16, 128], pl.BF16, pl.MemorySpace.Left] = pl.move(
                 x_left_mat,
                 target_memory=pl.MemorySpace.Left,
@@ -623,7 +625,9 @@ def test_v2c_boundary_uses_nz_layout_on_a2a3():
             )
             x_tile: pl.Tile[[16, 128], pl.BF16] = pl.load(x, [0, 0], [16, 128], target_memory=pl.Mem.Vec)
             pl.tpush_to_aic(x_tile, split=0)
-            z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+            z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 64], dtype=pl.FP32, split=0
+            )
             out_0_store: pl.Tensor[[16, 64], pl.FP32] = pl.store(z_vec, [0, 0], out_0)
             pl.tfree_to_aic(z_vec)
             return out_0_store
@@ -722,7 +726,9 @@ def test_c2v_boundary_preserves_vec_pop_layout_on_a2a3():
                 slot_size=4096,
                 slot_num=2,
             )
-            z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+            z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 64], dtype=pl.FP32, split=0
+            )
             out_0_store: pl.Tensor[[16, 64], pl.FP32] = pl.store(z_vec, [0, 0], out_0)
             pl.tfree_to_aic(z_vec)
             return out_0_store
@@ -827,7 +833,9 @@ def test_gm_mediated_cross_lane_store_load_gets_handshake_on_a2a3():
                 slot_size=4096,
                 slot_num=2,
             )
-            sync_tile: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+            sync_tile: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 64], dtype=pl.FP32, split=0
+            )
             pl.tfree_to_aic(sync_tile)
             chunk: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
                 scratch, [0, 0], [16, 64], target_memory=pl.MemorySpace.Vec
@@ -1169,7 +1177,9 @@ def test_split_slot_num_override_sizes_c2v_ring_on_a2a3():
                 slot_size=4096,
                 slot_num=16,
             )
-            z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+            z_vec: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 64], dtype=pl.FP32, split=0
+            )
             out_0_store: pl.Tensor[[16, 64], pl.FP32] = pl.store(z_vec, [0, 0], out_0)
             pl.tfree_to_aic(z_vec)
             return out_0_store

@@ -146,7 +146,7 @@ A `split_aiv` AIC/AIV pair arrives already in explicit per-lane form (halved
              attrs={"split": pl.SplitMode.UP_DOWN, "split_aiv": True})
 def main_aiv(self, out_0: pl.Out[pl.Tensor[[16, 128], pl.FP32]]):
     subblock_idx: pl.Scalar[pl.INDEX] = pl.tile.get_subblock_idx()
-    z_vec: pl.Tile[[8, 128], pl.FP32, pl.Mem.Vec] = pl.tpop_from_aic(split=1)
+    z_vec: pl.Tile[[8, 128], pl.FP32, pl.Mem.Vec] = pl.tpop_from_aic(shape=[8, 128], dtype=pl.FP32, split=1)
     return pl.store(z_vec, [0 + subblock_idx * 8, 0], out_0)
 ```
 

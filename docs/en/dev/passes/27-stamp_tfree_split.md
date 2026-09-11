@@ -31,12 +31,12 @@ the `tfree` call:
 
 ```text
 # before
-t = tile.tpop_from_aic(split=1, id=2)
+t = tile.tpop_from_aic(shape=[16, 16], dtype=pl.FP32, split=1, id=2)
 ...
 system.tfree_to_aic(t)
 
 # after
-t = tile.tpop_from_aic(split=1, id=2)
+t = tile.tpop_from_aic(shape=[16, 16], dtype=pl.FP32, split=1, id=2)
 ...
 system.tfree_to_aic(t, split=1, id=2)
 ```

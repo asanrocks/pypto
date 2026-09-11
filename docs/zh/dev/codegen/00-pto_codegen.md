@@ -183,8 +183,8 @@ tile 调用 `set_validshape`。
 | ---------- | -------------- | ---- |
 | `tile.tpush_to_aiv(tile, split=N[, id=I])` | `pto.tpush_to_aiv ins(%tile : type) {[id = I, ]split = N}` | Cube → Vector 推送 |
 | `tile.tpush_to_aic(tile, split=N[, id=I])` | `pto.tpush_to_aic ins(%tile : type) {[id = I, ]split = N}` | Vector → Cube 推送 |
-| `tile.tpop_from_aic(split=N[, id=I])` | `%buf = pto.tpop_from_aic {[id = I, ]split = N} -> type` | 从 Cube 管道弹出 |
-| `tile.tpop_from_aiv(split=N[, id=I])` | `%buf = pto.tpop_from_aiv {[id = I, ]split = N} -> type` | 从 Vector 管道弹出 |
+| `tile.tpop_from_aic(shape, dtype=D[, split=N][, id=I])` | `%buf = pto.tpop_from_aic {[id = I, ]split = N} -> type` | 从 Cube 管道弹出 |
+| `tile.tpop_from_aiv(shape, dtype=D[, split=N][, id=I])` | `%buf = pto.tpop_from_aiv {[id = I, ]split = N} -> type` | 从 Vector 管道弹出 |
 | `system.tfree_to_aic(tile_from_tpop[, id=I])` | `pto.tfree_from_aic {[id = I, ]split = N}` | 将消费侧槽位释放回 Cube |
 | `system.tfree_to_aiv(tile_from_tpop[, id=I])` | `pto.tfree_from_aiv {[id = I, ]split = N}` | 将消费侧槽位释放回 Vector |
 | `system.aic_initialize_pipe(...)` | `pto.aic_initialize_pipe {[id = I, ]dir_mask = D, slot_size = S[, slot_num = N][, local_slot_num = L]} (c2v_consumer_buf = %ssa : i32, v2c_consumer_buf = %ssa : i32)` | Cube 管道初始化（仅在显式设置时输出 `slot_num`/`local_slot_num`，否则由 PTOAS 取默认值） |

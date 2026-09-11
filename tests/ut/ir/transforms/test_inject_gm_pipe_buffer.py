@@ -119,7 +119,9 @@ def test_gm_pipe_injection_handles_submit_launched_group():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -155,7 +157,9 @@ def test_gm_pipe_injection_handles_submit_launched_group():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(pl.const(0, pl.INT32), pipe_buf, dir_mask=2, slot_size=512)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -225,7 +229,9 @@ def test_gm_pipe_injection_preserves_split_mode_for_a2a3_cross_core_functions():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -260,7 +266,9 @@ def test_gm_pipe_injection_preserves_split_mode_for_a2a3_cross_core_functions():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(pl.const(0, pl.INT32), pipe_buf, dir_mask=2, slot_size=512)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -394,7 +402,9 @@ def test_gm_pipe_injection_handles_nested_initialize_pipe_ops():
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             if True:
                 pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -430,7 +440,9 @@ def test_gm_pipe_injection_handles_nested_initialize_pipe_ops():
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             if True:
                 pl.aic_initialize_pipe(pl.const(0, pl.INT32), pipe_buf, dir_mask=2, slot_size=512)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -514,7 +526,9 @@ def test_gm_pipe_buffer_per_call_allocation():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -550,7 +564,9 @@ def test_gm_pipe_buffer_per_call_allocation():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(pl.const(0, pl.INT32), pipe_buf, dir_mask=2, slot_size=512)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -628,7 +644,9 @@ def test_gm_pipe_buffer_per_call_inside_for_loop():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -664,7 +682,9 @@ def test_gm_pipe_buffer_per_call_inside_for_loop():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(pl.const(0, pl.INT32), pipe_buf, dir_mask=2, slot_size=512)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -698,7 +718,8 @@ def test_gm_pipe_buffer_per_call_inside_for_loop():
             a: pl.Tensor[[16, 16], pl.FP16],
             out: pl.Out[pl.Tensor[[16, 16], pl.FP16]],
         ) -> pl.Tensor[[16, 16], pl.FP16]:
-            for b, (out_iter,) in pl.range(4, init_values=(out,)):
+            (out_iter,) = pl.intrin.carry(out)
+            for b in pl.range(4):
                 gm_pipe_buffer_0: pl.Tensor[[1], pl.FP32] = pl.tensor.create(
                     [1],
                     dtype=pl.FP32,
@@ -706,7 +727,8 @@ def test_gm_pipe_buffer_per_call_inside_for_loop():
                     manual_dep=True,
                 )
                 out_new: pl.Tensor[[16, 16], pl.FP16] = self.group_func(a, out_iter, gm_pipe_buffer_0)
-                out_yield: pl.Tensor[[16, 16], pl.FP16] = pl.yield_(out_new)
+                pl.intrin.yield_(out_new)
+            (out_yield,) = pl.intrin.leak()
             return out_yield
 
     After = _run_inject(Before)
@@ -737,7 +759,9 @@ def test_gm_pipe_buffer_per_submit_inside_manual_scope():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -773,7 +797,9 @@ def test_gm_pipe_buffer_per_submit_inside_manual_scope():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(pl.const(0, pl.INT32), pipe_buf, dir_mask=2, slot_size=512)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -850,7 +876,9 @@ def test_gm_pipe_buffer_param_direction_is_out():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated
@@ -885,7 +913,9 @@ def test_gm_pipe_buffer_param_direction_is_out():
         ) -> pl.Tensor[[16, 16], pl.FP16]:
             pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
             pl.aic_initialize_pipe(pl.const(0, pl.INT32), pipe_buf, dir_mask=2, slot_size=512)
-            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+            received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                shape=[16, 16], dtype=pl.FP16, split=0
+            )
             pl.tfree_to_aiv(received)
             updated: pl.Tensor[[16, 16], pl.FP16] = pl.store(received, [0, 0], out)
             return updated

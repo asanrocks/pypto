@@ -359,7 +359,9 @@ class TestMemRefSharing:
             def consumer(self):
                 buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=buf)
-                t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+                t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                    shape=[16, 16], dtype=pl.FP32, split=0
+                )
                 v: pl.Tile[[8, 32], pl.FP32, pl.MemorySpace.Vec] = pl.tile.reshape(t, [8, 32])
                 pl.tfree_to_aic(t)
                 out: pl.Tile[[8, 32], pl.FP32, pl.MemorySpace.Vec] = pl.exp(v)
@@ -389,7 +391,9 @@ class TestMemRefSharing:
         class Before:
             @pl.function(type=pl.FunctionType.AIV)
             def main(self) -> pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec]:
-                t: pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(split=0)
+                t: pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(
+                    shape=[16, 16], dtype=pl.FP32, split=0
+                )
                 a: pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec] = t
                 out: pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec] = pl.tile.muls(a, 1.0)
                 return out
@@ -401,7 +405,9 @@ class TestMemRefSharing:
                 mem_vec_0: pl.Ptr = pl.tile.alloc(pl.Mem.Vec, 1024)
                 # `t` (tpop result) and its alias `a` stay MemRef-less; only the
                 # ordinary consumer `out` is given a buffer.
-                t: pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(split=0)
+                t: pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(
+                    shape=[16, 16], dtype=pl.FP32, split=0
+                )
                 a: pl.Tile[[16, 16], pl.FP32, pl.Mem.Vec] = t
                 out: pl.Tile[
                     [16, 16], pl.FP32, pl.MemRef(mem_vec_0, pl.const(0, pl.INT64), 1024), pl.Mem.Vec
@@ -891,9 +897,11 @@ class TestYieldMemRef:
                 other_tile: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
                     input_tensor, [0, 0], [64, 64], target_memory=pl.Mem.Vec
                 )
-                for _i, (acc,) in pl.range(0, 4, init_values=(init_tile,)):
+                (acc,) = pl.intrin.carry(init_tile)
+                for _i in pl.range(0, 4):
                     acc_next: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.add(acc, other_tile)
-                    acc_out = pl.yield_(acc_next)
+                    pl.intrin.yield_(acc_next)
+                (acc_out,) = pl.intrin.leak()
                 result: pl.Tensor[[64, 64], pl.FP32] = pl.store(acc_out, [0, 0], output)
                 return result
 
@@ -914,13 +922,13 @@ class TestYieldMemRef:
                 other_tile: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_3, 0, 16384), pl.Mem.Vec] = (
                     pl.tile.load(input_tensor, [0, 0], [64, 64], [64, 64], target_memory=pl.Mem.Vec)
                 )
-                for _i, (acc,) in pl.range(0, 4, init_values=(init_tile,)):
+                (acc,) = pl.intrin.carry(init_tile)
+                for _i in pl.range(0, 4):
                     acc_next: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_4, 0, 16384), pl.Mem.Vec] = (
                         pl.tile.add(acc, other_tile)
                     )
-                    acc_out: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_4, 0, 16384), pl.Mem.Vec] = (
-                        pl.yield_(acc_next)
-                    )
+                    pl.intrin.yield_(acc_next)
+                (acc_out,) = pl.intrin.leak()
                 result: pl.Tensor[[64, 64], pl.FP32, pl.MemRef("mem_ddr_1", 0, 16384)] = pl.tile.store(
                     acc_out, [0, 0], output
                 )
@@ -959,10 +967,12 @@ class TestYieldMemRef:
                 init_b: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
                     input_tensor, [0, 0], [64, 64], target_memory=pl.Mem.Vec
                 )
-                for _i, (a, b) in pl.range(0, 4, init_values=(init_a, init_b)):
+                (a, b) = pl.intrin.carry(init_a, init_b)
+                for _i in pl.range(0, 4):
                     a_next: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.add(a, b)
                     b_next: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.add(b, a)
-                    a_out, b_out = pl.yield_(a_next, b_next)
+                    pl.intrin.yield_(a_next, b_next)
+                (a_out, b_out) = pl.intrin.leak()
                 result: pl.Tensor[[64, 64], pl.FP32] = pl.store(a_out, [0, 0], output)
                 return result
 
@@ -984,14 +994,16 @@ class TestYieldMemRef:
                 init_b: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_3, 0, 16384), pl.Mem.Vec] = pl.tile.load(
                     input_tensor, [0, 0], [64, 64], [64, 64], target_memory=pl.Mem.Vec
                 )
-                for _i, (a, b) in pl.range(0, 4, init_values=(init_a, init_b)):
+                (a, b) = pl.intrin.carry(init_a, init_b)
+                for _i in pl.range(0, 4):
                     a_next: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_4, 0, 16384), pl.Mem.Vec] = (
                         pl.tile.add(a, b)
                     )
                     b_next: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_5, 0, 16384), pl.Mem.Vec] = (
                         pl.tile.add(b, a)
                     )
-                    a_out, b_out = pl.yield_(a_next, b_next)
+                    pl.intrin.yield_(a_next, b_next)
+                (a_out, b_out) = pl.intrin.leak()
                 result: pl.Tensor[[64, 64], pl.FP32, pl.MemRef("mem_ddr_1", 0, 16384)] = pl.tile.store(
                     a_out, [0, 0], output
                 )
@@ -1016,12 +1028,13 @@ class TestYieldMemRef:
                     tile_a: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
                         input_tensor, [0, 0], [64, 64], target_memory=pl.Mem.Vec
                     )
-                    if_result = pl.yield_(tile_a)
+                    pl.intrin.yield_(tile_a)
                 else:
                     tile_b: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.load(
                         input_tensor, [0, 0], [64, 64], target_memory=pl.Mem.Vec
                     )
-                    if_result = pl.yield_(tile_b)
+                    pl.intrin.yield_(tile_b)
+                (if_result,) = pl.intrin.leak()
                 result: pl.Tensor[[64, 64], pl.FP32] = pl.store(if_result, [0, 0], output)
                 return result
 
@@ -1050,9 +1063,7 @@ class TestYieldMemRef:
                             target_memory=pl.Mem.Vec,
                         )
                     )
-                    if_result: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_2, 0, 16384), pl.Mem.Vec] = (
-                        pl.yield_(tile_a)
-                    )
+                    pl.intrin.yield_(tile_a)
                 else:
                     tile_b: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_3, 0, 16384), pl.Mem.Vec] = (
                         pl.tile.load(
@@ -1063,9 +1074,8 @@ class TestYieldMemRef:
                             target_memory=pl.Mem.Vec,
                         )
                     )
-                    if_result: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_2, 0, 16384), pl.Mem.Vec] = (
-                        pl.yield_(tile_b)
-                    )
+                    pl.intrin.yield_(tile_b)
+                (if_result,) = pl.intrin.leak()
                 result: pl.Tensor[[64, 64], pl.FP32, pl.MemRef("mem_ddr_1", 0, 16384)] = pl.tile.store(
                     if_result, [0, 0], output
                 )
@@ -1091,10 +1101,11 @@ class TestYieldMemRef:
                 )
                 if cond < 2:
                     alias_a: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = tile_a
-                    if_result = pl.yield_(alias_a)
+                    pl.intrin.yield_(alias_a)
                 else:
                     tile_b: pl.Tile[[64, 64], pl.FP32, pl.MemorySpace.Vec] = pl.add(tile_a, tile_a)
-                    if_result = pl.yield_(tile_b)
+                    pl.intrin.yield_(tile_b)
+                (if_result,) = pl.intrin.leak()
                 result: pl.Tensor[[64, 64], pl.FP32] = pl.store(if_result, [0, 0], output)
                 return result
 
@@ -1117,16 +1128,13 @@ class TestYieldMemRef:
                 )
                 if cond < 2:
                     alias_a: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_2, 0, 16384), pl.Mem.Vec] = tile_a
-                    if_result: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_2, 0, 16384), pl.Mem.Vec] = (
-                        pl.yield_(alias_a)
-                    )
+                    pl.intrin.yield_(alias_a)
                 else:
                     tile_b: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_3, 0, 16384), pl.Mem.Vec] = (
                         pl.tile.add(tile_a, tile_a)
                     )
-                    if_result: pl.Tile[[64, 64], pl.FP32, pl.MemRef(mem_vec_2, 0, 16384), pl.Mem.Vec] = (
-                        pl.yield_(tile_b)
-                    )
+                    pl.intrin.yield_(tile_b)
+                (if_result,) = pl.intrin.leak()
                 result: pl.Tensor[[64, 64], pl.FP32, pl.MemRef("mem_ddr_1", 0, 16384)] = pl.tile.store(
                     if_result, [0, 0], output
                 )

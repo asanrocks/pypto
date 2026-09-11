@@ -3138,24 +3138,6 @@ def set_validshape(
 # ============================================================================
 
 
-def _resolve_tpop_type(
-    result_type: _ir_core.Type | None,
-    shape: list[int] | None,
-    dtype: DataType | None,
-    memory_space: MemorySpace | None = None,
-) -> _ir_core.Type | None:
-    """Resolve the result type for a tpop op from explicit type or shape/dtype."""
-    if result_type is not None and (shape is not None or dtype is not None):
-        raise ValueError("result_type is mutually exclusive with shape/dtype")
-    if (shape is None) != (dtype is None):
-        raise ValueError("shape and dtype must both be provided or both omitted")
-    if result_type is not None:
-        return result_type
-    if shape is not None and dtype is not None:
-        return _ir_core.TileType(shape, dtype, None, None, memory_space)
-    return None
-
-
 def tpush_to_aiv(
     tile: Expr,
     *,
@@ -3239,10 +3221,9 @@ def aic_gather(tile: Expr, *, split: int, span: Span | None = None) -> Call:
 
 
 def tpop_from_aic(
+    shape: list[int],
     *,
-    result_type: _ir_core.Type | None = None,
-    shape: list[int] | None = None,
-    dtype: DataType | None = None,
+    dtype: DataType,
     split: int = 0,
     lane_stride: int | None = None,
     id: int | None = None,
@@ -3250,10 +3231,13 @@ def tpop_from_aic(
 ) -> Call:
     """Pop tile data from AIC cross-core pipe into AIV.
 
+    ``shape`` and ``dtype`` are explicit value-producer inputs. The result
+    ``TileType`` is deduced by the op registry, and the consuming-side Vec
+    memory is stamped by the registry's output-memory contract.
+
     Args:
-        result_type: Explicit result type (e.g. TileType). Mutually exclusive with shape/dtype.
-        shape: Shape of the tile to receive (alternative to result_type).
-        dtype: Data type of the tile to receive (alternative to result_type).
+        shape: Shape of the tile to receive.
+        dtype: Data type of the tile to receive.
         split: pto-isa split code (0=none, 1/2=up-down/left-right, 3/4=the same
             axes over an odd extent)
         lane_stride: Partition stride carried when a ragged boundary was
@@ -3262,46 +3246,37 @@ def tpop_from_aic(
         span: Optional source span
     """
     actual_span = _get_span_or_capture(span, frame_offset=1)
-    resolved_type = _resolve_tpop_type(result_type, shape, dtype, MemorySpace.Vec)
-    kwargs: dict[str, Any] = {"split": split}
+    kwargs: dict[str, Any] = {"dtype": dtype, "split": split}
     if lane_stride is not None:
         kwargs["lane_stride"] = lane_stride
     if id is not None:
         kwargs["id"] = id
-    if resolved_type is not None:
-        op = _ir_core.get_op("tile.tpop_from_aic")
-        return _ir_core.Call(op, [], kwargs, resolved_type, actual_span)
-    return _ir_core.create_op_call("tile.tpop_from_aic", [], kwargs, actual_span)
+    return _ir_core.create_op_call(
+        "tile.tpop_from_aic", [_to_make_tuple(shape, actual_span)], kwargs, actual_span
+    )
 
 
 def tpop_from_aiv(
+    shape: list[int],
     *,
-    result_type: _ir_core.Type | None = None,
-    shape: list[int] | None = None,
-    dtype: DataType | None = None,
+    dtype: DataType,
     split: int = 0,
     id: int | None = None,
     span: Span | None = None,
 ) -> Call:
     """Pop tile data from AIV cross-core pipe into AIC.
 
-    Args:
-        result_type: Explicit result type (e.g. TileType). Mutually exclusive with shape/dtype.
-        shape: Shape of the tile to receive (alternative to result_type).
-        dtype: Data type of the tile to receive (alternative to result_type).
-        split: Split mode (0=none, 1=up-down, 2=left-right)
-        id: Optional frontend pipe id. Omit to use PTOAS default id 0.
-        span: Optional source span
+    ``shape`` and ``dtype`` are explicit value-producer inputs. The result
+    ``TileType`` is deduced by the op registry, and the consuming-side Mat
+    memory is stamped by the registry's output-memory contract.
     """
     actual_span = _get_span_or_capture(span, frame_offset=1)
-    resolved_type = _resolve_tpop_type(result_type, shape, dtype, MemorySpace.Mat)
-    kwargs = {"split": split}
+    kwargs: dict[str, Any] = {"dtype": dtype, "split": split}
     if id is not None:
         kwargs["id"] = id
-    if resolved_type is not None:
-        op = _ir_core.get_op("tile.tpop_from_aiv")
-        return _ir_core.Call(op, [], kwargs, resolved_type, actual_span)
-    return _ir_core.create_op_call("tile.tpop_from_aiv", [], kwargs, actual_span)
+    return _ir_core.create_op_call(
+        "tile.tpop_from_aiv", [_to_make_tuple(shape, actual_span)], kwargs, actual_span
+    )
 
 
 # ============================================================================

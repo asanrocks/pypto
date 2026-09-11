@@ -135,7 +135,7 @@ def my_vector_kernel(self, ...):
     )
 
     for ...:
-        tile = pl.tpop_from_aic(split=0)       # zero-copy from pipe_buf on A5
+        tile = pl.tpop_from_aic(shape=[16, 16], dtype=pl.FP32, split=0)  # zero-copy from pipe_buf on A5
         # ... compute on tile ...
         pl.tfree_to_aic(tile)                  # release slot
 ```

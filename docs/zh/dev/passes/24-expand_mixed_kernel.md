@@ -65,8 +65,8 @@ CV 边界的跨核心数据传输通过将显式 `tile.move` 操作拆分为 `tp
 
 | 方向 | AIC 侧 | AIV 侧 |
 | ---- | ------ | ------ |
-| Cube→Vector（如 Acc→Vec） | `tpush_to_aiv(source_tile)` | `dest_var = tpop_from_aic()` |
-| Vector→Cube（如 Vec→Mat/Left/Right） | `dest_var = tpop_from_aiv()` | `tile.move` 适配 fractal 布局，然后 `tpush_to_aic(adapted_tile)` |
+| Cube→Vector（如 Acc→Vec） | `tpush_to_aiv(source_tile)` | `dest_var = tpop_from_aic(shape, dtype=...)` |
+| Vector→Cube（如 Vec→Mat/Left/Right） | `dest_var = tpop_from_aiv(shape, dtype=...)` | `tile.move` 适配 fractal 布局，然后 `tpush_to_aic(adapted_tile)` |
 
 **Fractal TileView 布局**：跨核传输 tile 的 TileView 由 `BuildCrossCoreTransferView` 根据目标内存空间计算，不同后端的映射不同：
 
@@ -121,7 +121,7 @@ AIV 半边。它保留原 push 的 kwargs —— 丢掉 `id` 会让多 pipe 程�
 
 | 生产侧（写 GM） | AIC 侧 | AIV 侧 |
 | --------------- | ------ | ------ |
-| Cube store → Vector load | `tile.store ...; tpush_to_aiv(stored_tile)` | `tok = tpop_from_aic(); tfree_to_aic(tok); tile.load ...` |
+| Cube store → Vector load | `tile.store ...; tpush_to_aiv(stored_tile)` | `tok = tpop_from_aic(shape, dtype=...); tfree_to_aic(tok); tile.load ...` |
 
 为避免死锁，仅当满足以下条件时才生成握手：(1) 该 GM 源张量恰好只有一个生产侧 store；(2) 对侧 load 位于**同一结构化作用域**（同一循环/分支，使 `tpush`/`tpop` 执行次数一致）；(3) store 先于 load。跨越不同循环或分支的配对保持不变。
 
@@ -264,13 +264,13 @@ program_expanded = expand_pass(program)
      将 FunctionType 转换为 AIC（纯 Cube）或 AIV（纯 Vector / 仅共享操作）
   4. 构建 AIC 函数体：保留 CUBE + SHARED 语句，删除 VECTOR，递归处理 MIXED 循环
      - 对于边界移动（Cube→Vector）：生成 tpush_to_aiv(source_tile)
-     - 对于边界移动（Vector→Cube）：生成 dest_var = tpop_from_aiv()，携带 fractal TileView
+     - 对于边界移动（Vector→Cube）：生成 dest_var = tpop_from_aiv(shape, dtype=...)，携带 fractal TileView
   4a. 对由算子驱动的边界（tile.aiv_shard / tile.aic_gather），根据该算子携带的
       MODE 与全宽 tile 的 extent，推导 tpush/tpop 对使用的 pto-isa split CODE
       （BoundaryTransportSplitCode -> split_axis::ShardSplitCode / GatherSplitCode）
       ——见下文“split code”
   5. 构建 AIV 函数体：对称（保留 VECTOR + SHARED，删除 CUBE）
-     - 对于边界移动（Cube→Vector）：生成 dest_var = tpop_from_aic()，携带 fractal TileView
+     - 对于边界移动（Cube→Vector）：生成 dest_var = tpop_from_aic(shape, dtype=...)，携带 fractal TileView
      - 对于边界移动（Vector→Cube）：生成 tile.move 适配 fractal 布局，然后 tpush_to_aic(adapted_tile)
   5a. 通过 BuildCrossCoreTransferView 为所有边界 tpop 结果类型和 tpush 前的 tile.move 操作分配 fractal TileView：
       - Ascend950：Left→NZ，Right→ZN，Mat/Vec→保持原始
@@ -407,7 +407,7 @@ class After:
     @pl.function(type=pl.FunctionType.AIV)
     def compute_incore_0_aiv(self, x, y, out_0) -> pl.Tensor[[16, 128], pl.FP32]:
         # tpop 结果携带 fractal TileView（Vec 目标 → 保持原始布局）
-        z_vec: pl.Tile[[16, 128], pl.FP32, pl.Mem.Vec, pl.TileView()] = pl.tile.tpop_from_aic(split=0)
+        z_vec: pl.Tile[[16, 128], pl.FP32, pl.Mem.Vec, pl.TileView()] = pl.tile.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0)
         out_0 = pl.store(z_vec, [0, 0], out_0)           # VECTOR 操作
         pl.system.tfree_to_aic(z_vec)                    # 释放已消费的跨核槽位
         return out_0

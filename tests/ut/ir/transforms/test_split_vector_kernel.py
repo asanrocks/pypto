@@ -79,7 +79,7 @@ class TestSplitVectorKernelNoSplitPassthrough:
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                    shape=[16, 128], dtype=pl.FP32, split=0
                 )
                 pl.tfree_to_aic(z_vec)
                 out_0_store: pl.Tensor[[16, 128], pl.FP32] = pl.store(z_vec, [0, 0], out_0)
@@ -238,15 +238,18 @@ class TestSplitVectorKernelNoSplitA2A3:
                     pl.tpush_to_aic(summed, split=0)
                     return out
                 else:
-                    a_tile_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
-                    b_tile_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
-                    summed_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.add(a_tile_lane1, b_tile_lane1)
+                    a_tile_lane1 = pl.intrin.transmute(
+                        pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
+                    b_tile_lane1 = pl.intrin.transmute(
+                        pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
+                    summed_lane1 = pl.intrin.transmute(
+                        pl.add(a_tile_lane1, b_tile_lane1),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
                     pl.tpush_to_aic(summed_lane1, split=0)
                     return out
 
@@ -296,9 +299,10 @@ class TestSplitVectorKernelNoSplitA2A3:
                     pl.tpush_to_aic(loaded, split=0)
                     return out
                 else:
-                    loaded_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
+                    loaded_lane1 = pl.intrin.transmute(
+                        pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
                     pl.tpush_to_aic(loaded_lane1, split=0)
                     return out
 
@@ -358,12 +362,14 @@ class TestSplitVectorKernelNoSplitA2A3:
                     # Both the load and the slice collapse to empty creates; the
                     # slice result is a dynamic-valid empty [16, 8] tile, never a
                     # static v_row=0 / v_col=0 subview.
-                    loaded_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
-                    sliced_lane1: pl.Tile[
-                        [16, 8], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tile.create([16, 8], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
+                    loaded_lane1 = pl.intrin.transmute(
+                        pl.tile.create([16, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
+                    sliced_lane1 = pl.intrin.transmute(
+                        pl.tile.create([16, 8], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec),
+                        pl.Tile[[16, 8], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
                     pl.tpush_to_aic(sliced_lane1, split=0)
                     return out
 
@@ -425,12 +431,14 @@ class TestSplitVectorKernelNoSplitA2A3:
                 else:
                     # Lane 1 keeps no transpose at all -- the hazard the rewrite
                     # avoids -- and its empty tile carries the TRANSPOSED shape.
-                    loaded_lane1: pl.Tile[
-                        [16, 8], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tile.create([16, 8], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
-                    transposed_lane1: pl.Tile[
-                        [8, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tile.create([8, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
+                    loaded_lane1 = pl.intrin.transmute(
+                        pl.tile.create([16, 8], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec),
+                        pl.Tile[[16, 8], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
+                    transposed_lane1 = pl.intrin.transmute(
+                        pl.tile.create([8, 16], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec),
+                        pl.Tile[[8, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
                     pl.tpush_to_aic(transposed_lane1, split=0)
                     return out
 
@@ -472,9 +480,10 @@ class TestSplitVectorKernelNoSplitA2A3:
                     pl.tpush_to_aic(zero_tile, split=0)
                     return out
                 else:
-                    zero_tile_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tile.full([16, 16], dtype=pl.FP32, value=0.0)
+                    zero_tile_lane1 = pl.intrin.transmute(
+                        pl.tile.full([16, 16], dtype=pl.FP32, value=0.0),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
                     pl.tpush_to_aic(zero_tile_lane1, split=0)
                     return out
 
@@ -493,8 +502,9 @@ class TestSplitVectorKernelNoSplitA2A3:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
-                z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                z_vec = pl.intrin.transmute(
+                    pl.tpop_from_aic(shape=[16, 16], dtype=pl.FP32, split=0),
+                    pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()],
                 )
                 pl.tfree_to_aic(z_vec)
                 updated: pl.Tensor[[16, 16], pl.FP32] = pl.store(z_vec, [0, 0], out)
@@ -511,14 +521,17 @@ class TestSplitVectorKernelNoSplitA2A3:
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
                 if subblock_idx == 0:
-                    z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+                    z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                        shape=[16, 16], dtype=pl.FP32, split=0
+                    )
                     pl.tfree_to_aic(z_vec)
                     updated: pl.Tensor[[16, 16], pl.FP32] = pl.store(z_vec, [0, 0], out)
                     return updated
                 else:
-                    z_vec_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tpop_from_aic(split=0)
+                    z_vec_lane1 = pl.intrin.transmute(
+                        pl.tpop_from_aic(shape=[16, 16], dtype=pl.FP32, split=0),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
                     pl.tfree_to_aic(z_vec_lane1)
                     updated_lane1: pl.Tensor[[16, 16], pl.FP32] = out
                     return out
@@ -538,8 +551,9 @@ class TestSplitVectorKernelNoSplitA2A3:
             ) -> pl.Tensor[[16, 16], pl.FP32]:
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
-                z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=0
+                z_vec = pl.intrin.transmute(
+                    pl.tpop_from_aic(shape=[16, 16], dtype=pl.FP32, split=0),
+                    pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()],
                 )
                 incremented: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.add(z_vec, 1.0)
                 pl.tfree_to_aic(z_vec)
@@ -557,18 +571,22 @@ class TestSplitVectorKernelNoSplitA2A3:
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
                 if subblock_idx == 0:
-                    z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+                    z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                        shape=[16, 16], dtype=pl.FP32, split=0
+                    )
                     incremented: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.add(z_vec, 1.0)
                     pl.tfree_to_aic(z_vec)
                     updated: pl.Tensor[[16, 16], pl.FP32] = pl.store(incremented, [0, 0], out)
                     return updated
                 else:
-                    z_vec_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tpop_from_aic(split=0)
-                    incremented_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.add(z_vec_lane1, 1.0)
+                    z_vec_lane1 = pl.intrin.transmute(
+                        pl.tpop_from_aic(shape=[16, 16], dtype=pl.FP32, split=0),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
+                    incremented_lane1 = pl.intrin.transmute(
+                        pl.add(z_vec_lane1, 1.0),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
                     pl.tfree_to_aic(z_vec_lane1)
                     updated_lane1: pl.Tensor[[16, 16], pl.FP32] = out
                     return out
@@ -591,13 +609,16 @@ class TestSplitVectorKernelNoSplitA2A3:
                 acc: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tile.full(
                     [16, 16], dtype=pl.FP32, value=0.0
                 )
-                for kb, (acc_iter,) in pl.range(4, init_values=(acc,)):
-                    z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                        split=0
+                (acc_iter,) = pl.intrin.carry(acc)
+                for kb in pl.range(4):
+                    z_vec = pl.intrin.transmute(
+                        pl.tpop_from_aic(shape=[16, 16], dtype=pl.FP32, split=0),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()],
                     )
                     next_acc: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.add(acc_iter, z_vec)
                     pl.tfree_to_aic(z_vec)
-                    acc_final: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.yield_(next_acc)
+                    pl.intrin.yield_(next_acc)
+                (acc_final,) = pl.intrin.leak()
                 incremented: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.add(acc_final, 1.0)
                 updated: pl.Tensor[[16, 16], pl.FP32] = pl.store(incremented, [0, 0], out)
                 return updated
@@ -616,32 +637,40 @@ class TestSplitVectorKernelNoSplitA2A3:
                     acc: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tile.full(
                         [16, 16], dtype=pl.FP32, value=0.0
                     )
-                    for kb, (acc_iter,) in pl.range(4, init_values=(acc,)):
-                        z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+                    (acc_iter,) = pl.intrin.carry(acc)
+                    for kb in pl.range(4):
+                        z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                            shape=[16, 16], dtype=pl.FP32, split=0
+                        )
                         next_acc: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.add(acc_iter, z_vec)
                         pl.tfree_to_aic(z_vec)
-                        acc_final: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.yield_(next_acc)
+                        pl.intrin.yield_(next_acc)
+                    (acc_final,) = pl.intrin.leak()
                     incremented: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.add(acc_final, 1.0)
                     updated: pl.Tensor[[16, 16], pl.FP32] = pl.store(incremented, [0, 0], out)
                     return updated
                 else:
-                    acc_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.tile.full([16, 16], dtype=pl.FP32, value=0.0)
-                    for kb_lane1, (acc_iter_lane1,) in pl.range(4, init_values=(acc_lane1,)):
-                        z_vec_lane1: pl.Tile[
-                            [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                        ] = pl.tpop_from_aic(split=0)
-                        next_acc_lane1: pl.Tile[
-                            [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                        ] = pl.add(acc_iter_lane1, z_vec_lane1)
+                    acc_lane1 = pl.intrin.transmute(
+                        pl.tile.full([16, 16], dtype=pl.FP32, value=0.0),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
+                    (acc_iter_lane1,) = pl.intrin.carry(acc_lane1)
+                    for kb_lane1 in pl.range(4):
+                        z_vec_lane1 = pl.intrin.transmute(
+                            pl.tpop_from_aic(shape=[16, 16], dtype=pl.FP32, split=0),
+                            pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                        )
+                        next_acc_lane1 = pl.intrin.transmute(
+                            pl.add(acc_iter_lane1, z_vec_lane1),
+                            pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                        )
                         pl.tfree_to_aic(z_vec_lane1)
-                        acc_final_lane1: pl.Tile[
-                            [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                        ] = pl.yield_(next_acc_lane1)
-                    incremented_lane1: pl.Tile[
-                        [16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])
-                    ] = pl.add(acc_final_lane1, 1.0)
+                        pl.intrin.yield_(next_acc_lane1)
+                    (acc_final_lane1,) = pl.intrin.leak()
+                    incremented_lane1 = pl.intrin.transmute(
+                        pl.add(acc_final_lane1, 1.0),
+                        pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView(valid_shape=[0, 0])],
+                    )
                     updated_lane1: pl.Tensor[[16, 16], pl.FP32] = out
                     return out
 
@@ -664,16 +693,17 @@ class TestSplitVectorKernelNoSplitA2A3:
                 acc: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tile.full(
                     [16, 16], dtype=pl.FP32, value=0.0
                 )
-                count: pl.Scalar[pl.INDEX] = 0
-                for acc_iter, count_iter in pl.while_(init_values=(acc, count)):
-                    pl.cond(count_iter < 4)
+                count: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                (acc_iter, count_iter) = pl.intrin.carry(acc, count)
+                while count_iter < 4:
                     z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                        split=0
+                        shape=[16, 16], dtype=pl.FP32, split=0
                     )
                     next_acc: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.add(acc_iter, z_vec)
                     next_count: pl.Scalar[pl.INDEX] = count_iter + 1
                     pl.tfree_to_aic(z_vec)
-                    acc_final, count_final = pl.yield_(next_acc, next_count)
+                    pl.intrin.yield_(next_acc, next_count)
+                (acc_final, count_final) = pl.intrin.leak()
                 incremented: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.add(acc_final, 1.0)
                 updated: pl.Tensor[[16, 16], pl.FP32] = pl.store(incremented, [0, 0], out)
                 return updated
@@ -806,7 +836,9 @@ class TestSplitVectorKernelExplicitSplitAivBypass:
                 subblock_idx: pl.Scalar[pl.INDEX] = pl.tile.get_subblock_idx()
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
-                z_vec: pl.Tile[[8, 128], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=1)
+                z_vec: pl.Tile[[8, 128], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                    shape=[8, 128], dtype=pl.FP32, split=1
+                )
                 pl.tfree_to_aic(z_vec)
                 out_0_store: pl.Tensor[[16, 128], pl.FP32] = pl.store(z_vec, [0 + subblock_idx * 8, 0], out_0)
                 return out_0_store
@@ -865,7 +897,7 @@ class TestSplitVectorKernelStandaloneSetValidshape:
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=1
+                    shape=[16, 128], dtype=pl.FP32, split=1
                 )
                 pl.tfree_to_aic(z_vec)
                 narrowed: pl.Tile[
@@ -898,7 +930,9 @@ class TestSplitVectorKernelStandaloneSetValidshape:
                 subblock_idx: pl.Scalar[pl.INDEX] = pl.tile.get_subblock_idx()
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
-                z_vec: pl.Tile[[8, 128], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=1)
+                z_vec: pl.Tile[[8, 128], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                    shape=[8, 128], dtype=pl.FP32, split=1
+                )
                 pl.tfree_to_aic(z_vec)
                 narrowed: pl.Tile[
                     [8, 128],
@@ -942,7 +976,7 @@ class TestSplitVectorKernelStandaloneSetValidshape:
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
                 z_vec: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=1
+                    shape=[16, 128], dtype=pl.FP32, split=1
                 )
                 pl.tfree_to_aic(z_vec)
                 narrowed: pl.Tile[
@@ -975,14 +1009,21 @@ class TestSplitVectorKernelStandaloneSetValidshape:
                 subblock_idx: pl.Scalar[pl.INDEX] = pl.tile.get_subblock_idx()
                 slot_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=slot_buf)
-                z_vec: pl.Tile[[8, 128], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=1)
+                z_vec: pl.Tile[[8, 128], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                    shape=[8, 128], dtype=pl.FP32, split=1
+                )
                 pl.tfree_to_aic(z_vec)
-                narrowed: pl.Tile[
-                    [8, 128],
-                    pl.FP32,
-                    pl.MemorySpace.Vec,
-                    pl.TileView(valid_shape=[pl.min(pl.max(5, subblock_idx * 8) - subblock_idx * 8, 8), 64]),
-                ] = pl.tile.set_validshape(z_vec, 5, 64)
+                narrowed = pl.intrin.transmute(
+                    pl.tile.set_validshape(z_vec, 5, 64),
+                    pl.Tile[
+                        [8, 128],
+                        pl.FP32,
+                        pl.MemorySpace.Vec,
+                        pl.TileView(
+                            valid_shape=[pl.min(pl.max(5, subblock_idx * 8) - subblock_idx * 8, 8), 64]
+                        ),
+                    ],
+                )
                 out_0_store: pl.Tensor[[16, 128], pl.FP32] = pl.store(
                     narrowed, [0 + subblock_idx * 8, 0], out_0
                 )

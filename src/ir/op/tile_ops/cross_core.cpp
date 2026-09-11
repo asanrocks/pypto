@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "pypto/core/any_cast.h"
+#include "pypto/core/dtype.h"
 #include "pypto/core/logging.h"
 #include "pypto/ir/core_affinity_kind.h"
 #include "pypto/ir/expr.h"
@@ -39,6 +40,50 @@ namespace {
 TypePtr DeduceUnknownType(const std::vector<ExprPtr>& args,
                           const std::vector<std::pair<std::string, std::any>>& kwargs) {
   return GetUnknownType();
+}
+
+// Tpop is a value producer: its result type comes from the explicit shape
+// operand and dtype attribute, never from the destination annotation. The
+// consuming-side memory is stamped by the op registration below.
+TypePtr DeduceTpopTileType(const std::vector<ExprPtr>& args,
+                           const std::vector<std::pair<std::string, std::any>>& kwargs,
+                           const std::string& op_name) {
+  CHECK(args.size() == 1) << "The operator " << op_name << " requires exactly 1 shape argument, but got "
+                          << args.size();
+
+  DataType dtype{};
+  bool has_dtype = false;
+  for (const auto& [key, value] : kwargs) {
+    if (key == "dtype") {
+      dtype = AnyCast<DataType>(value, "kwarg key: dtype");
+      has_dtype = true;
+      break;
+    }
+  }
+  CHECK(has_dtype) << "The operator " << op_name << " requires a 'dtype' attribute";
+
+  auto shape_tuple = As<MakeTuple>(args[0]);
+  CHECK(shape_tuple) << "The operator " << op_name
+                     << " requires the shape argument to be a MakeTuple expression with static "
+                        "shape values, but got "
+                     << args[0]->TypeName();
+
+  std::vector<ExprPtr> shape;
+  shape.reserve(shape_tuple->elements_.size());
+  for (size_t i = 0; i < shape_tuple->elements_.size(); ++i) {
+    auto const_int = As<ConstInt>(shape_tuple->elements_[i]);
+    CHECK(const_int) << "The operator " << op_name << " shape element " << i
+                     << " must be a compile-time constant (ConstInt), but got "
+                     << shape_tuple->elements_[i]->TypeName();
+    CHECK(const_int->value_ > 0) << "The operator " << op_name << " shape element " << i
+                                 << " must be positive, got " << const_int->value_;
+    shape.push_back(shape_tuple->elements_[i]);
+  }
+  CHECK(!shape.empty()) << "The operator " << op_name << " requires non-empty shape";
+
+  TileView tile_view;
+  tile_view.valid_shape = shape;
+  return std::make_shared<TileType>(std::move(shape), dtype, std::nullopt, std::move(tile_view));
 }
 
 // Read the required "split" int attr shared by the split-axis reshape ops
@@ -468,14 +513,18 @@ REGISTER_OP("tile.tpop_from_aic")
     .set_op_category("CrossCoreOp")
     .set_core_affinity(core_affinity::CoreAffinity::VECTOR)
     .set_cross_core_role(core_affinity::CrossCoreRole::TPop)
-    .no_argument()
+    .add_argument("shape", "Shape dimensions (TupleType of ScalarType(INT64))")
+    .set_attr<DataType>("dtype")
     .set_attr<int>("split")
     // Optional partition stride (see tile.aiv_shard); consumed by the torch
     // reference runtime, ignored by PTO codegen.
     .set_attr<int>("lane_stride")
     .set_attr<int>("id")
-    .no_memory_spec()
-    .f_deduce_type(DeduceUnknownType);
+    .set_output_memory(MemorySpace::Vec)
+    .f_deduce_type([](const std::vector<ExprPtr>& args,
+                      const std::vector<std::pair<std::string, std::any>>& kwargs) {
+      return DeduceTpopTileType(args, kwargs, "tile.tpop_from_aic");
+    });
 
 // Pop tile data from AIV (into AIC)
 REGISTER_OP("tile.tpop_from_aiv")
@@ -483,11 +532,15 @@ REGISTER_OP("tile.tpop_from_aiv")
     .set_op_category("CrossCoreOp")
     .set_core_affinity(core_affinity::CoreAffinity::CUBE)
     .set_cross_core_role(core_affinity::CrossCoreRole::TPop)
-    .no_argument()
+    .add_argument("shape", "Shape dimensions (TupleType of ScalarType(INT64))")
+    .set_attr<DataType>("dtype")
     .set_attr<int>("split")
     .set_attr<int>("id")
-    .no_memory_spec()
-    .f_deduce_type(DeduceUnknownType);
+    .set_output_memory(MemorySpace::Mat)
+    .f_deduce_type([](const std::vector<ExprPtr>& args,
+                      const std::vector<std::pair<std::string, std::any>>& kwargs) {
+      return DeduceTpopTileType(args, kwargs, "tile.tpop_from_aiv");
+    });
 
 // ============================================================================
 // Split-axis reshape ops (aiv_shard / aic_gather)

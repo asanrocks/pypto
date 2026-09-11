@@ -36,8 +36,7 @@ def _setup_backend():
 def _generate_default_mlir(program_cls) -> str:
     pm = PassManager.get_strategy(OptimizationStrategy.Default)
     program = pm.run_passes(program_cls)
-    result = PTOCodegen().generate(program)
-    return result if isinstance(result, str) else "".join(result.values())
+    return PTOCodegen().generate(program)
 
 
 def _function_body(mlir: str, func_name: str) -> str:
@@ -77,7 +76,9 @@ class TpopReshapeView:
         pl.tpush_to_aic(tile_a, split=0)
 
         # Popped tile: lives in the reserved C2V slot, no general-pool address.
-        t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+        t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+            shape=[16, 16], dtype=pl.FP32, split=0
+        )
 
         v: pl.Tile[[256], pl.FP32, pl.MemorySpace.Vec] = pl.reshape(t, [256])
         pl.tfree_to_aic(t)
@@ -94,7 +95,9 @@ class TpopReshapeView:
         pl.aic_initialize_pipe(
             dir_mask=3, slot_size=1024, c2v_consumer_buf=c2v_peer, v2c_consumer_buf=v2c_buf
         )
-        received: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+        received: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+            shape=[16, 16], dtype=pl.FP32, split=0
+        )
         pl.tpush_to_aiv(received, split=0)
         pl.tfree_to_aiv(received)
 
@@ -147,7 +150,9 @@ class TpopTransposeView:
         pl.tpush_to_aic(tile_a, split=0)
 
         # Popped tile: lives in the reserved C2V slot, no general-pool address.
-        t: pl.Tile[[16, 32], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+        t: pl.Tile[[16, 32], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+            shape=[16, 32], dtype=pl.FP32, split=0
+        )
 
         # Zero-copy NZ<->ZN reinterpret of the popped tile (DSL-exposed op).
         vt: pl.Tile[[32, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tile.transpose_view(t)
@@ -164,7 +169,9 @@ class TpopTransposeView:
         pl.aic_initialize_pipe(
             dir_mask=3, slot_size=1024, c2v_consumer_buf=c2v_peer, v2c_consumer_buf=v2c_buf
         )
-        received: pl.Tile[[16, 32], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+        received: pl.Tile[[16, 32], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+            shape=[16, 32], dtype=pl.FP32, split=0
+        )
         pl.tpush_to_aiv(received, split=0)
         pl.tfree_to_aiv(received)
 

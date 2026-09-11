@@ -735,9 +735,18 @@ CallPtr CreateTpush(const std::string& op_name, const ExprPtr& tile, const Span&
 
 CallPtr CreateTpop(const std::string& op_name, const TypePtr& result_type, const Span& span,
                    const std::vector<std::pair<std::string, std::any>>& kwargs = {}) {
-  auto op = OpRegistry::GetInstance().GetOp(op_name);
   auto effective_kwargs = kwargs.empty() ? MakeSplitKwargs() : kwargs;
-  return std::make_shared<Call>(op, std::vector<ExprPtr>{}, std::move(effective_kwargs), result_type, span);
+  std::vector<ExprPtr> args;
+  if (auto tt = std::dynamic_pointer_cast<const TileType>(result_type)) {
+    args.push_back(std::make_shared<MakeTuple>(tt->shape_, span));
+    effective_kwargs.emplace_back("dtype", std::any(tt->dtype_));
+  }
+
+  // Let the registry derive the producer type from shape/dtype. Preserve the
+  // boundary TileView on the returned Call because the deducer intentionally
+  // only derives the physical shape and full valid region.
+  auto call = OpRegistry::GetInstance().Create(op_name, args, effective_kwargs, span);
+  return std::make_shared<Call>(call->op_, call->args_, call->kwargs_, result_type, call->span_);
 }
 
 CallPtr CreateMove(const ExprPtr& tile, MemorySpace target_memory, const TypePtr& result_type,

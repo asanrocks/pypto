@@ -22,9 +22,9 @@ class TestSystemOpsParsing:
     def test_sync_src_round_trip(self):
         """Test round-trip for pl.system.sync_src."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.sync_src(set_pipe=pl.PipeType.MTE2, wait_pipe=pl.PipeType.V, event_id=0)
                 return x
@@ -42,9 +42,9 @@ class TestSystemOpsParsing:
     def test_sync_dst_round_trip(self):
         """Test round-trip for pl.system.sync_dst."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.sync_dst(set_pipe=pl.PipeType.MTE2, wait_pipe=pl.PipeType.V, event_id=0)
                 return x
@@ -59,9 +59,9 @@ class TestSystemOpsParsing:
     def test_cross_core_sync_static_round_trip(self):
         """Static cross-core event ids and pipe enums survive Python printing."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.sync_set(event_id=3, pipe=pl.PipeType.MTE3, ffts_mode=1)
                 pl.system.sync_wait(event_id=3, pipe=pl.PipeType.MTE2)
@@ -77,9 +77,9 @@ class TestSystemOpsParsing:
     def test_set_ffts_round_trip(self):
         """The A3 FFTS workspace setup survives Python printing and reparsing."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def main(
                 self,
                 ffts_workspace: pl.Tensor[[256], pl.INT64],
@@ -98,9 +98,9 @@ class TestSystemOpsParsing:
     def test_cross_core_sync_dynamic_round_trip(self):
         """An index SSA event id is printed as the dynamic sync operand."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def main(
                 self, x: pl.Tensor[[64], pl.FP32], event_id: pl.Scalar[pl.INDEX]
             ) -> pl.Tensor[[64], pl.FP32]:
@@ -118,9 +118,9 @@ class TestSystemOpsParsing:
     def test_bar_v_round_trip(self):
         """Test round-trip for pl.system.bar_v."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.bar_v()
                 return x
@@ -135,9 +135,9 @@ class TestSystemOpsParsing:
     def test_bar_m_round_trip(self):
         """Test round-trip for pl.system.bar_m."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.bar_m()
                 return x
@@ -152,9 +152,9 @@ class TestSystemOpsParsing:
     def test_bar_all_round_trip(self):
         """Test round-trip for pl.system.bar_all."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.bar_all()
                 return x
@@ -169,9 +169,9 @@ class TestSystemOpsParsing:
     def test_fence_round_trip(self):
         """Test round-trip for pl.system.fence."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.fence()
                 return x
@@ -186,9 +186,9 @@ class TestSystemOpsParsing:
     def test_cacheinvalid_round_trip_scalar(self):
         """Round-trip for the scalar-write (all-ones shapes) form."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.cacheinvalid(x, [1], [4])
                 return x
@@ -203,9 +203,9 @@ class TestSystemOpsParsing:
     def test_cacheinvalid_round_trip_region(self):
         """Round-trip for the partition-view (region) form."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
                 pl.system.cacheinvalid(x, [16, 16], [0, 0])
                 return x
@@ -220,9 +220,9 @@ class TestSystemOpsParsing:
     def test_cacheinvalid_round_trip_whole_gm(self):
         """Round-trip for the no-argument (whole-GM) form."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
                 pl.system.cacheinvalid()
                 return x
@@ -274,9 +274,9 @@ class TestSystemOpsParsing:
     def test_syncall_round_trip(self):
         """Test round-trip for pl.system.syncall with an explicit core_type."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.syncall(core_type=pl.KernelType.AIV)
                 return x
@@ -291,9 +291,9 @@ class TestSystemOpsParsing:
     def test_syncall_default_core_type_round_trip(self):
         """Test round-trip for pl.system.syncall with the default core_type."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.syncall()
                 return x
@@ -325,9 +325,9 @@ class TestSystemOpsParsing:
     def test_syncall_soft_round_trip(self):
         """Round-trip for the soft (GM-polling) form of pl.system.syncall."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def main(
                 self,
                 x: pl.Tensor[[512, 128], pl.FP32],
@@ -455,9 +455,9 @@ class TestSystemOpsParsing:
     def test_multiple_system_ops_round_trip(self):
         """Test round-trip with multiple system ops in a single function."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.sync_src(set_pipe=pl.PipeType.MTE2, wait_pipe=pl.PipeType.V, event_id=0)
                 pl.system.bar_v()
@@ -478,9 +478,9 @@ class TestSystemOpsParsing:
     def test_sync_with_different_pipe_types(self):
         """Test sync ops with various PipeType enum values."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function
+            @pl.function_parser
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 pl.system.sync_src(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.M, event_id=1)
                 pl.system.sync_dst(set_pipe=pl.PipeType.MTE3, wait_pipe=pl.PipeType.S, event_id=2)
@@ -505,9 +505,9 @@ class TestCrossCoreParsing:
         program_text = f"""\
 import pypto.language as pl
 
-@pl.program
+@pl.program_parser
 class test_program:
-    @pl.function(type=pl.FunctionType.AIC)
+    @pl.function_parser(type=pl.FunctionType.AIC)
     def kernel(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
         {stmt_code}
         return x
@@ -572,9 +572,9 @@ class test_program:
     def test_tpush_to_aiv_round_trip(self):
         """Test round-trip for pl.tile.tpush_to_aiv with tile param."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIC)
+            @pl.function_parser(type=pl.FunctionType.AIC)
             def kernel(self, t: pl.Tile[[64], pl.FP32]) -> pl.Tile[[64], pl.FP32]:
                 pl.tile.tpush_to_aiv(t, split=0)
                 return t
@@ -588,9 +588,9 @@ class test_program:
     def test_tpush_to_aic_round_trip(self):
         """Test round-trip for pl.tile.tpush_to_aic with tile param."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def kernel(self, t: pl.Tile[[64], pl.FP32]) -> pl.Tile[[64], pl.FP32]:
                 pl.tile.tpush_to_aic(t, split=0)
                 return t
@@ -601,13 +601,13 @@ class test_program:
         ir.assert_structural_equal(Before, reparsed)
 
     def test_tpop_from_aic_round_trip(self):
-        """Test round-trip for pl.tile.tpop_from_aic (zero-arg op)."""
+        """Test round-trip for pl.tile.tpop_from_aic."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def kernel(self) -> pl.Tile[[64], pl.FP32]:
-                received: pl.Tile[[64], pl.FP32] = pl.tile.tpop_from_aic()
+                received: pl.Tile[[64], pl.FP32] = pl.tile.tpop_from_aic(shape=[64], dtype=pl.FP32)
                 return received
 
         printed = Before.as_python()
@@ -616,13 +616,13 @@ class test_program:
         ir.assert_structural_equal(Before, reparsed)
 
     def test_tpop_from_aiv_round_trip(self):
-        """Test round-trip for pl.tile.tpop_from_aiv (zero-arg op)."""
+        """Test round-trip for pl.tile.tpop_from_aiv."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIC)
+            @pl.function_parser(type=pl.FunctionType.AIC)
             def kernel(self) -> pl.Tile[[64], pl.FP32]:
-                received: pl.Tile[[64], pl.FP32] = pl.tile.tpop_from_aiv()
+                received: pl.Tile[[64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[64], dtype=pl.FP32)
                 return received
 
         printed = Before.as_python()
@@ -633,9 +633,9 @@ class test_program:
     def test_short_alias_tpush_to_aic(self):
         """Test pl.tpush_to_aic short alias for pl.tile.tpush_to_aic."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def kernel(self, t: pl.Tile[[64], pl.FP32]) -> pl.Tile[[64], pl.FP32]:
                 pl.tpush_to_aic(t, split=0)
                 return t
@@ -648,11 +648,11 @@ class test_program:
     def test_short_alias_tpop_from_aic(self):
         """Test pl.tpop_from_aic short alias for pl.tile.tpop_from_aic."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def kernel(self) -> pl.Tile[[64], pl.FP32]:
-                received: pl.Tile[[64], pl.FP32] = pl.tpop_from_aic()
+                received: pl.Tile[[64], pl.FP32] = pl.tpop_from_aic(shape=[64], dtype=pl.FP32)
                 return received
 
         printed = Before.as_python()
@@ -679,9 +679,9 @@ class test_program:
     def test_short_alias_tpush_to_aiv(self):
         """Test pl.tpush_to_aiv short alias."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIC)
+            @pl.function_parser(type=pl.FunctionType.AIC)
             def kernel(self, t: pl.Tile[[64], pl.FP32]) -> pl.Tile[[64], pl.FP32]:
                 pl.tpush_to_aiv(t, split=0)
                 return t
@@ -694,11 +694,11 @@ class test_program:
     def test_short_alias_tpop_from_aiv(self):
         """Test pl.tpop_from_aiv short alias."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIC)
+            @pl.function_parser(type=pl.FunctionType.AIC)
             def kernel(self) -> pl.Tile[[64], pl.FP32]:
-                received: pl.Tile[[64], pl.FP32] = pl.tpop_from_aiv()
+                received: pl.Tile[[64], pl.FP32] = pl.tpop_from_aiv(shape=[64], dtype=pl.FP32)
                 return received
 
         printed = Before.as_python()
@@ -727,9 +727,9 @@ class test_program:
     def test_function_type_aic_round_trip(self):
         """Test round-trip for @pl.function(type=pl.FunctionType.AIC) decorator."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIC)
+            @pl.function_parser(type=pl.FunctionType.AIC)
             def aic_kernel(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
@@ -741,9 +741,9 @@ class test_program:
     def test_function_type_aiv_round_trip(self):
         """Test round-trip for @pl.function(type=pl.FunctionType.AIV) decorator."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.AIV)
+            @pl.function_parser(type=pl.FunctionType.AIV)
             def aiv_kernel(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 
@@ -755,9 +755,9 @@ class test_program:
     def test_function_type_group_round_trip(self):
         """Test round-trip for @pl.function(type=pl.FunctionType.Group) decorator."""
 
-        @pl.program
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.Group)
+            @pl.function_parser(type=pl.FunctionType.Group)
             def group_func(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 return x
 

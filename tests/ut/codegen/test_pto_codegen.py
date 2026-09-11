@@ -1850,7 +1850,7 @@ class TestGenerateKernelWrapper:
                 pipe_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=pipe_buf)
                 z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=1
+                    shape=[16, 16], dtype=pl.FP32, split=1
                 )
                 scaled: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tile.muls(z_vec, 2.0)
                 pl.tfree_to_aic(z_vec)
@@ -1914,7 +1914,7 @@ class TestGenerateKernelWrapper:
                 pipe_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=pipe_buf)
                 popped: pl.Tile[[8, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=1
+                    shape=[8, 16], dtype=pl.FP32, split=1
                 )
                 pl.tfree_to_aic(popped)
 
@@ -1942,7 +1942,7 @@ class TestGenerateKernelWrapper:
                 pipe_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=pipe_buf)
                 popped: pl.Tile[[8, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=1
+                    shape=[8, 16], dtype=pl.FP32, split=1
                 )
                 pl.tfree_to_aic(popped)
 
@@ -1973,13 +1973,13 @@ class TestGenerateKernelWrapper:
                     slot_num=4,
                 )
                 first: pl.Tile[[16, 64], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=1
+                    shape=[16, 64], dtype=pl.FP32, split=1
                 )
                 reply: pl.Tile[[16, 64], pl.FP32] = pl.tile.muls(first, 2.0)
                 pl.tpush_to_aic(reply, split=1)
                 pl.tfree_to_aic(first)
                 second: pl.Tile[[16, 128], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=1
+                    shape=[16, 128], dtype=pl.FP32, split=1
                 )
                 pl.tfree_to_aic(second)
 
@@ -2026,7 +2026,7 @@ AICORE void split_vec() {
                 pipe_buf = pl.reserve_buffer(name="pipe", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(pipe_buf, pipe_buf, dir_mask=3, slot_size=1024)
                 popped: pl.Tile[[8, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=1
+                    shape=[8, 16], dtype=pl.FP32, split=1
                 )
                 produced: pl.Tile[[8, 16], pl.BF16] = pl.tile.cast(popped, target_type=pl.BF16)
                 pl.tpush_to_aic(produced, split=1)
@@ -2063,7 +2063,7 @@ AICORE void split_vec() {
                 pipe_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=pipe_buf)
                 z_vec: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec, pl.TileView()] = pl.tpop_from_aic(
-                    split=1
+                    shape=[16, 16], dtype=pl.FP32, split=1
                 )
                 scaled: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tile.muls(z_vec, 2.0)
                 pl.tfree_to_aic(z_vec)
@@ -2508,11 +2508,13 @@ def test_pto_codegen_for_loop_tensor_iter_arg():
             a: pl.Tensor[[128, 64], pl.FP32],
             output: pl.Tensor[[128, 64], pl.FP32],
         ) -> pl.Tensor[[128, 64], pl.FP32]:
-            for i, (out_iter,) in pl.range(2, init_values=(output,)):
+            (out_iter,) = pl.intrin.carry(output)
+            for i in pl.range(2):
                 offset_i: pl.Scalar[pl.INDEX] = i * 64
                 tile: pl.Tile[[64, 64], pl.FP32] = pl.load(a, [offset_i, 0], [64, 64])
                 updated: pl.Tensor[[128, 64], pl.FP32] = pl.store(tile, [offset_i, 0], out_iter)
-                result = pl.yield_(updated)
+                pl.intrin.yield_(updated)
+            (result,) = pl.intrin.leak()
             return result
 
     lines = _get_mlir_lines(_generate_default_mlir(ForTensorIterArgProgram))
@@ -2562,7 +2564,8 @@ def test_pto_codegen_for_loop_tile_iter_arg_no_ddr_alloc():
                 [16, 1], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
             )
             init_tile: pl.Tile[[16, 1], pl.FP32] = pl.tile.muls(acc_tile, 0.0)
-            for i, (acc_iter,) in pl.range(2, init_values=(init_tile,)):
+            (acc_iter,) = pl.intrin.carry(init_tile)
+            for i in pl.range(2):
                 offset: pl.Scalar[pl.INDEX] = i * 256
                 chunk: pl.Tile[[16, 256], pl.FP32] = pl.load(data, [0, offset], [16, 256])
                 tmp: pl.Tile[[16, 256], pl.FP32] = pl.tile.create(
@@ -2570,7 +2573,8 @@ def test_pto_codegen_for_loop_tile_iter_arg_no_ddr_alloc():
                 )
                 partial: pl.Tile[[16, 1], pl.FP32] = pl.tile.row_sum(chunk, tmp)
                 updated: pl.Tile[[16, 1], pl.FP32] = pl.tile.add(acc_iter, partial)
-                result = pl.yield_(updated)
+                pl.intrin.yield_(updated)
+            (result,) = pl.intrin.leak()
             final: pl.Tensor[[16, 1], pl.FP32] = pl.store(result, [0, 0], out)
             return final
 
@@ -2665,7 +2669,8 @@ def test_pto_codegen_keeps_loop_carried_tile_distinct_from_reshape_result():
             acc_row_major_seed: pl.Tile[[1, 16], pl.FP32] = pl.tile.reshape(acc_tile, [1, 16])
             zero_row_major: pl.Tile[[1, 16], pl.FP32] = pl.tile.muls(acc_row_major_seed, 0.0)
             init_tile: pl.Tile[[16, 1], pl.FP32] = pl.tile.reshape(zero_row_major, [16, 1])
-            for i, (acc_iter,) in pl.range(2, init_values=(init_tile,)):
+            (acc_iter,) = pl.intrin.carry(init_tile)
+            for i in pl.range(2):
                 offset: pl.Scalar[pl.INDEX] = i * 256
                 chunk: pl.Tile[[16, 256], pl.FP32] = pl.load(data, [0, offset], [16, 256])
                 tmp: pl.Tile[[16, 256], pl.FP32] = pl.tile.create(
@@ -2676,7 +2681,8 @@ def test_pto_codegen_keeps_loop_carried_tile_distinct_from_reshape_result():
                 partial_row_major: pl.Tile[[1, 16], pl.FP32] = pl.tile.reshape(partial, [1, 16])
                 updated_row_major: pl.Tile[[1, 16], pl.FP32] = pl.tile.add(acc_row_major, partial_row_major)
                 updated: pl.Tile[[16, 1], pl.FP32] = pl.tile.reshape(updated_row_major, [16, 1])
-                result = pl.yield_(updated)
+                pl.intrin.yield_(updated)
+            (result,) = pl.intrin.leak()
             final: pl.Tensor[[16, 1], pl.FP32] = pl.store(result, [0, 0], out)
             return final
 
@@ -2897,8 +2903,9 @@ def test_pto_codegen_mixed_scalar_and_tile_iter_args():
                 [16, 1], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
             )
             init_tile: pl.Tile[[16, 1], pl.FP32] = pl.tile.muls(acc_tile, 0.0)
-            init_offset: pl.Scalar[pl.INDEX] = 0
-            for i, (acc_iter, offset) in pl.range(2, init_values=(init_tile, init_offset)):
+            init_offset: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            (acc_iter, offset) = pl.intrin.carry(init_tile, init_offset)
+            for i in pl.range(2):
                 chunk: pl.Tile[[16, 256], pl.FP32] = pl.load(data, [0, offset], [16, 256])
                 tmp: pl.Tile[[16, 256], pl.FP32] = pl.tile.create(
                     [16, 256], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
@@ -2906,7 +2913,8 @@ def test_pto_codegen_mixed_scalar_and_tile_iter_args():
                 partial: pl.Tile[[16, 1], pl.FP32] = pl.tile.row_sum(chunk, tmp)
                 updated: pl.Tile[[16, 1], pl.FP32] = pl.tile.add(acc_iter, partial)
                 new_offset: pl.Scalar[pl.INDEX] = offset + 256
-                result_tile, result_offset = pl.yield_(updated, new_offset)
+                pl.intrin.yield_(updated, new_offset)
+            (result_tile, result_offset) = pl.intrin.leak()
             final: pl.Tensor[[16, 1], pl.FP32] = pl.store(result_tile, [0, 0], out)
             return final
 
@@ -3216,11 +3224,13 @@ def test_pto_codegen_constant_indent_consistency():
             a: pl.Tensor[[128, 128], pl.FP32],
             output: pl.Tensor[[128, 128], pl.FP32],
         ) -> pl.Tensor[[128, 128], pl.FP32]:
-            for i, (out_iter,) in pl.range(2, init_values=(output,)):
+            (out_iter,) = pl.intrin.carry(output)
+            for i in pl.range(2):
                 offset_i: pl.Scalar[pl.INDEX] = i * 64
                 tile: pl.Tile[[64, 128], pl.FP32] = pl.load(a, [offset_i, 0], [64, 128])
                 updated: pl.Tensor[[128, 128], pl.FP32] = pl.store(tile, [offset_i, 0], out_iter)
-                result = pl.yield_(updated)
+                pl.intrin.yield_(updated)
+            (result,) = pl.intrin.leak()
             return result
 
     mlir_code = _generate_default_mlir(NestedConstantProgram)

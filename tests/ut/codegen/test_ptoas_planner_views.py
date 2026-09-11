@@ -97,7 +97,9 @@ class AutoReserveBufferProgram:
         tile_a: pl.Tile[[16, 16], pl.FP32] = pl.load(a, [0, 0], [16, 16])
         pl.tpush_to_aic(tile_a, split=0)
 
-        t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+        t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+            shape=[16, 16], dtype=pl.FP32, split=0
+        )
         out: pl.Tile[[16, 16], pl.FP32] = pl.exp(t)
         pl.tfree_to_aic(t)
 
@@ -111,7 +113,9 @@ class AutoReserveBufferProgram:
         pl.aic_initialize_pipe(
             dir_mask=3, slot_size=1024, c2v_consumer_buf=c2v_peer, v2c_consumer_buf=v2c_buf
         )
-        received: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+        received: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+            shape=[16, 16], dtype=pl.FP32, split=0
+        )
         pl.tpush_to_aiv(received, split=0)
         pl.tfree_to_aiv(received)
 

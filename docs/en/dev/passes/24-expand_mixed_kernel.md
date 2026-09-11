@@ -88,8 +88,8 @@ Cross-core data transfer at CV boundaries is handled by splitting explicit `tile
 
 | Direction | AIC side | AIV side |
 | --------- | -------- | -------- |
-| Cube→Vector (e.g. Acc→Vec) | `tpush_to_aiv(source_tile)` | `dest_var = tpop_from_aic()` |
-| Vector→Cube (e.g. Vec→Mat/Left/Right) | `dest_var = tpop_from_aiv()` | `tile.move` to adapt fractal layout, then `tpush_to_aic(adapted_tile)` |
+| Cube→Vector (e.g. Acc→Vec) | `tpush_to_aiv(source_tile)` | `dest_var = tpop_from_aic(shape, dtype=...)` |
+| Vector→Cube (e.g. Vec→Mat/Left/Right) | `dest_var = tpop_from_aiv(shape, dtype=...)` | `tile.move` to adapt fractal layout, then `tpush_to_aic(adapted_tile)` |
 
 **Fractal TileView layout**: Cross-core transfer tile views are computed by `BuildCrossCoreTransferView` based on the destination memory space. The mapping differs between backends:
 
@@ -150,7 +150,7 @@ A `tile.move` is not the only way data crosses the CV boundary. When one lane wr
 
 | Producer (writes GM) | AIC side | AIV side |
 | -------------------- | -------- | -------- |
-| Cube store → Vector load | `tile.store ...; tpush_to_aiv(stored_tile)` | `tok = tpop_from_aic(); tfree_to_aic(tok); tile.load ...` |
+| Cube store → Vector load | `tile.store ...; tpush_to_aiv(stored_tile)` | `tok = tpop_from_aic(shape, dtype=...); tfree_to_aic(tok); tile.load ...` |
 
 To stay deadlock-free, a handshake is emitted only when (1) the GM origin tensor has exactly one producer-lane store, (2) the opposite-lane load lives in the **same structural body** (same loop/branch, so the `tpush`/`tpop` execute the same number of times), and (3) the store precedes the load. Pairs split across different loops or branches are left untouched.
 
@@ -306,13 +306,13 @@ Phase 2 — Expand each InCore function F:
      convert FunctionType to AIC (pure Cube) or AIV (pure Vector / shared-only)
   4. Build AIC body: keep CUBE + SHARED stmts, prune VECTOR, recurse into MIXED loops
      - For boundary move (Cube→Vector): emit tpush_to_aiv(source_tile)
-     - For boundary move (Vector→Cube): emit dest_var = tpop_from_aiv() with fractal TileView
+     - For boundary move (Vector→Cube): emit dest_var = tpop_from_aiv(shape, dtype=...) with fractal TileView
   4a. For an op-driven boundary (tile.aiv_shard / tile.aic_gather), derive the
       pto-isa split CODE for the tpush/tpop pair from the op's authored MODE plus
       the full-width tile's extents (BoundaryTransportSplitCode ->
       split_axis::ShardSplitCode / GatherSplitCode) — see "The split code" below
   5. Build AIV body: symmetric (keep VECTOR + SHARED, prune CUBE)
-     - For boundary move (Cube→Vector): emit dest_var = tpop_from_aic() with fractal TileView
+     - For boundary move (Cube→Vector): emit dest_var = tpop_from_aic(shape, dtype=...) with fractal TileView
      - For boundary move (Vector→Cube): emit tile.move to adapt fractal layout, then tpush_to_aic(adapted_tile)
   5a. Assign fractal TileView to all boundary tpop result types and pre-tpush tile.move ops
       via BuildCrossCoreTransferView:
@@ -459,7 +459,7 @@ class After:
     @pl.function(type=pl.FunctionType.AIV)
     def compute_incore_0_aiv(self, x, y, out_0) -> pl.Tensor[[16, 128], pl.FP32]:
         # tpop result carries fractal TileView (no layout for Vec destination → preserved)
-        z_vec: pl.Tile[[16, 128], pl.FP32, pl.Mem.Vec, pl.TileView()] = pl.tile.tpop_from_aic(split=0)
+        z_vec: pl.Tile[[16, 128], pl.FP32, pl.Mem.Vec, pl.TileView()] = pl.tile.tpop_from_aic(shape=[16, 128], dtype=pl.FP32, split=0)
         out_0 = pl.store(z_vec, [0, 0], out_0)           # VECTOR op
         pl.system.tfree_to_aic(z_vec)                    # release the consumed cross-core slot
         return out_0

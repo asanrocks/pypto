@@ -37,8 +37,10 @@ def test_frontend_pipe_id_kwarg_is_accepted():
     tpush = ir.create_op_call("tile.tpush_to_aiv", [tile_var], {"split": 0, "id": 7}, span)
     assert tpush.kwargs["id"] == 7
 
-    tpop_op = ir.get_op("tile.tpop_from_aic")
-    tpop = ir.Call(tpop_op, [], {"split": 0, "id": 7}, tile_type, span)
+    shape = ir.MakeTuple([ConstInt(64, DataType.INDEX, span)], span)
+    tpop = ir.create_op_call(
+        "tile.tpop_from_aic", [shape], {"dtype": DataType.FP32, "split": 0, "id": 7}, span
+    )
     assert tpop.kwargs["id"] == 7
 
     tfree = ir.create_op_call("system.tfree_to_aic", [tile_var], {"id": 7}, span)
@@ -54,15 +56,14 @@ def test_frontend_pipe_id_kwarg_is_accepted():
 
 
 def test_tpop_ops_return_tile_type():
-    """Test tpop ops return TileType when constructed with explicit type."""
+    """Test tpop ops derive TileType from explicit shape and dtype."""
     span = ir.Span.unknown()
-    tile_type = ir.TileType([64], DataType.FP32)
+    shape = ir.MakeTuple([ConstInt(64, DataType.INDEX, span)], span)
 
     for op_name in ["tile.tpop_from_aic", "tile.tpop_from_aiv"]:
-        op = ir.get_op(op_name)
-        call = ir.Call(op, [], {"split": 0}, tile_type, span)
+        call = ir.create_op_call(op_name, [shape], {"dtype": DataType.FP32, "split": 0}, span)
         assert isinstance(call.type, ir.TileType)
-        assert call.type.shape == [64]
+        assert call.type.shape == [shape.elements[0]]
         assert call.type.dtype == DataType.FP32
 
 

@@ -288,8 +288,10 @@ static std::string MakeTpopCodegenPTO(const char* target, const CallPtr& op,
   auto& codegen = AsPto(codegen_base);
   const std::string op_name = std::string("tpop_from_") + target;
 
-  INTERNAL_CHECK_SPAN(op->args_.size() == 0, op->span_)
-      << op_name << " takes no arguments, got " << op->args_.size();
+  // The shape operand is part of the semantic value-producer contract. Codegen
+  // still gets the concrete result buffer/type from the assignment target.
+  INTERNAL_CHECK_SPAN(op->args_.size() == 1, op->span_)
+      << op_name << " requires 1 shape argument, got " << op->args_.size();
 
   const int split = op->GetKwarg<int>("split", 0);
   CHECK(ir::IsValidSplitCode(split))

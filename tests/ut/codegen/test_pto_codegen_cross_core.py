@@ -87,8 +87,12 @@ class CrossCoreTpushTpopProgram:
         pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
         pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
 
-        received_add: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=1)
-        received_sub: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=1)
+        received_add: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+            shape=[16, 16], dtype=pl.FP16, split=1
+        )
+        received_sub: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+            shape=[16, 16], dtype=pl.FP16, split=1
+        )
         received_add_left = pl.move(received_add, target_memory=pl.Mem.Left)
         received_sub_right = pl.move(received_sub, target_memory=pl.Mem.Right)
 
@@ -158,7 +162,9 @@ class BidirectionalCrossCorProgram:
         pl.tpush_to_aic(sum_tile, split=0)
 
         # Receive matmul result back from Cube (C2V direction)
-        mm_result: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+        mm_result: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+            shape=[16, 16], dtype=pl.FP32, split=0
+        )
 
         # Post-process: apply exp (Vector op)
         processed: pl.Tile[[16, 16], pl.FP32] = pl.exp(mm_result)
@@ -183,7 +189,9 @@ class BidirectionalCrossCorProgram:
         pl.aic_initialize_pipe(dir_mask=3, slot_size=512, c2v_consumer_buf=c2v_peer, v2c_consumer_buf=v2c_buf)
 
         # Receive preprocessed tile from Vector (V2C direction)
-        received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0)
+        received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+            shape=[16, 16], dtype=pl.FP16, split=0
+        )
 
         # Matmul (Cube op)
         w_tile: pl.Tile[[16, 16], pl.FP16] = pl.load(weight, [0, 0], [16, 16])
@@ -254,8 +262,12 @@ class MultiPipeSameDirectionCrossCoreProgram:
             id=1,
         )
 
-        sum_tile: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0, id=0)
-        diff_tile: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=0, id=1)
+        sum_tile: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+            shape=[16, 16], dtype=pl.FP16, split=0, id=0
+        )
+        diff_tile: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+            shape=[16, 16], dtype=pl.FP16, split=0, id=1
+        )
         sum_left = pl.move(sum_tile, target_memory=pl.Mem.Left)
         diff_right = pl.move(diff_tile, target_memory=pl.Mem.Right)
         _ = pl.matmul(sum_left, diff_right)
@@ -306,7 +318,9 @@ class CrossCoreExplicitSlotNumProgram:
             dir_mask=2, slot_size=512, slot_num=16, local_slot_num=4, v2c_consumer_buf=pipe_buf
         )
 
-        received_add: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=1)
+        received_add: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+            shape=[16, 16], dtype=pl.FP16, split=1
+        )
         received_add_left = pl.move(received_add, target_memory=pl.Mem.Left)
 
         mm_result: pl.Tile[[16, 16], pl.FP32] = pl.matmul(received_add_left, received_add_left)
@@ -477,7 +491,8 @@ class TestCrossCoreTpushTpopCodegen:
         # it MemRef-less); codegen must emit no alloc_tile from the op name alone.
         tile_type = ir.TileType([16, 64], pl.FP32, None, tile_view, ir.MemorySpace.Vec)
         recv_tile = ir.Var("recv_tile", tile_type, span)
-        tpop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [], {"split": 2}, tile_type, span)
+        shape_arg = ir.MakeTuple([ir.ConstInt(16, pl.INDEX, span), ir.ConstInt(64, pl.INDEX, span)], span)
+        tpop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [shape_arg], {"split": 2}, tile_type, span)
         body = ir.SeqStmts([ir.AssignStmt(recv_tile, tpop_call, span)], span)
         func = ir.Function(
             "dynamic_tpop",
@@ -507,7 +522,8 @@ class TestCrossCoreTpushTpopCodegen:
         # it MemRef-less); codegen must emit no alloc_tile from the op name alone.
         tile_type = ir.TileType([16, 64], pl.FP32, None, tile_view, ir.MemorySpace.Vec)
         recv_tile = ir.Var("recv_tile", tile_type, span)
-        tpop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [], {"split": 0}, tile_type, span)
+        shape_arg = ir.MakeTuple([ir.ConstInt(16, pl.INDEX, span), ir.ConstInt(64, pl.INDEX, span)], span)
+        tpop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [shape_arg], {"split": 0}, tile_type, span)
         body = ir.SeqStmts([ir.AssignStmt(recv_tile, tpop_call, span)], span)
         func = ir.Function(
             "dynamic_tpop_static_row",
@@ -539,7 +555,8 @@ class TestCrossCoreTpushTpopCodegen:
         # it MemRef-less); codegen must emit no alloc_tile from the op name alone.
         tile_type = ir.TileType([16, 64], pl.FP32, None, tile_view, ir.MemorySpace.Vec)
         recv_tile = ir.Var("recv_tile", tile_type, span)
-        tpop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [], {"split": 0}, tile_type, span)
+        shape_arg = ir.MakeTuple([ir.ConstInt(16, pl.INDEX, span), ir.ConstInt(64, pl.INDEX, span)], span)
+        tpop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [shape_arg], {"split": 0}, tile_type, span)
         body = ir.SeqStmts([ir.AssignStmt(recv_tile, tpop_call, span)], span)
         func = ir.Function("empty_tpop", [], [], body, span, ir.FunctionType.AIV)
 
@@ -561,7 +578,8 @@ class TestCrossCoreTpushTpopCodegen:
         # it MemRef-less); codegen must emit no alloc_tile from the op name alone.
         tile_type = ir.TileType([16, 64], pl.FP32, None, tile_view, ir.MemorySpace.Vec)
         recv_tile = ir.Var("recv_tile", tile_type, span)
-        tpop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [], {"split": 0}, tile_type, span)
+        shape_arg = ir.MakeTuple([ir.ConstInt(16, pl.INDEX, span), ir.ConstInt(64, pl.INDEX, span)], span)
+        tpop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [shape_arg], {"split": 0}, tile_type, span)
         body = ir.SeqStmts([ir.AssignStmt(recv_tile, tpop_call, span)], span)
         func = ir.Function(
             "dynamic_tpop_bool_row",
@@ -746,7 +764,10 @@ class TestCrossCoreTpushTpopCodegen:
             ir.MemorySpace.Vec,
         )
         popped = ir.Var("popped", vec_type, span)
-        pop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [], {"split": 0}, vec_type, span)
+        # spec(ir): the shape is an explicit value producer (no inference from the
+        # assignment target); the full box [16, 32] crosses the no-split FIFO.
+        pop_shape = ir.MakeTuple([rows, cols], span)
+        pop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [pop_shape], {"split": 0}, vec_type, span)
         consumer = ir.Function(
             "partial_vec_consumer",
             [],
@@ -962,7 +983,9 @@ class TestCrossCoreTpushTpopCodegen:
             ir.MemorySpace.Vec,
         )
         popped = ir.Var("popped", vec_type, span)
-        pop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [], {"split": 1}, vec_type, span)
+        # spec(ir): explicit shape producer — the per-lane half box [8, 32].
+        pop_shape = ir.MakeTuple([half_rows, cols], span)
+        pop_call = ir.Call(ir.Op("tile.tpop_from_aic"), [pop_shape], {"split": 1}, vec_type, span)
         consumer = ir.Function(
             "split_vec_consumer",
             [],
@@ -1390,7 +1413,9 @@ class TestCrossCoreTpushTpopCodegen:
                 pipe_buf = pl.reserve_buffer(name="v2c_slot_buffer", size=4096, base=0x1000)
                 pl.aic_initialize_pipe(dir_mask=2, slot_size=512, v2c_consumer_buf=pipe_buf)
 
-                received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(split=1)
+                received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16], dtype=pl.FP16, split=1
+                )
                 if flag == 0:
                     received_left = pl.move(received, target_memory=pl.MemorySpace.Left)
                     received_mat = pl.move(received_left, target_memory=pl.MemorySpace.Mat)
@@ -1422,7 +1447,9 @@ class TestCrossCoreTpushTpopCodegen:
             def vector_consumer(self):
                 pipe_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=pipe_buf)
-                received: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+                received: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                    shape=[16, 16], dtype=pl.FP32, split=0
+                )
                 pl.tfree_to_aiv(received)
 
         with pytest.raises(
@@ -1450,6 +1477,8 @@ class TestCrossCoreTpushTpopCodegen:
                     id=1,
                 )
                 received: pl.Tile[[16, 16], pl.FP16, pl.MemorySpace.Mat] = pl.tpop_from_aiv(
+                    shape=[16, 16],
+                    dtype=pl.FP16,
                     split=0,
                     id=1,
                 )
@@ -1477,7 +1506,9 @@ class TestCrossCoreTpushTpopCodegen:
                 pipe_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=4096, base=0x1000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=pipe_buf)
 
-                received: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+                received: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                    shape=[16, 16], dtype=pl.FP32, split=0
+                )
                 if flag == 0:
                     scale = 1.0
                 else:

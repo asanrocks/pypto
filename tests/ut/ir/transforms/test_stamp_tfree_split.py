@@ -56,7 +56,9 @@ def test_tfree_gets_split_from_tpop():
         def consumer(self):
             buf = pl.reserve_buffer(name="c2v", size=4096, base=0x1000)
             pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=buf)
-            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=2)
+            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 16], dtype=pl.FP32, split=2
+            )
             pl.tfree_to_aic(t)
 
     @pl.program
@@ -65,7 +67,9 @@ def test_tfree_gets_split_from_tpop():
         def consumer(self):
             buf = pl.reserve_buffer(name="c2v", size=4096, base=0x1000)
             pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=buf)
-            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=2)
+            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 16], dtype=pl.FP32, split=2
+            )
             # split copied off the originating tpop by the pass.
             pl.tfree_to_aic(t, split=2)
 
@@ -80,7 +84,9 @@ def test_tfree_gets_split_and_id_from_tpop():
         def consumer(self):
             buf = pl.reserve_buffer(name="c2v", size=4096, base=0x1000)
             pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=buf, id=3)
-            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=1, id=3)
+            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 16], dtype=pl.FP32, split=1, id=3
+            )
             pl.tfree_to_aic(t)
 
     @pl.program
@@ -89,7 +95,9 @@ def test_tfree_gets_split_and_id_from_tpop():
         def consumer(self):
             buf = pl.reserve_buffer(name="c2v", size=4096, base=0x1000)
             pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=buf, id=3)
-            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=1, id=3)
+            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 16], dtype=pl.FP32, split=1, id=3
+            )
             # both split and the pipe id are copied off the originating tpop.
             pl.tfree_to_aic(t, split=1, id=3)
 
@@ -104,7 +112,9 @@ def test_tfree_id_mismatch_raises():
         def consumer(self):
             buf = pl.reserve_buffer(name="c2v", size=4096, base=0x1000)
             pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=buf, id=3)
-            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=1, id=3)
+            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 16], dtype=pl.FP32, split=1, id=3
+            )
             pl.tfree_to_aic(t, id=0)
 
     with pytest.raises(ValueError, match="does not match originating"):
@@ -118,7 +128,9 @@ def test_tfree_direction_mismatch_raises():
         def consumer(self):
             buf = pl.reserve_buffer(name="c2v", size=4096, base=0x1000)
             pl.aiv_initialize_pipe(dir_mask=1, slot_size=512, c2v_consumer_buf=buf)
-            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(split=0)
+            t: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
+                shape=[16, 16], dtype=pl.FP32, split=0
+            )
             pl.tfree_to_aiv(t)
 
     with pytest.raises(ValueError, match="requires its tile argument to come from"):

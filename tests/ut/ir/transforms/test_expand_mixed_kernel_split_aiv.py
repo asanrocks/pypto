@@ -129,7 +129,9 @@ def test_aiv_shard_folds_into_cube_to_vector_boundary():
                 split_aiv_c2v_slot_buffer, pl.const(0, pl.INT32), dir_mask=1, slot_size=65536, slot_num=2
             )
             # AIV: pops the HALF tile [64,128] in Vec (identity / non-NZ view), split == 1.
-            half: pl.Tile[[64, 128], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(split=1)
+            half: pl.Tile[[64, 128], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(
+                shape=[64, 128], dtype=pl.FP32, split=1
+            )
             y: pl.Tile[[64, 128], pl.FP32, pl.Mem.Vec] = pl.tile.add(half, half)
             pl.system.tfree_to_aic(half)
             out_store: pl.Tensor[[64, 128], pl.FP32] = pl.tile.store(y, [0, 0], out_0)
@@ -286,7 +288,13 @@ def test_folded_transport_carries_the_pto_isa_split_code(
     # cuts the lanes where the compiler did.
     stride_attr = "" if lane_stride is None else f", lane_stride={lane_stride}"
     assert f"pl.tile.tpush_to_aiv(qk, split={expected_code}{stride_attr})" in printed, why
-    assert f"pl.tile.tpop_from_aic(split={expected_code}{stride_attr})" in printed, why
+    # The synthesized tpop states its shape/dtype producers (spec(ir)), so
+    # the split code and stride are asserted on the producer form's line.
+    tpop_lines = [line for line in printed.splitlines() if "pl.tile.tpop_from_aic(" in line]
+    assert tpop_lines, why
+    assert any(f"split={expected_code}{stride_attr}" in line and ", dtype=" in line for line in tpop_lines), (
+        why
+    )
 
 
 def test_folded_transport_carries_the_left_right_odd_code():
@@ -346,7 +354,9 @@ def test_folded_transport_carries_the_left_right_odd_code():
                 slot_size=7680,
                 slot_num=2,
             )
-            half: pl.Tile[[128, 8], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(split=4)
+            half: pl.Tile[[128, 8], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(
+                shape=[128, 8], dtype=pl.FP32, split=4
+            )
             out_store: pl.Tensor[[128, 8], pl.FP32] = pl.tile.store(half, [0, 0], out_0)
             pl.system.tfree_to_aic(half)
             return out_store
@@ -675,7 +685,9 @@ def test_aic_gather_folds_into_vector_to_cube_boundary():
             )
             # AIC: V->C pop yields the FULL tile [128,128] in Mat. The Mat default
             # effective tile_view is NZ (col_major), so no explicit view is needed.
-            full: pl.Tile[[128, 128], pl.FP32, pl.Mem.Mat] = pl.tile.tpop_from_aiv(split=1)
+            full: pl.Tile[[128, 128], pl.FP32, pl.Mem.Mat] = pl.tile.tpop_from_aiv(
+                shape=[128, 128], dtype=pl.FP32, split=1
+            )
             # The original follow-on move(full -> Left) survives on the AIC lane
             # (it is NOT re-detected as a second cross-core boundary).
             full_left: pl.Tile[[128, 128], pl.FP32, pl.Mem.Left] = pl.tile.move(
@@ -725,12 +737,15 @@ def test_aic_gather_folds_into_vector_to_cube_boundary():
                 slayout=pl.TileLayout.row_major,
             )
             pl.tile.tpush_to_aic(half2_nz, split=1)
-            z_vec: pl.Tile[
-                [128, 128],
-                pl.FP32,
-                pl.Mem.Vec,
-                pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
-            ] = pl.tile.tpop_from_aic(split=0)
+            z_vec = pl.intrin.transmute(
+                pl.tile.tpop_from_aic(shape=[128, 128], dtype=pl.FP32, split=0),
+                pl.Tile[
+                    [128, 128],
+                    pl.FP32,
+                    pl.Mem.Vec,
+                    pl.TileView(blayout=pl.TileLayout.col_major, slayout=pl.TileLayout.row_major),
+                ],
+            )
             out_store: pl.Tensor[[128, 128], pl.FP32] = pl.tile.store(z_vec, [0, 0], out_0)
             pl.system.tfree_to_aic(z_vec)
             return out_store
@@ -877,7 +892,9 @@ def test_region_placed_notify_lands_on_aiv_lane_only():
                 slot_size=65536,
                 slot_num=2,
             )
-            half: pl.Tile[[64, 128], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(split=1)
+            half: pl.Tile[[64, 128], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(
+                shape=[64, 128], dtype=pl.FP32, split=1
+            )
             y: pl.Tile[[64, 128], pl.FP32, pl.Mem.Vec] = pl.tile.add(half, half)
             pl.system.tfree_to_aic(half)
             pld.system.notify(sig, peer, [0, 0], 1, op=pld.NotifyOp.AtomicAdd)
@@ -955,7 +972,9 @@ def test_unplaced_notify_is_duplicated_onto_both_lanes():
                 slot_size=65536,
                 slot_num=2,
             )
-            half: pl.Tile[[64, 128], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(split=1)
+            half: pl.Tile[[64, 128], pl.FP32, pl.Mem.Vec] = pl.tile.tpop_from_aic(
+                shape=[64, 128], dtype=pl.FP32, split=1
+            )
             y: pl.Tile[[64, 128], pl.FP32, pl.Mem.Vec] = pl.tile.add(half, half)
             pl.system.tfree_to_aic(half)
             pld.system.notify(sig, peer, [0, 0], 1, op=pld.NotifyOp.AtomicAdd)
