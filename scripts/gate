@@ -42,13 +42,22 @@ if [ "${#pytest_args[@]}" -eq 0 ]; then
     pytest_args=(tests/ut/)
 fi
 
-log_message "=== Gate (v0: pytest) ==="
+log_message "=== Gate (pyright + ruff + typing-debt + pytest) ==="
 
 export OPENBLAS_NUM_THREADS=1
 
 pytest_options=(-n auto --maxprocesses 64 --timeout=10 --tb=short -rA --color=no)
 
 status=0
+run_logged uv run pyright python/pypto/language/ || status=1
+# Collector strictness overlay: the collector, tracer protocol/semantics/constructs,
+# and shared constructs are checked under strict typing via a dedicated config.
+run_logged uv run pyright -p pyrightconfig.collector.json || status=1
+run_logged uv run ruff check python/pypto/language/ || status=1
+# Typing-debt ratchet: the strict overlay cannot count explicit
+# escape hatches (no reportExplicitAny in pyright), so the lint script
+# bounds them per file (see tests/lint/check_typing_debt.py).
+run_logged uv run python tests/lint/check_typing_debt.py || status=1
 run_logged uv run python -m pytest "${pytest_args[@]}" "${pytest_options[@]}" || status=1
 
 if [ "$status" -ne 0 ]; then

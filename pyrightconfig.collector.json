@@ -1,0 +1,20 @@
+{
+    // Strictness follows the former collector and flow source lineage after
+    // the tracing frontend restructure. Decorators and ambient state remain
+    // outside this overlay because they were not previously strict.
+    "typeCheckingMode": "strict",
+    "reportPrivateUsage": false,
+    "reportUnnecessaryTypeIgnoreComment": true,
+    "include": [
+        "python/pypto/language/tracer/collector",
+        "python/pypto/language/tracer/protocol.py",
+        "python/pypto/language/tracer/semantics.py",
+        "python/pypto/language/tracer/constructs.py",
+        "python/pypto/language/constructs"
+    ],
+    "exclude": ["**/__pycache__"],
+    "extraPaths": ["python", "."],
+    "pythonVersion": "3.10",
+    "reportMissingTypeStubs": false,
+    "reportMissingModuleSource": false
+}
