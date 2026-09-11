@@ -8279,7 +8279,7 @@ class ASTParser:
         are REJECTED rather than guessed — never silently dropped — mirroring
         the printer's fail-loud behaviour.
         """
-        from pypto.language.arg_direction import NAME_TO_DIRECTION  # noqa: PLC0415
+        from pypto.language.typing.arg_direction import NAME_TO_DIRECTION  # noqa: PLC0415
 
         node_span = self.span_tracker.get_span(value_node)
         if isinstance(value_node, ast.Constant):
@@ -8425,7 +8425,7 @@ class ASTParser:
         span: ir.Span,
     ) -> list[ir.ArgDirection] | None:
         """Extract ``arg_directions`` from an ``attrs={...}`` kwarg."""
-        from pypto.language.arg_direction import NAME_TO_DIRECTION  # noqa: PLC0415
+        from pypto.language.typing.arg_direction import NAME_TO_DIRECTION  # noqa: PLC0415
 
         attrs_dict = self._get_call_attrs_dict(method_name, keywords, span)
         if attrs_dict is None:

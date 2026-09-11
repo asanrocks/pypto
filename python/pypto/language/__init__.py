@@ -58,7 +58,7 @@ from pypto.pypto_core.ir import (
     TileLayout,
 )
 
-from . import arg_direction as adir
+from .typing import arg_direction as adir
 from . import parser
 from .constructs import optimizations as optimizations
 from .dsl_api import (
