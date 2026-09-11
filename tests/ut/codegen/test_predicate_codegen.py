@@ -96,6 +96,56 @@ def test_no_predicate_emits_no_set_predicate():
     assert "CoreTaskPredicate" not in code
 
 
+@pl.program
+class _AtScopePredicate:
+    """The ``pl.at`` scope form (gap K8): the same MoE shape as
+    ``_WithPredicate`` above, with the predicated expert expressed as an
+    outlined ``pl.at``-block instead of an ``spmd_submit``."""
+
+    @pl.function(type=pl.FunctionType.InCore)
+    def gate(self, g: pl.Out[pl.Tensor[[512, 128], pl.INT32]]) -> pl.Tensor[[512, 128], pl.INT32]:
+        t = pl.load(g, [0, 0], [128, 128])
+        g = pl.store(t, [0, 0], g)
+        return g
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(
+        self,
+        x: pl.Tensor[[512, 128], pl.FP32],
+        out: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
+        rc: pl.Out[pl.Tensor[[512, 128], pl.INT32]],
+    ) -> pl.Tensor[[512, 128], pl.FP32]:
+        with pl.manual_scope():
+            rc, g_tid = pl.spmd_submit(self.gate, rc, core_num=1)
+            with pl.at(
+                level=pl.Level.CORE_GROUP,
+                deps=[g_tid],
+                predicate=(rc[0, 0] > 0),
+            ):
+                t = pl.load(x, [0, 0], [128, 128])
+                out = pl.store(t, [0, 0], out)
+        return out
+
+
+def test_at_scope_predicate_emits_set_predicate_block():
+    """The predicated outlined ``pl.at``-block lowers to the same runtime
+    ``CoreTaskPredicate`` + ``Arg::set_predicate(...)`` as the ``spmd_submit``
+    sibling — the outliner moves the scope's ``predicate`` attr onto the
+    synthesised ``Submit::predicate_``."""
+
+    code = _generate_orch_full_pipeline(_AtScopePredicate)
+    assert "CoreTaskPredicate" in code, code
+    assert ".operand.tensor = &ext_rc;" in code, code
+    assert ".operand.ndims = 2;" in code, code
+    assert ".operand.indices[0] = 0;" in code, code
+    assert ".operand.indices[1] = 0;" in code, code
+    assert ".op = PredicateOp::GT;" in code, code
+    assert ".target = 0;" in code, code
+    assert ".set_predicate(" in code, code
+    # Exactly one predicated task (the outlined expert), not the gate.
+    assert code.count("set_predicate(") == 1, code
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
