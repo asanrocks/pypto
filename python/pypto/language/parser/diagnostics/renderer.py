@@ -14,7 +14,7 @@ import os
 import re
 import sys
 
-from .exceptions import ParserError, SSAViolationError
+from pypto.language.diagnostics import ParserError, SSAViolationError
 
 # Sentence boundary: a period followed by whitespace or end of string. Avoids
 # splitting inside dotted identifiers like `pl.range()` or `module.attr`.

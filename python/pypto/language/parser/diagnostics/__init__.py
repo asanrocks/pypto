@@ -10,7 +10,7 @@
 """Parser diagnostics and error reporting."""
 
 from .error_codes import ErrorCategory, ErrorCode, get_error_code
-from .exceptions import (
+from pypto.language.diagnostics import (
     BUG_CLASS_EXCEPTIONS,
     InvalidOperationError,
     ParserError,
