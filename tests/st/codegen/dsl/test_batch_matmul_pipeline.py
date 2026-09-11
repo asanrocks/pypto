@@ -31,7 +31,9 @@ import pytest
 torch = pytest.importorskip("torch")
 
 import pypto.language as pl  # noqa: E402
+from pypto import ir  # noqa: E402
 from pypto.runtime import RunConfig  # noqa: E402
+from pypto.runtime.runner import run_config_compile_kwargs  # noqa: E402
 
 # K reduced in chunks of KC; the leading dim is the batch dimension.
 T, K, N, KC = 32, 4096, 128, 512
@@ -65,16 +67,25 @@ def batch_matmul_pipeline_repro(
     return out
 
 
+def _compile(fn: ir.Function, cfg: RunConfig):
+    """Compile an eagerly traced ``@pl.jit`` kernel for host dispatch.
+
+    A lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
+    exactly this way (``jit.py``'s ``_compile_program``): the compile-side
+    fields become compile kwargs, everything else rides the dispatch
+    ``config=``. The eager lane has no host dispatch surface of its own — the
+    decoration returns a bare ``ir.Function`` — so the test drives the same
+    route the lazy lane would.
+    """
+    kwargs = {"platform": cfg.platform, **run_config_compile_kwargs(cfg)}
+    return ir.compile(ir.Program([fn], fn.name, fn.span), **kwargs)
+
+
 def test_no_mat_to_mat_tmov():
     """The 3D-batch pipelined matmul must not lower a Mat ``tile.slice`` to a
     ``loc=mat -> loc=mat`` ``pto.tmov``."""
-    batch_matmul_pipeline_repro._cache.clear()
     if DUMP_DIR.exists():
         shutil.rmtree(DUMP_DIR)
-
-    x = torch.zeros((1, T, K), dtype=torch.int8)
-    w = torch.zeros((1, N, K), dtype=torch.int8)
-    out = torch.zeros((1, T, N), dtype=torch.int32)
 
     cfg = RunConfig(
         platform="a2a3",
@@ -89,7 +100,7 @@ def test_no_mat_to_mat_tmov():
     # before that.
     compile_error: Exception | None = None
     try:
-        batch_matmul_pipeline_repro(x, w, out, config=cfg)
+        _compile(batch_matmul_pipeline_repro, cfg)
     except Exception as e:  # noqa: BLE001 - see comment above
         compile_error = e
 

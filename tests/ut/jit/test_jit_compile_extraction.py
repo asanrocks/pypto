@@ -709,7 +709,11 @@ def _request_kernel(x: pl.Tensor[[32, 32], pl.FP32]) -> pl.Tensor[[32, 32], pl.F
 def kernel(monkeypatch):
     monkeypatch.delenv("PYPTO_COMPILE_PROFILING", raising=False)
     monkeypatch.setattr(CompileProfiler._local, "current", None, raising=False)
-    return pl.jit(_request_kernel)
+    # These tests assert default-sensitive comparisons — an outer
+    # PYPTO_VERIFY_LEVEL shifts GetDefaultVerificationLevel() and inverts the
+    # PassContext-vs-default bypass checks (e.g. the gate pins roundtrip).
+    monkeypatch.delenv("PYPTO_VERIFY_LEVEL", raising=False)
+    return pl.jit_specializer(_request_kernel)
 
 
 @pytest.fixture

@@ -4816,7 +4816,7 @@ def test_e2e_none_region_v2c_crossing_lowers_to_split_zero_transport():
     value both lanes agree on); the compiler does not synthesize it here.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def none_v2c(
         a: pl.Tensor[[_E2E_M, _E2E_K], pl.FP16],
         q: pl.Tensor[[_E2E_M, _E2E_K], pl.FP16],
@@ -4845,7 +4845,7 @@ def test_e2e_none_region_c2v_crossing_lowers_to_split_zero_transport():
     than of the crossing.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def none_c2v(
         a: pl.Tensor[[_E2E_M, _E2E_K], pl.FP16],
         b: pl.Tensor[[_E2E_K, _E2E_N], pl.FP16],

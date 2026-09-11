@@ -53,9 +53,6 @@ of ``execute_compiled`` and the artifact-directory CLI entry points.
 they all take a ``RunConfig`` — so it is currently the internal shape the
 dispatch plumbing reads, reachable as ``pypto.runtime.runner.RunOptions``.
 Exporting it is for the change that migrates those signatures.
-
-``docs/en/dev/08-entry-points.md`` maps every compile and execution entry point
-to the layer it belongs to.
 """
 
 from .bench import BenchmarkStats, TraceInvocation, TraceSpan, benchmark

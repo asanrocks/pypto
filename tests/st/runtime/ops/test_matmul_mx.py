@@ -21,6 +21,8 @@ import pypto.language as pl
 import pytest
 import torch
 from harness.core.harness import DataType, PTOTestCase, TensorSpec
+from pypto import ir
+from pypto.language.tracer.decorators.jit import _eager_trace_record
 from pypto.runtime.runner import RunConfig
 
 _REQUIRED_TORCH_DTYPES = ("float4_e2m1fn_x2", "float8_e4m3fn", "float8_e8m0fnu")
@@ -195,6 +197,15 @@ def mxfp4_fp8_matmul(
     return mxfp4_fp8_matmul_kernel(a, a_scale, b, b_scale, out, out_acc)
 
 
+def _program(fn: ir.Function) -> ir.Program:
+    """The eager-lane program route: the entry plus every callee its
+    decoration trace reached (the eager record's assembly — the same
+    functions the lazy lane's ``compile()`` would assemble)."""
+    record = _eager_trace_record(fn)
+    callees = list(record.assembly.functions) if record is not None else []
+    return ir.Program([fn, *callees], fn.name, fn.span)
+
+
 class MatmulMxTestCase(PTOTestCase):
     """One host-prequantized MX dtype combination with base+acc outputs."""
 
@@ -260,8 +271,8 @@ class MatmulMxTestCase(PTOTestCase):
 
     def get_program(self) -> Any:
         if self._lhs_fp4:
-            return mxfp4_fp8_matmul.specialize()
-        return mxfp8_matmul.specialize()
+            return _program(mxfp4_fp8_matmul)
+        return _program(mxfp8_matmul)
 
     def compute_expected(self, tensors: dict[str, torch.Tensor], params=None) -> None:
         a = _decode_fp4_data(tensors["a"], M, K) if self._lhs_fp4 else tensors["a"].to(torch.float64)

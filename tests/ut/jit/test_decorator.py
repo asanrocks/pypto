@@ -7,7 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Tests for @pl.jit decorator: decoration, cache hit/miss, and bind_dynamic."""
+"""Tests for @pl.jit_specializer decorator: decoration, cache hit/miss, and bind_dynamic."""
 
 import ast
 import importlib
@@ -42,7 +42,7 @@ from pypto.jit.decorator import (
     jit,
 )
 from pypto.jit.specializer import DynDim, Specializer, TensorMeta
-from pypto.language.diagnostics import ParserTypeError
+from pypto.language.parser.diagnostics import ParserTypeError
 from pypto.pypto_core import DataType, InternalError, ir
 from pypto.runtime.runner import RunConfig
 
@@ -110,9 +110,9 @@ class TestJitDecoration:
         assert entry._func_type == "orchestration"
 
     def test_jit_pl_access(self):
-        """pl.jit should work the same as jit."""
+        """pl.jit_specializer should work the same as jit."""
 
-        @pl.jit
+        @pl.jit_specializer
         def kernel(a: pl.Tensor):
             return a
 
@@ -135,7 +135,7 @@ class TestJitDecoration:
         assert entry._auto_scope is False
 
     def test_jit_empty_parens_form(self):
-        """@pl.jit() (bare parens) is equivalent to @pl.jit."""
+        """@pl.jit_specializer() (bare parens) is equivalent to @pl.jit_specializer."""
 
         @jit()
         def entry(a: pl.Tensor):
@@ -146,12 +146,12 @@ class TestJitDecoration:
 
 
 # ---------------------------------------------------------------------------
-# @pl.jit.host decoration
+# @pl.jit_specializer.host decoration
 # ---------------------------------------------------------------------------
 
 
 class TestJitHostDecoration:
-    """@pl.jit.host produces a HOST-Orchestrator JITFunction."""
+    """@pl.jit_specializer.host produces a HOST-Orchestrator JITFunction."""
 
     def test_jit_host_creates_jitfunction(self):
         @jit.host
@@ -184,7 +184,7 @@ class TestJitHostDecoration:
         assert my_host.__name__ == "my_host"
 
     def test_jit_host_pl_access(self):
-        @pl.jit.host
+        @pl.jit_specializer.host
         def host_orch(a: pl.Tensor):
             return a
 
@@ -209,7 +209,7 @@ class TestJitHostDecoration:
 
     def test_jit_inline_accepts_auto_scope_false(self):
         """Inline bodies are spliced into the caller, so hand-placed scopes land
-        there — @pl.jit.inline must accept auto_scope=False (#1733)."""
+        there — @pl.jit_specializer.inline must accept auto_scope=False (#1733)."""
 
         @jit.inline(auto_scope=False)
         def sub_fn(a: pl.Tensor):
@@ -255,7 +255,7 @@ class TestHostDiscoversOrchestrationDep:
         assert deps[0].__name__ == "chip_orch"
 
     def test_orchestration_entry_does_not_discover_orchestration_dep(self):
-        """A plain @pl.jit entry must still ignore @pl.jit deps — only
+        """A plain @pl.jit_specializer entry must still ignore @pl.jit_specializer deps — only
         sub-functions (incore/inline/opaque) are discovered. Otherwise two
         top-level kernels would silently fold into one program."""
 
@@ -286,8 +286,8 @@ class TestHostDiscoversOrchestrationDep:
         assert deps[0]._func_type == "incore"
 
     def test_host_forwards_dep_auto_scope(self):
-        """An @pl.jit(auto_scope=False) chip orchestrator discovered as a dep of
-        an @pl.jit.host entry keeps its auto_scope=False when its
+        """An @pl.jit_specializer(auto_scope=False) chip orchestrator discovered as a dep of
+        an @pl.jit_specializer.host entry keeps its auto_scope=False when its
         SpecializeContext is built — the flag must be forwarded to the dep
         context, not defaulted to True."""
         torch = pytest.importorskip("torch")
@@ -308,7 +308,7 @@ class TestHostDiscoversOrchestrationDep:
         assert dep_ctx.auto_scope is False
 
     def test_entry_forwards_inline_dep_auto_scope(self):
-        """An @pl.jit.inline(auto_scope=False) dep of a plain @pl.jit entry keeps
+        """An @pl.jit_specializer.inline(auto_scope=False) dep of a plain @pl.jit_specializer entry keeps
         auto_scope=False in its SpecializeContext, while the entry's own flag
         stays at its default True (#1733)."""
         torch = pytest.importorskip("torch")
@@ -381,8 +381,9 @@ class TestBindDynamic:
 
     def test_bind_dynamic_on_static_dim_is_loud(self):
         """bind_dynamic on a static dim raises: the override form's
-        semantics lived in the AST-era specializer's source scan (retired)
-        — a silent drop is forbidden."""
+        semantics lived in the specializer's AST scan (retired) — a silent
+        drop is forbidden; the quarantined pl.jit_specializer keeps the
+        old form."""
         t = pl.Tensor[[128, 64], pl.FP32]
         M = pl.dynamic("M")
         with pytest.raises(NotImplementedError, match="static"):
@@ -593,10 +594,10 @@ class TestJitCaching:
 
 
 class TestMultiFuncDepDiscovery:
-    """Multi-function JIT: @pl.jit.incore deps are auto-discovered from entry function globals."""
+    """Multi-function JIT: @pl.jit_specializer.incore deps are auto-discovered from entry function globals."""
 
     def test_dep_discovered_from_globals(self):
-        """JITFunction.get_deps() finds @pl.jit.incore callees via lazy discovery."""
+        """JITFunction.get_deps() finds @pl.jit_specializer.incore callees via lazy discovery."""
 
         # Define both at module scope so that inner is in entry's __globals__
         @jit.incore
@@ -1129,10 +1130,10 @@ class TestAllocateGeneratedNames:
 
 
 class TestMultiFuncIntegration:
-    """End-to-end multi-function @pl.jit compilation with @pl.jit.incore deps."""
+    """End-to-end multi-function @pl.jit_specializer compilation with @pl.jit_specializer.incore deps."""
 
     def test_multi_func_parseable(self):
-        """@pl.jit with an @pl.jit.incore dep compiles successfully."""
+        """@pl.jit_specializer with an @pl.jit_specializer.incore dep compiles successfully."""
         torch = pytest.importorskip("torch")
 
         @jit.incore
@@ -1256,7 +1257,7 @@ class TestMultiFuncIntegration:
         ir.assert_structural_equal(got, expected_post_pass)
 
 
-# Module-level @pl.jit.incore kernel reused by the metadata-tracking tests below.
+# Module-level @pl.jit_specializer.incore kernel reused by the metadata-tracking tests below.
 # Defined at module level (not inside a test method) so it can be imported by
 # the unit test for ``_extract_local_tensor_metas``; the integration tests
 # below redefine their own deps inside the method to keep each test isolated.
@@ -1488,13 +1489,13 @@ def _subscript_runtime_slice_body(src: pl.Tensor, cfg: pl.Tensor, out: pl.Out[pl
 
 class TestSliceAndDepReturnMetadata:
     """Regression tests: the JIT specializer must track tensor metadata for
-    ``pl.slice`` views and ``@pl.jit.incore`` return values when they flow into
+    ``pl.slice`` views and ``@pl.jit_specializer.incore`` return values when they flow into
     subsequent kernels (KNOWN_ISSUES: "JIT specializer doesn't track pl.slice
-    results or @pl.jit.incore return-value tensor metadata")."""
+    results or @pl.jit_specializer.incore return-value tensor metadata")."""
 
     def test_extract_local_tensor_metas_slice_and_dep_return(self):
         """``_extract_local_tensor_metas`` infers metas for pl.slice views,
-        pl.create_tensor locals, and @pl.jit.incore call results."""
+        pl.create_tensor locals, and @pl.jit_specializer.incore call results."""
         seed = {
             "src": TensorMeta(shape=(32, 32), dtype=DataType.FP32),
             "out": TensorMeta(shape=(16, 8), dtype=DataType.FP32),
@@ -1504,7 +1505,7 @@ class TestSliceAndDepReturnMetadata:
         assert metas["view"] == TensorMeta(shape=(16, 8), dtype=DataType.FP32)
         # pl.create_tensor: unchanged behaviour.
         assert metas["buf"] == TensorMeta(shape=(16, 8), dtype=DataType.FP32)
-        # @pl.jit.incore call result: inherits the dep's pl.Out param meta,
+        # @pl.jit_specializer.incore call result: inherits the dep's pl.Out param meta,
         # which here maps to ``buf``.
         assert metas["mid"] == TensorMeta(shape=(16, 8), dtype=DataType.FP32)
 
@@ -1532,7 +1533,7 @@ class TestSliceAndDepReturnMetadata:
         assert metas["mid"] == TensorMeta(shape=(16, 8), dtype=DataType.FP32)
 
     def test_slice_view_flows_into_incore_dep(self):
-        """A pl.slice view of an entry parameter can be passed into an @pl.jit.incore dep."""
+        """A pl.slice view of an entry parameter can be passed into an @pl.jit_specializer.incore dep."""
         torch = pytest.importorskip("torch")
 
         @jit.incore
@@ -1556,7 +1557,7 @@ class TestSliceAndDepReturnMetadata:
         assert "slice_entry" in func_names
 
     def test_dep_return_value_flows_into_next_dep(self):
-        """The return value of one @pl.jit.incore dep can feed the next dep."""
+        """The return value of one @pl.jit_specializer.incore dep can feed the next dep."""
         torch = pytest.importorskip("torch")
 
         @jit.incore
@@ -1581,7 +1582,7 @@ class TestSliceAndDepReturnMetadata:
         assert isinstance(program, ir.Program)
 
     def test_multi_value_dep_return_flows_into_next_dep(self):
-        """A tuple-returning @pl.jit.incore dep's results inherit their Out params' metas."""
+        """A tuple-returning @pl.jit_specializer.incore dep's results inherit their Out params' metas."""
         torch = pytest.importorskip("torch")
 
         @jit.incore
@@ -1795,7 +1796,7 @@ class TestSliceAndDepReturnMetadata:
         Here the kernel loads the WHOLE tensor as a tile, so the dynamic dim
         reaches the tile shape, which InitMemRef rejects. That is the same
         error a hand-written ``@pl.program`` gets for the same code — the point
-        of this test is that ``@pl.jit`` no longer front-runs it with a
+        of this test is that ``@pl.jit_specializer`` no longer front-runs it with a
         frontend-only "missing inferred tensor metadata".
         """
         torch = pytest.importorskip("torch")
@@ -2227,7 +2228,7 @@ class TestWindowLocalMetadata:
 
     def test_window_missing_dtype_untracked(self):
         def body(buf):
-            data = pld.window(buf, [1, 256])  # no dtype= kw
+            data = pld.window(buf, [1, 256])  # no dtype= kw  # pyright: ignore[reportCallIssue]
             return data
 
         metas = _extract_local_tensor_metas(body, seed_meta={})
@@ -2235,7 +2236,7 @@ class TestWindowLocalMetadata:
 
     def test_window_missing_shape_untracked(self):
         def body(buf):
-            data = pld.window(buf, dtype=pl.FP32)  # no shape arg
+            data = pld.window(buf, dtype=pl.FP32)  # no shape arg  # pyright: ignore[reportCallIssue]
             return data
 
         metas = _extract_local_tensor_metas(body, seed_meta={})
@@ -2312,10 +2313,10 @@ class TestSlicedDispatchMetadata:
 
 
 class TestInlineFuncIntegration:
-    """End-to-end @pl.jit.inline: dep body is spliced into entry by the IR pass."""
+    """End-to-end @pl.jit_specializer.inline: dep body is spliced into entry by the IR pass."""
 
     def test_inline_dep_discovered(self):
-        """@pl.jit.inline functions are picked up by dep discovery."""
+        """@pl.jit_specializer.inline functions are picked up by dep discovery."""
 
         @jit.inline
         def helper(a: pl.Tensor, c: pl.Out[pl.Tensor]):
@@ -2382,7 +2383,7 @@ class TestInlineFuncIntegration:
         hand-written equivalent.
 
         The pass-level tests in tests/ut/ir/transforms/test_inline_functions.py
-        cover detailed structural correctness (Phase 0d).
+        cover detailed structural correctness.
         """
         torch = pytest.importorskip("torch")
 
@@ -2415,7 +2416,7 @@ class TestInlineFuncIntegration:
         )
 
     def test_nested_inline_dep_graph(self):
-        """A @pl.jit.inline that calls another @pl.jit.inline: both deps must be
+        """A @pl.jit_specializer.inline that calls another @pl.jit_specializer.inline: both deps must be
         discovered transitively in leaf-first topological order, with the call
         graph recording who calls whom (regression for issue #1302)."""
 
@@ -2555,7 +2556,7 @@ class TestInlineFuncIntegration:
         assert "entry_mixed" in func_names
 
     def test_inline_multi_return_tuple_unpack(self):
-        """Multi-return @pl.jit.inline + tuple-unpack at call site (issue #1304).
+        """Multi-return @pl.jit_specializer.inline + tuple-unpack at call site (issue #1304).
 
         Pre-fix: ParserSyntaxError ('TupleGetItemExpr requires tuple to have
         TupleType, got TensorType') because the specializer emitted a single-
@@ -2624,7 +2625,7 @@ class TestInlineFuncIntegration:
         assert "entry" in func_names
 
     def test_inline_multi_return_direct_return(self):
-        """Multi-return @pl.jit.inline + ``return inline_call(...)`` (issue #1304).
+        """Multi-return @pl.jit_specializer.inline + ``return inline_call(...)`` (issue #1304).
 
         Pre-fix: RuntimeError reporting the inline function as undefined, because
         InlineCallsMutator only handled AssignStmt/EvalStmt — ReturnStmt-shaped
@@ -2661,7 +2662,7 @@ class TestInlineFuncIntegration:
         assert "entry" in func_names
 
     def test_inline_with_bare_tensor_no_pl_out(self):
-        """@pl.jit.inline helpers with bare ``pl.Tensor`` params (no ``pl.Out``)
+        """@pl.jit_specializer.inline helpers with bare ``pl.Tensor`` params (no ``pl.Out``)
         compile cleanly without DeprecationWarning. The body is spliced
         identically — `pl.Out` is redundant on inline helpers because the
         splice happens before SSA.
@@ -2705,7 +2706,7 @@ class TestInlineFuncIntegration:
         assert "entry" in func_names
 
     def test_inline_with_reshape_compiles(self):
-        """Regression: @pl.jit.inline + pl.reshape in caller compiles.
+        """Regression: @pl.jit_specializer.inline + pl.reshape in caller compiles.
 
         Previously failed because ``_extract_local_tensor_metas`` did not track
         ``pl.reshape``, so the specializer couldn't find metadata for the
@@ -2743,7 +2744,7 @@ class TestInlineFuncIntegration:
 
     def test_inline_with_subscript_slice_compiles(self):
         """Regression for #1836: a subscript-slice view ``src[a:b]`` forwarded into
-        an @pl.jit.inline dep compiles.
+        an @pl.jit_specializer.inline dep compiles.
 
         Previously failed because ``_extract_local_tensor_metas`` did not track the
         subscript-slice sugar (an ``ast.Subscript``, unlike ``pl.slice``'s Call),
@@ -2809,10 +2810,10 @@ class TestInlineFuncIntegration:
 
 
 class TestOpaqueFuncIntegration:
-    """End-to-end @pl.jit.opaque: dep is emitted as a separate Opaque IR function."""
+    """End-to-end @pl.jit_specializer.opaque: dep is emitted as a separate Opaque IR function."""
 
     def test_opaque_dep_discovered(self):
-        """@pl.jit.opaque functions are picked up by dep discovery."""
+        """@pl.jit_specializer.opaque functions are picked up by dep discovery."""
 
         @jit.opaque
         def helper(a: pl.Tensor, c: pl.Out[pl.Tensor]):
@@ -2882,7 +2883,7 @@ class TestOpaqueFuncIntegration:
 
 
 class TestRoundTrip:
-    """Round-trip: @pl.jit output must be structurally equal to a hand-written @pl.program."""
+    """Round-trip: @pl.jit_specializer output must be structurally equal to a hand-written @pl.program."""
 
     def test_elementwise_add_128x128(self):
         torch = pytest.importorskip("torch")
@@ -2928,7 +2929,7 @@ class TestRoundTrip:
 
 
 class TestVariableRebinding:
-    """Tests for Python-style variable rebinding in @pl.jit (Issue #1121)."""
+    """Tests for Python-style variable rebinding in @pl.jit_specializer (Issue #1121)."""
 
     def test_rebind_same_type_compiles(self):
         """Rebinding a Tile variable to a new Tile value must compile without error."""
@@ -3230,7 +3231,7 @@ class TestCompileKwargForwarding:
         assert captured["platform"] == "a2a3sim"
         assert captured["analyze_auto_scopes_for_deps"] is True
         assert "skip_ptoas" in captured
-        # distributed_config reaches ir.compile() so a @pl.jit.host entry can
+        # distributed_config reaches ir.compile() so a @pl.jit_specializer.host entry can
         # compile to a DistributedCompiledProgram and dispatch per-rank.
         assert captured["distributed_config"] is dc
 
@@ -3300,7 +3301,7 @@ def _walk_spans(stmts):
 class TestJitSourceProvenance:
     """JIT parse/compile diagnostics point at the user's real source (#1612).
 
-    @pl.jit re-derives the kernel into a generated @pl.program string and
+    @pl.jit_specializer re-derives the kernel into a generated @pl.program string and
     reparses it, so spans used to land on a synthesized ``<string>`` source.
     A source map now remaps them back to the user's .py at statement
     granularity.
@@ -3353,7 +3354,7 @@ class TestJitSourceProvenance:
 
 
 class TestClosureConstantFolding:
-    """A ``@pl.jit`` function defined inside a factory (issue #2449).
+    """A ``@pl.jit_specializer`` function defined inside a factory (issue #2449).
 
     The generated ``@pl.program`` source is ``exec``'d in a fresh module holding
     only ``pl`` and ``pld``, so every free name in a body must be folded to a
@@ -3372,7 +3373,7 @@ class TestClosureConstantFolding:
 
     @staticmethod
     def _build_factory_entry(rows: int):
-        """Return a @pl.jit entry whose body references the factory's ``rows``."""
+        """Return a @pl.jit_specializer entry whose body references the factory's ``rows``."""
 
         @jit.incore
         def copy_incore(t: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:

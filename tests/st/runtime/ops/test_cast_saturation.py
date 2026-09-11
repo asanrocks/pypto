@@ -34,6 +34,8 @@ import pypto.language as pl
 import pytest
 import torch
 from harness.core.harness import DataType, PTOTestCase, TensorSpec
+from pypto import ir
+from pypto.language.tracer.decorators.jit import _eager_trace_record
 
 N = 128
 
@@ -135,6 +137,15 @@ def _cast_multihop_on_program(
     return _cast_multihop_on_kernel(src, out)
 
 
+def _program(fn: ir.Function) -> ir.Program:
+    """The eager-lane program route: the entry plus every callee its
+    decoration trace reached (the eager record's assembly — the same
+    functions the lazy lane's ``compile()`` would assemble)."""
+    record = _eager_trace_record(fn)
+    callees = list(record.assembly.functions) if record is not None else []
+    return ir.Program([fn, *callees], fn.name, fn.span)
+
+
 class CastMultiHopSaturationCase(PTOTestCase):
     """FP32 -> INT8 with ON, which reaches the destination through an FP16 hop."""
 
@@ -161,7 +172,7 @@ class CastMultiHopSaturationCase(PTOTestCase):
         ]
 
     def get_program(self) -> Any:
-        return _cast_multihop_on_program.specialize()
+        return _program(_cast_multihop_on_program)
 
     def compute_expected(self, tensors: dict[str, torch.Tensor], params=None) -> None:
         # Every value here is exactly representable in FP16, so the widening hop
@@ -192,8 +203,8 @@ class CastSaturationCase(PTOTestCase):
 
     def get_program(self) -> Any:
         if self.saturation_mode == "on_explicit_tmp":
-            return _cast_on_explicit_tmp_program.specialize()
-        return _make_program(self.saturation_mode).specialize()
+            return _program(_cast_on_explicit_tmp_program)
+        return _program(_make_program(self.saturation_mode))
 
     def compute_expected(self, tensors: dict[str, torch.Tensor], params=None) -> None:
         truncated = torch.trunc(tensors["src"].to(torch.float32))

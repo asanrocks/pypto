@@ -9,7 +9,7 @@
 
 """Fixture for the aliased-import dep case.
 
-A ``@pl.jit.incore`` kernel that lives in its *own module*, so a caller can
+A ``@pl.jit_specializer.incore`` kernel that lives in its *own module*, so a caller can
 reach it through ``from _alias_dep_fixture import copy_incore as kern`` — the
 shape that made specialization fail with a misleading "missing inferred tensor
 metadata" error. Its parameters are named unlike any caller variable, so

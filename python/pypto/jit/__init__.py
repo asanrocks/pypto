@@ -7,17 +7,25 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""PyPTO JIT compilation module.
+"""PyPTO JIT compilation module — the quarantined AST-era runtime.
 
-Provides the ``@pl.jit`` decorator for writing kernel functions that are
-automatically specialized, compiled, and executed on first call based on the
-shapes and dtypes of their torch tensor arguments.
+This package is the pre-migration ``@pl.jit`` implementation: AST
+specialization (source rewriting into ``@pl.program`` form), the compile
+cache, and device execution. ``pl.jit`` itself now collects through
+tracing (:mod:`pypto.language.tracer.decorators.jit`) — including the
+torch-argument bridge, multi-function program assembly, and the compile /
+dispatch shell. This runtime survives temporarily under
+``pl.jit_specializer`` for its own unit tests (specializer-mechanics
+coverage); its behavioral tiers — torch-argument specialization,
+multi-function assembly, dispatch, and ``@pl.jit.extern`` — are covered by
+the tracing jit. It is deleted once the remaining mechanics tests port —
+do not build new features here.
 
-Example::
+Example (quarantined form)::
 
     import pypto.language as pl
 
-    @pl.jit
+    @pl.jit_specializer
     def tile_add(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
         with pl.at(level=pl.Level.CORE_GROUP):
             M, N = a.shape

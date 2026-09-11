@@ -990,7 +990,7 @@ class TestSpecializer:
         assert "pl.FunctionType.InCore" in out
 
     def test_jit_host_emits_host_orchestrator_decorator(self):
-        """@pl.jit.host generates a HOST Orchestrator @pl.function decorator —
+        """@pl.jit_specializer.host generates a HOST Orchestrator @pl.function decorator —
         matching the canonical spelling in tests/st/distributed/test_l3_allreduce.py.
         ``type=`` is omitted (defaults to FunctionType.Opaque, which is correct
         for a HOST orchestrator)."""
@@ -1745,7 +1745,7 @@ class TestInferReturnType:
 
 
 class TestSpecializerInlineDeprecation:
-    """`@pl.jit.inline` should emit bare `pl.Tensor[...]` and warn on `pl.Out`."""
+    """`@pl.jit_specializer.inline` should emit bare `pl.Tensor[...]` and warn on `pl.Out`."""
 
     def _spec(self, ctx_args: dict) -> str:
         ctx = _make_ctx(**ctx_args)
@@ -1841,7 +1841,7 @@ class TestSpecializerSourceMap:
         # decorator, so body statements sit at dedented lines 3, 4, 5.
         src = textwrap.dedent(
             """
-            @pl.jit
+            @pl.jit_specializer
             def kernel(a: pl.Tensor, out: pl.Out[pl.Tensor]):
                 t = pl.load(a, [0, 0], [32, 32])
                 pl.store(t, [0, 0], out)
@@ -1902,7 +1902,7 @@ class TestSpecializerSourceMap:
         """
         src = textwrap.dedent(
             """
-            @pl.jit
+            @pl.jit_specializer
             def kernel(a: pl.Tensor, out: pl.Out[pl.Tensor]):
                 K = a.shape[1]
             """

@@ -463,7 +463,7 @@ def test_gemv_non_boolean_init_cond_is_rejected():
 
 @pytest.mark.parametrize("runtime_bound", [False, True])
 def test_shared_row_accumulator_compiles_without_acc_to_acc_copy(tmp_path, runtime_bound):
-    @pl.jit
+    @pl.jit_specializer
     def kernel(
         x: pl.Tensor[[64, 1024], pl.INT8],
         w: pl.Tensor[[128, 1024], pl.INT8],

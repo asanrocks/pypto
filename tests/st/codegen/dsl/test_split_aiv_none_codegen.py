@@ -32,7 +32,9 @@ import pytest
 torch = pytest.importorskip("torch")
 
 import pypto.language as pl  # noqa: E402
+from pypto import ir  # noqa: E402
 from pypto.runtime import RunConfig  # noqa: E402
+from pypto.runtime.runner import run_config_compile_kwargs  # noqa: E402
 
 T, N = 128, 128
 DUMP_DIR = Path(__file__).resolve().parents[4] / "build_output" / "split_aiv_none_codegen"
@@ -56,6 +58,20 @@ def split_aiv_none_pipe(
     return c
 
 
+def _compile(fn: ir.Function, cfg: RunConfig):
+    """Compile an eagerly traced ``@pl.jit`` kernel for host dispatch.
+
+    A lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
+    exactly this way (``jit.py``'s ``_compile_program``): the compile-side
+    fields become compile kwargs, everything else rides the dispatch
+    ``config=``. The eager lane has no host dispatch surface of its own — the
+    decoration returns a bare ``ir.Function`` — so the test drives the same
+    route the lazy lane would.
+    """
+    kwargs = {"platform": cfg.platform, **run_config_compile_kwargs(cfg)}
+    return ir.compile(ir.Program([fn], fn.name, fn.span), **kwargs)
+
+
 @pytest.fixture(scope="module")
 def compiled() -> Exception | None:
     """Compile the kernel once (codegen only) into DUMP_DIR; return any late error.
@@ -75,7 +91,7 @@ def compiled() -> Exception | None:
         save_kernels_dir=str(DUMP_DIR),
     )
     try:
-        split_aiv_none_pipe(torch.randn(T, N), torch.empty(T, N), config=cfg)
+        _compile(split_aiv_none_pipe, cfg)
     except Exception as e:  # noqa: BLE001 - see docstring
         return e
     return None

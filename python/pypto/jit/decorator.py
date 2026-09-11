@@ -105,6 +105,23 @@ from .specializer import (
 # ---------------------------------------------------------------------------
 
 
+def _raise_if_inside_trace(kernel_name: str) -> None:
+    """The jit-inside-jit guard: the AST runtime's pl.parse() pipeline must
+    never run inside a trace — it silently escapes the tracing frontend
+    and surfaces as a foreign error ("missing inferred tensor metadata")
+    with no indication the frontend was left."""
+    # Local import: the quarantine may not import the language package at
+    # module level (pypto.language.__init__ imports pypto.jit — a cycle).
+    from pypto.language.ambient import active_frame  # noqa: PLC0415
+
+    if active_frame() is not None:
+        raise RuntimeError(
+            f"call to {kernel_name!r}: @pl.jit_specializer (the quarantined AST "
+            "runtime) cannot run inside a trace — the collection frontend is "
+            "tracing; make the callee a @pl.function / @pl.jit (tracing) function"
+        )
+
+
 def _rewrite_jit_error(exc: Exception, rename_map: dict[str, str]) -> Exception:
     """Replace internal alpha-renamed aliases (e.g. ``x_v1``) with the user's
     original variable name (``x``) in the exception message.
@@ -1744,6 +1761,21 @@ def _overlay_dep_declared_layouts(dep: JITFunction, dep_tensor_meta: dict[str, T
 
 
 # ---------------------------------------------------------------------------
+# RunConfig -> ir.compile() keyword forwarding
+# ---------------------------------------------------------------------------
+# The implementations live in ``pypto.runtime.runner`` next to ``RunConfig``
+# (shared with the tracing ``pl.jit``); the private aliases below keep the
+# quarantined specializer's import surface stable for its unit tests.
+
+
+from pypto.runtime.runner import (  # noqa: E402 -- grouped after the module header
+    resolve_enable_pypto_l0c_double_buffer as _resolve_enable_pypto_l0c_double_buffer,
+)
+from pypto.runtime.runner import (  # noqa: E402
+    resolve_memory_planner as _resolve_memory_planner,
+)
+
+# ---------------------------------------------------------------------------
 # RunConfig -> pass-pipeline keyword forwarding
 #
 # The compile-side half has no counterpart here: ``RunConfig.compile_kwargs()``
@@ -1764,37 +1796,6 @@ def _run_config_lower_kwargs(run_config: Any) -> dict[str, Any]:
     if run_config.memory_planner is not None:
         kwargs["memory_planner"] = run_config.memory_planner
     return kwargs
-
-
-def _resolve_memory_planner(run_config: Any) -> _passes.MemoryPlanner:
-    """Resolve the planner a compile would actually use, for the cache key.
-
-    Mirrors ``ir.compile()``'s own precedence — explicit argument, then the
-    active ``PassContext``, then ``PYPTO``. Reading the context matters: the
-    planner is most often selected by wrapping a call in
-    ``with PassContext([], memory_planner=...)``, which never reaches
-    ``RunConfig`` at all. Keying only on the ``RunConfig`` field would let a
-    PTOAS-wrapped call reuse a PYPTO-compiled artifact.
-    """
-    if run_config is not None and run_config.memory_planner is not None:
-        return run_config.memory_planner
-    ctx = _passes.PassContext.current()
-    if ctx is not None:
-        return ctx.get_memory_planner()
-    return _passes.MemoryPlanner.PYPTO
-
-
-def _resolve_enable_pypto_l0c_double_buffer() -> bool:
-    """Resolve the legacy-PYPTO chooser dbC=2 opt-in for the cache key.
-
-    Like ``_resolve_memory_planner``, this flag is most often set by wrapping a
-    call in ``with PassContext([], enable_pypto_l0c_double_buffer=True)``, which
-    ``ir.compile()`` inherits. ``RunConfig`` does not carry this PassContext-only
-    flag, so the active context is the only source. ``make_cache_key`` ignores it
-    for DSA_RP and PTOAS, where dbC=2 is automatic.
-    """
-    ctx = _passes.PassContext.current()
-    return ctx.get_enable_pypto_l0c_double_buffer() if ctx is not None else False
 
 
 def _resolve_runtime() -> _passes.RuntimeKind:
@@ -2448,6 +2449,8 @@ class JITFunction:
         Returns:
             The specialization metadata and the consumed ``RunConfig``.
         """
+        _raise_if_inside_trace(self._func.__name__)
+
         # Extract RunConfig without mutating *kwargs* — although the caller's
         # ``**kwargs`` dict is normally owned by Python at this scope, building
         # a fresh dict is the same cost and removes the ambiguity for readers

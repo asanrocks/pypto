@@ -13,7 +13,7 @@
 Unlike the explicit ``self.kernel(...)`` orchestration style (covered by
 ``tests/ut/language/parser/test_dump_tag_dsl.py``), here the kernel dispatches
 are synthesised by the outline passes, not written at parse time. The dump
-intent therefore rides a scope-level ``kAttrDumpVars`` carrier:
+intent therefore rides the scope-level ``kAttrDumpVars`` attribute:
 
   - ``pl.dump_tag`` inside an inline helper (forward-sticky) seeds the enclosing
     ``with pl.at(level=pl.Level.CORE_GROUP)`` scope's dump list at parse;
@@ -157,7 +157,7 @@ def test_dump_tag_reaches_outlined_dispatch_single_func():
 
     a = torch.randn(128, 128, dtype=torch.float32)
     c = torch.zeros(128, 128, dtype=torch.float32)
-    program = _add_mul_with_dump_tags.lower(a, c)
+    program = _add_mul_with_dump_tags.compile_for_test(a, c)
 
     dumps = _dispatch_dump_vars(program)
     assert len(dumps) == 2, f"expected two outlined dispatches, got {sorted(dumps)}"
@@ -179,7 +179,7 @@ def test_tag_survives_multi_level_inline_passthrough():
 
     a = torch.randn(128, 128, dtype=torch.float32)
     c = torch.zeros(128, 128, dtype=torch.float32)
-    program = _entry_tag_through_two_inline_levels.lower(a, c)
+    program = _entry_tag_through_two_inline_levels.compile_for_test(a, c)
 
     dumps = _dispatch_dump_vars(program)
     dumping = {name: dv for name, dv in dumps.items() if dv}
@@ -206,7 +206,7 @@ def test_dump_tag_reaches_for_form_spmd_dispatch():
 
     a = torch.randn(128, 128, dtype=torch.float32)
     c = torch.zeros(128, 128, dtype=torch.float32)
-    program = _spmd_for_with_dump_tag.lower(a, c)
+    program = _spmd_for_with_dump_tag.compile_for_test(a, c)
 
     # (1) Parser: the inner outlined kernel dispatch carries the tagged Var.
     dumps = _dispatch_dump_vars(program)
@@ -262,7 +262,7 @@ def test_dump_tag_survives_cluster_group_mixed_split():
     b = torch.randn(64, 64, dtype=torch.float32)
     bias = torch.randn(64, 64, dtype=torch.float32)
     c = torch.zeros(64, 64, dtype=torch.float32)
-    program = _cluster_mixed_with_dump_tag.lower(a, b, bias, c)
+    program = _cluster_mixed_with_dump_tag.compile_for_test(a, b, bias, c)
 
     dumps = _dispatch_dump_vars(program)
     tagged = sorted({_base(n) for dv in dumps.values() for n in dv})
@@ -275,7 +275,7 @@ def test_no_dump_tag_yields_no_dispatch_dump_vars():
 
     a = torch.randn(128, 128, dtype=torch.float32)
     c = torch.zeros(128, 128, dtype=torch.float32)
-    program = _add_mul_no_tags.lower(a, c)
+    program = _add_mul_no_tags.compile_for_test(a, c)
 
     dumps = _dispatch_dump_vars(program)
     assert dumps, "expected outlined dispatches"

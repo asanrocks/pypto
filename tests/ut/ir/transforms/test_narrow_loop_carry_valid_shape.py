@@ -46,7 +46,7 @@ _TILE_CREATE_OP = ir.get_op("tile.create").name
 _TILE_SET_VALIDSHAPE_OP = ir.get_op("tile.set_validshape").name
 
 
-@pl.jit
+@pl.jit_specializer
 def create_tensor_seeded_acc(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[BLOCKS, N_TILE, K], pl.INT8],
@@ -69,7 +69,7 @@ def create_tensor_seeded_acc(
     return y
 
 
-@pl.jit
+@pl.jit_specializer
 def create_tensor_seeded_acc_2d(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[N_TILE, K], pl.INT8],
@@ -92,7 +92,7 @@ def create_tensor_seeded_acc_2d(
     return y
 
 
-@pl.jit
+@pl.jit_specializer
 def carry_flows_into_a_later_loop(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[N_TILE, K], pl.INT8],
@@ -124,7 +124,7 @@ def carry_flows_into_a_later_loop(
     return y
 
 
-@pl.jit
+@pl.jit_specializer
 def single_fractal_block_acc(
     x: pl.Tensor[[BLOCKS * FRACTAL_ROWS, K], pl.BF16],
     w: pl.Tensor[[K, FRACTAL_N_TILE], pl.BF16],
@@ -151,7 +151,7 @@ def single_fractal_block_acc(
     return y
 
 
-@pl.jit
+@pl.jit_specializer
 def extent_computed_inside_the_loop(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[N_TILE, K], pl.INT8],
@@ -174,7 +174,7 @@ def extent_computed_inside_the_loop(
     return y
 
 
-@pl.jit
+@pl.jit_specializer
 def full_height_acc(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[BLOCKS, N_TILE, K], pl.INT8],
@@ -195,7 +195,7 @@ def full_height_acc(
     return y
 
 
-@pl.jit
+@pl.jit_specializer
 def vec_carry_narrowed_by_yield(
     x: pl.Tensor[[M_TILE, N_TILE], pl.FP32],
     y: pl.Out[pl.Tensor[[M_TILE, N_TILE], pl.FP32]],

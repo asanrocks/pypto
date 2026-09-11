@@ -52,7 +52,7 @@ def test_jit_at_allow_early_resolve_emits_hint():
 
     a = torch.randn(128, 128, dtype=torch.float32)
     c = torch.zeros(128, 128, dtype=torch.float32)
-    program = _at_early_resolve_entry.lower(a, c)
+    program = _at_early_resolve_entry.compile_for_test(a, c)
 
     code = _orch_code(program)
     assert "set_allow_early_resolve(true);" in code, code
@@ -64,7 +64,7 @@ def test_jit_no_flag_emits_no_hint():
 
     a = torch.randn(128, 128, dtype=torch.float32)
     c = torch.zeros(128, 128, dtype=torch.float32)
-    program = _at_no_flag_entry.lower(a, c)
+    program = _at_no_flag_entry.compile_for_test(a, c)
 
     assert "set_allow_early_resolve" not in _orch_code(program)
 

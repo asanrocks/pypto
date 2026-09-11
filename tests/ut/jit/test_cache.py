@@ -561,7 +561,7 @@ class TestGlobalDependencies:
         return programs
 
     def test_global_change_invalidates_memory_cache(self, compile_programs, monkeypatch):
-        kernel = pl.jit(_global_slice)
+        kernel = pl.jit_specializer(_global_slice)
         first = kernel.compile()
         assert kernel.compile() is first
         monkeypatch.setitem(_global_slice.__globals__, "_CACHE_BLOCK", 64)
@@ -572,12 +572,12 @@ class TestGlobalDependencies:
         assert "[64, 128]" in second.as_python()
 
     def test_hash_available_before_specialization(self):
-        first = pl.jit(_with_globals(_global_slice, _CACHE_BLOCK=32))
-        second = pl.jit(_with_globals(_global_slice, _CACHE_BLOCK=64))
+        first = pl.jit_specializer(_with_globals(_global_slice, _CACHE_BLOCK=32))
+        second = pl.jit_specializer(_with_globals(_global_slice, _CACHE_BLOCK=64))
         assert first._get_source_hash() != second._get_source_hash()
 
     def test_unused_global_does_not_invalidate(self, monkeypatch):
-        kernel = pl.jit(_global_slice)
+        kernel = pl.jit_specializer(_global_slice)
         initial = kernel._get_source_hash()
         monkeypatch.setitem(_global_slice.__globals__, "_CACHE_UNUSED", 123)
         assert kernel._get_source_hash() == initial
@@ -587,8 +587,8 @@ class TestGlobalDependencies:
         def add_constant(x: pl.Tensor[[128], pl.FP32]):
             return pl.add(x, _CACHE_BLOCK)
 
-        a = pl.jit(_with_globals(add_constant, _CACHE_BLOCK=first))
-        b = pl.jit(_with_globals(add_constant, _CACHE_BLOCK=second))
+        a = pl.jit_specializer(_with_globals(add_constant, _CACHE_BLOCK=first))
+        b = pl.jit_specializer(_with_globals(add_constant, _CACHE_BLOCK=second))
         assert a._get_source_hash() != b._get_source_hash()
 
     @pytest.mark.parametrize(
@@ -622,7 +622,7 @@ class TestGlobalDependencies:
     def test_closure_constant_uses_current_snapshot(self, compile_programs):
         block = 32
 
-        @pl.jit
+        @pl.jit_specializer
         def kernel(x: pl.Tensor[[128], pl.FP32]) -> pl.Tensor[[128], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP):
                 y = pl.add(x, block)
@@ -638,7 +638,7 @@ class TestGlobalDependencies:
     def test_source_hash_and_specialization_share_closure_snapshot(self, compile_programs, monkeypatch):
         block = 32
 
-        @pl.jit
+        @pl.jit_specializer
         def kernel(x: pl.Tensor[[128], pl.FP32]) -> pl.Tensor[[128], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP):
                 y = pl.add(x, block)
@@ -669,10 +669,10 @@ class TestGlobalDependencies:
         def right(x):
             return pl.mul(x, _CACHE_BLOCK)
 
-        left_dep = pl.jit.inline(_with_globals(left, _CACHE_BLOCK=32))
-        right_dep = pl.jit.inline(_with_globals(right, _CACHE_BLOCK=64))
+        left_dep = pl.jit_specializer.inline(_with_globals(left, _CACHE_BLOCK=32))
+        right_dep = pl.jit_specializer.inline(_with_globals(right, _CACHE_BLOCK=64))
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(x: pl.Tensor[[128], pl.FP32]):
             return right_dep(left_dep(x))
 
@@ -684,7 +684,7 @@ class TestGlobalDependencies:
         assert entry._get_source_hash() != left_changed
 
     def test_local_shadow_does_not_invalidate(self, monkeypatch):
-        @pl.jit
+        @pl.jit_specializer
         def kernel(x: pl.Tensor[[128], pl.FP32]):
             _CACHE_BLOCK = 16
             with pl.at(level=pl.Level.CORE_GROUP):
@@ -696,7 +696,7 @@ class TestGlobalDependencies:
         assert kernel._get_source_hash() == initial
 
     def test_return_annotation_global_is_keyed(self, monkeypatch):
-        @pl.jit
+        @pl.jit_specializer
         def kernel(x: pl.Tensor[[128], pl.FP32]) -> pl.Tensor[[_CACHE_BLOCK], pl.FP32]:
             return x
 
@@ -705,13 +705,13 @@ class TestGlobalDependencies:
         assert kernel._get_source_hash() != initial
 
     def test_transitive_global_change(self, monkeypatch):
-        leaf = pl.jit.inline(_global_slice)
+        leaf = pl.jit_specializer.inline(_global_slice)
 
-        @pl.jit.inline
+        @pl.jit_specializer.inline
         def helper(x):
             return leaf(x)
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(x: pl.Tensor[[128], pl.FP32]):
             return helper(x)
 
@@ -720,18 +720,18 @@ class TestGlobalDependencies:
         assert entry._get_source_hash() != initial
 
     def test_rebound_helper_changes_dependency_graph(self):
-        @pl.jit.inline
+        @pl.jit_specializer.inline
         def helper(x):
             return x
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(x: pl.Tensor[[128], pl.FP32]):
             return helper(x)
 
         initial = entry._get_source_hash()
         assert entry._get_deps() == [helper]
 
-        @pl.jit.inline
+        @pl.jit_specializer.inline
         def helper(x):
             return pl.add(x, x)
 
@@ -739,7 +739,7 @@ class TestGlobalDependencies:
         assert entry._get_deps() == [helper]
 
     def test_compilation_uses_key_snapshot(self, compile_programs, monkeypatch):
-        kernel = pl.jit(_global_slice)
+        kernel = pl.jit_specializer(_global_slice)
         make_key = importlib.import_module("pypto.jit.decorator").make_cache_key
 
         def mutate_after_key(**kwargs):
@@ -757,17 +757,17 @@ class TestGlobalDependencies:
         assert len(compile_programs) == 2
 
     def test_concurrent_helper_rebinding_keeps_each_call_snapshot(self, compile_programs, monkeypatch):
-        @pl.jit.inline
+        @pl.jit_specializer.inline
         def add_impl(x: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
             return pl.add(x, x)
 
-        @pl.jit.inline
+        @pl.jit_specializer.inline
         def mul_impl(x: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
             return pl.mul(x, x)
 
         helper = add_impl
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(x: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP):
                 y = helper(x)
@@ -813,8 +813,8 @@ class TestGlobalDependencies:
     @pytest.mark.parametrize(
         "before,after",
         [
-            (pl.jit.inline, pl.jit.opaque),
-            (pl.jit.inline(auto_scope=True), pl.jit.inline(auto_scope=False)),
+            (pl.jit_specializer.inline, pl.jit_specializer.opaque),
+            (pl.jit_specializer.inline(auto_scope=True), pl.jit_specializer.inline(auto_scope=False)),
         ],
         ids=["function-type", "auto-scope"],
     )
@@ -824,7 +824,7 @@ class TestGlobalDependencies:
 
         helper = before(implementation)
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(x: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP):
                 y = helper(x)
@@ -844,9 +844,9 @@ class TestGlobalDependencies:
         def implementation(x: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
             return pl.add(x, x)
 
-        helper = pl.jit.incore(level=pl.Level.CHIP_DIE)(implementation)
+        helper = pl.jit_specializer.incore(level=pl.Level.CHIP_DIE)(implementation)
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(x: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[128, 128], pl.FP32]:
             with pl.at(level=pl.Level.CORE_GROUP):
                 y = helper(x)
@@ -854,14 +854,14 @@ class TestGlobalDependencies:
 
         initial_hash = entry._get_source_hash()
         entry.compile()
-        helper = pl.jit.incore(level=pl.Level.AIC)(implementation)
+        helper = pl.jit_specializer.incore(level=pl.Level.AIC)(implementation)
         assert entry._get_source_hash() != initial_hash
         with pytest.raises(ParserSyntaxError, match="explicit level=AIC"):
             entry.compile()
         assert len(compile_programs) == 1
 
     def test_snapshot_is_released_after_compile_failure(self, compile_programs, monkeypatch):
-        kernel = pl.jit(_global_slice)
+        kernel = pl.jit_specializer(_global_slice)
         compile_kernel = kernel._compile
 
         def fail_once(*args, **kwargs):
@@ -875,9 +875,9 @@ class TestGlobalDependencies:
         assert "[64, 128]" in kernel.compile().as_python()
 
     def test_warm_key_reuses_source_and_layout_resolution(self, monkeypatch):
-        helper = pl.jit.inline(_global_slice)
+        helper = pl.jit_specializer.inline(_global_slice)
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(x: pl.Tensor[[128, 128], pl.FP32]):
             return helper(x)
 
@@ -901,9 +901,9 @@ class TestGlobalDependencies:
             return x
 
         func = _with_globals(implementation, _CACHE_LAYOUT=pl.NZ)
-        helper = pl.jit.inline(func)
+        helper = pl.jit_specializer.inline(func)
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(x: pl.Tensor[[128, 128], pl.FP32]):
             return helper(x)
 
@@ -924,7 +924,7 @@ class TestGlobalDependencies:
         assert implementation.__closure__ is not None
         del implementation.__closure__[0].cell_contents
         monkeypatch.setitem(implementation.__globals__, "rows", 5)
-        kernel = pl.jit(implementation)
+        kernel = pl.jit_specializer(implementation)
         initial_hash = kernel._get_source_hash()
         monkeypatch.setitem(implementation.__globals__, "rows", 9)
         assert kernel._get_source_hash() == initial_hash
@@ -959,7 +959,7 @@ class TestGlobalDependencies:
         monkeypatch.setattr(
             importlib.import_module("pypto.jit.decorator"), "_get_func_def", lambda _: definition
         )
-        kernel = pl.jit(implementation)
+        kernel = pl.jit_specializer(implementation)
         assert kernel._get_source_hash() == kernel._get_source_hash()
 
 

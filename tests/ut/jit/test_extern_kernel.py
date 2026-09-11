@@ -7,9 +7,9 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Tests for @pl.jit.extern — integrating hand-written C++ kernels via JIT.
+"""Tests for @pl.jit_specializer.extern — integrating hand-written C++ kernels via JIT.
 
-An external kernel is a signature-only ``@pl.jit.extern`` stub backed by a
+An external kernel is a signature-only ``@pl.jit_specializer.extern`` stub backed by a
 hand-written ``.cpp``. The specializer renders it into a header-only
 ``@pl.function(external_source=...)`` declaration; a ``core_type="mixed"``
 kernel expands to an AIC member + AIV member + Group wrapper so the entry's
@@ -57,13 +57,13 @@ def _generate_external_config(entry, args, tmp_path: Path):
 def test_mixed_extern_expands_to_group(tmp_path):
     cpp = _write_kernel(tmp_path)
 
-    @pl.jit.extern(core_type="mixed", aic_source=cpp, aiv_source=cpp)
+    @pl.jit_specializer.extern(core_type="mixed", aic_source=cpp, aiv_source=cpp)
     def pa(
         a: pl.Tensor[[128, 128], pl.FP16],
         out: pl.Out[pl.Tensor[[128, 128], pl.FP16]],
     ) -> pl.Tensor[[128, 128], pl.FP16]: ...
 
-    @pl.jit
+    @pl.jit_specializer
     def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
         out = pa(a, out)
         return out
@@ -93,7 +93,7 @@ def test_mixed_extern_expands_to_group(tmp_path):
 def test_mixed_extern_can_dispatch_both_aiv_lanes(tmp_path):
     cpp = _write_kernel(tmp_path)
 
-    @pl.jit.extern(
+    @pl.jit_specializer.extern(
         core_type="mixed",
         aic_source=cpp,
         aiv_source=cpp,
@@ -104,7 +104,7 @@ def test_mixed_extern_can_dispatch_both_aiv_lanes(tmp_path):
         out: pl.Out[pl.Tensor[[128, 128], pl.FP16]],
     ) -> pl.Tensor[[128, 128], pl.FP16]: ...
 
-    @pl.jit
+    @pl.jit_specializer
     def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
         out = pa(a, out)
         return out
@@ -131,20 +131,20 @@ def test_dual_aiv_dispatch_requires_mixed_extern(tmp_path, core_type):
     cpp = _write_kernel(tmp_path)
     with pytest.raises(ValueError, match="requires core_type='mixed'"):
 
-        @pl.jit.extern(core_type=core_type, source=cpp, dual_aiv_dispatch=True)
+        @pl.jit_specializer.extern(core_type=core_type, source=cpp, dual_aiv_dispatch=True)
         def k(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...
 
 
 def test_single_core_extern(tmp_path):
     cpp = _write_kernel(tmp_path)
 
-    @pl.jit.extern(core_type="aiv", source=cpp)
+    @pl.jit_specializer.extern(core_type="aiv", source=cpp)
     def relu(
         a: pl.Tensor[[64, 64], pl.FP32],
         out: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
     ) -> pl.Tensor[[64, 64], pl.FP32]: ...
 
-    @pl.jit
+    @pl.jit_specializer
     def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
         out = relu(a, out)
         return out
@@ -166,13 +166,13 @@ def test_single_core_extern_include_dirs_reach_kernel_descriptor(tmp_path):
     include_dir = tmp_path / "include"
     include_dir.mkdir()
 
-    @pl.jit.extern(core_type="aiv", source=cpp, include_dirs=[include_dir])
+    @pl.jit_specializer.extern(core_type="aiv", source=cpp, include_dirs=[include_dir])
     def relu(
         a: pl.Tensor[[64, 64], pl.FP32],
         out: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
     ) -> pl.Tensor[[64, 64], pl.FP32]: ...
 
-    @pl.jit
+    @pl.jit_specializer
     def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
         out = relu(a, out)
         return out
@@ -195,7 +195,7 @@ def test_mixed_extern_include_dirs_reach_both_kernel_descriptors(tmp_path):
     second_include.mkdir()
     expected = [str(first_include.resolve()), str(second_include.resolve())]
 
-    @pl.jit.extern(
+    @pl.jit_specializer.extern(
         core_type="mixed",
         aic_source=cpp,
         aiv_source=cpp,
@@ -206,7 +206,7 @@ def test_mixed_extern_include_dirs_reach_both_kernel_descriptors(tmp_path):
         out: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
     ) -> pl.Tensor[[64, 64], pl.FP32]: ...
 
-    @pl.jit
+    @pl.jit_specializer
     def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
         out = pa(a, out)
         return out
@@ -231,7 +231,7 @@ def test_extern_relative_include_dirs_resolve_from_stub_file(tmp_path):
     module_path = tmp_path / "external_stub.py"
     module_path.write_text(
         "import pypto.language as pl\n"
-        "@pl.jit.extern(core_type='aiv', source='kernels/ext.cpp', include_dirs=['headers'])\n"
+        "@pl.jit_specializer.extern(core_type='aiv', source='kernels/ext.cpp', include_dirs=['headers'])\n"
         "def ext(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...\n"
     )
     spec = importlib.util.spec_from_file_location("_pypto_test_external_stub", module_path)
@@ -247,13 +247,13 @@ def test_source_hash_tracks_cpp_edits(tmp_path):
     """Editing the .cpp changes the JIT cache key (the Python stub never does)."""
     cpp = _write_kernel(tmp_path)
 
-    @pl.jit.extern(core_type="aiv", source=cpp)
+    @pl.jit_specializer.extern(core_type="aiv", source=cpp)
     def k(
         a: pl.Tensor[[16, 16], pl.FP32],
         out: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
     ) -> pl.Tensor[[16, 16], pl.FP32]: ...
 
-    @pl.jit
+    @pl.jit_specializer
     def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
         out = k(a, out)
         return out
@@ -268,7 +268,7 @@ def test_source_hash_tracks_external_launch_metadata(tmp_path):
     cpp = _write_kernel(tmp_path)
 
     def make_entry(dual_aiv_dispatch):
-        @pl.jit.extern(
+        @pl.jit_specializer.extern(
             core_type="mixed",
             aic_source=cpp,
             aiv_source=cpp,
@@ -279,7 +279,7 @@ def test_source_hash_tracks_external_launch_metadata(tmp_path):
             out: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
         ) -> pl.Tensor[[16, 16], pl.FP32]: ...
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
             out = pa(a, out)
             return out
@@ -301,13 +301,13 @@ def test_source_hash_tracks_include_dir_metadata_and_headers(tmp_path):
     cpp.write_text("#include <config.h>\n" + _KERNEL_SRC)
 
     def make_entry(include_dir):
-        @pl.jit.extern(core_type="aiv", source=cpp, include_dirs=[include_dir])
+        @pl.jit_specializer.extern(core_type="aiv", source=cpp, include_dirs=[include_dir])
         def k(
             a: pl.Tensor[[16, 16], pl.FP32],
             out: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
         ) -> pl.Tensor[[16, 16], pl.FP32]: ...
 
-        @pl.jit
+        @pl.jit_specializer
         def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
             out = k(a, out)
             return out
@@ -328,13 +328,13 @@ def test_source_hash_tracks_quoted_include_edits(tmp_path):
     cpp = _write_kernel(tmp_path)
     cpp.write_text('#include "impl.cce"\n' + _KERNEL_SRC)
 
-    @pl.jit.extern(core_type="aiv", source=cpp)
+    @pl.jit_specializer.extern(core_type="aiv", source=cpp)
     def k(
         a: pl.Tensor[[16, 16], pl.FP32],
         out: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
     ) -> pl.Tensor[[16, 16], pl.FP32]: ...
 
-    @pl.jit
+    @pl.jit_specializer
     def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
         out = k(a, out)
         return out
@@ -349,7 +349,7 @@ def test_extern_bad_core_type(tmp_path):
     cpp = _write_kernel(tmp_path)
     with pytest.raises(ValueError, match="core_type must be"):
 
-        @pl.jit.extern(core_type="cube", source=cpp)
+        @pl.jit_specializer.extern(core_type="cube", source=cpp)
         def k(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...
 
 
@@ -357,7 +357,7 @@ def test_extern_mixed_requires_both_sources(tmp_path):
     cpp = _write_kernel(tmp_path)
     with pytest.raises(ValueError, match="requires both aic_source"):
 
-        @pl.jit.extern(core_type="mixed", aic_source=cpp)
+        @pl.jit_specializer.extern(core_type="mixed", aic_source=cpp)
         def k(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...
 
 
@@ -365,7 +365,7 @@ def test_extern_source_not_found(tmp_path):
     missing = tmp_path / "nope.cpp"
     with pytest.raises(ValueError, match="source file not found"):
 
-        @pl.jit.extern(core_type="aiv", source=missing)
+        @pl.jit_specializer.extern(core_type="aiv", source=missing)
         def k(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...
 
 
@@ -373,7 +373,7 @@ def test_extern_include_dirs_rejects_scalar_path(tmp_path):
     cpp = _write_kernel(tmp_path)
     with pytest.raises(TypeError, match="must be a sequence of paths"):
 
-        @pl.jit.extern(core_type="aiv", source=cpp, include_dirs=str(tmp_path))
+        @pl.jit_specializer.extern(core_type="aiv", source=cpp, include_dirs=str(tmp_path))
         def k(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...
 
 
@@ -382,7 +382,7 @@ def test_extern_include_dirs_rejects_missing_directory(tmp_path):
     missing = tmp_path / "missing"
     with pytest.raises(ValueError, match="include directory not found"):
 
-        @pl.jit.extern(core_type="aiv", source=cpp, include_dirs=[missing])
+        @pl.jit_specializer.extern(core_type="aiv", source=cpp, include_dirs=[missing])
         def k(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...
 
 

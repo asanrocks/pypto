@@ -64,7 +64,7 @@ HALF_ROWS = ROWS_PER_CORE // 2
 # ---------------------------------------------------------------------------------------------
 
 
-@pl.jit.inline
+@pl.jit_specializer.inline
 def _layer_guarded(
     cur: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],
@@ -133,7 +133,7 @@ def _layer_guarded(
     return nxt
 
 
-@pl.jit.inline
+@pl.jit_specializer.inline
 def _layer_unconditional(
     cur: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],
@@ -172,7 +172,7 @@ def _layer_unconditional(
     return nxt
 
 
-@pl.jit
+@pl.jit_specializer
 def guarded_two_trip(
     x: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],
@@ -197,7 +197,7 @@ def guarded_two_trip(
     return out
 
 
-@pl.jit
+@pl.jit_specializer
 def unconditional_two_trip(
     x: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],
@@ -222,7 +222,7 @@ def unconditional_two_trip(
     return out
 
 
-@pl.jit
+@pl.jit_specializer
 def guarded_one_trip(
     x: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],

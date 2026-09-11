@@ -32,6 +32,7 @@ Compilation is :func:`pypto.ir.compile`'s job; nothing here compiles for you.
     compiled(a, b, c, config=config)
 """
 
+import dataclasses
 import functools
 import importlib.util
 import inspect
@@ -55,7 +56,7 @@ from pypto._cache_config import CacheConfig
 from pypto.backend import BackendType
 from pypto.ir.pass_manager import OptimizationStrategy, PassDumpLevel
 from pypto.pypto_core import backend as _backend_core
-from pypto.pypto_core.passes import DiagnosticCheckSet, DiagnosticPhase, MemoryPlanner
+from pypto.pypto_core.passes import DiagnosticCheckSet, DiagnosticPhase, MemoryPlanner, PassContext
 
 from .device_tensor import DeviceTensor
 
@@ -321,7 +322,7 @@ class RunConfig:
             (simpler#844 selective tensor dump).
         enable_pmu: AICore PMU event type. ``0`` disables collection;
             ``>0`` enables and selects the event (``2`` = PIPE_UTILIZATION,
-            ``4`` = MEMORY — see ``runtime/docs/dfx/pmu-profiling.md``).
+            ``4`` = MEMORY).
             Output: ``<work_dir>/dfx_outputs/pmu.csv``. Mirrors
             ``--enable-pmu N``.
         enable_dep_gen: Capture simpler dependency edges into
@@ -741,6 +742,150 @@ RunConfig.__signature__ = _RUN_CONFIG_SIGNATURE.replace(  # type: ignore[attr-de
 )
 
 
+# ---------------------------------------------------------------------------
+# RunConfig -> ir.compile() keyword / cache-key forwarding
+#
+# Shared by every jit entrance (the tracing ``pl.jit`` and, during migration,
+# the quarantined AST specializer) so a ``config=RunConfig(...)`` call honours
+# the same compile knobs as a direct ``ir.compile(program, ...)``.
+# ---------------------------------------------------------------------------
+
+
+def run_config_compile_kwargs(run_config: "RunConfig") -> dict[str, Any]:
+    """Extract ``ir.compile()`` keyword arguments from a :class:`RunConfig`.
+
+    Maps the compile-side fields of ``RunConfig`` onto the parameters
+    ``ir.compile()`` accepts. Runtime-only fields (``device_id``,
+    ``rtol`` / ``atol``, DFX toggles, ...) are not compile inputs and are
+    consumed by ``CompiledProgram.__call__`` instead.
+
+    ``backend_type`` is intentionally omitted: ``ir.compile()`` derives the
+    codegen backend from ``platform``, which the JIT path already forwards;
+    passing ``backend_type`` as well would be redundant and could conflict.
+
+    ``block_dim`` is intentionally omitted too: although ``ir.compile()``
+    accepts it (baking it into ``kernel_config.py``), the JIT runtime path
+    always re-supplies ``RunConfig.block_dim`` at dispatch time
+    (``execute_compiled``), which overrides the baked value. Forwarding it
+    here would be redundant and would split the cache key on a value that
+    never reaches the executed artifact.
+
+    ``output_dir`` is forwarded only when set, so an unset value defers to
+    ``ir.compile()``'s own default.
+
+    ``distributed_config`` is likewise forwarded only when set. When supplied it
+    makes ``ir.compile()`` emit a ``DistributedCompiledProgram`` (HOST-level
+    ``@pl.jit.host`` kernels), which ``__call__`` then dispatches per-rank. An
+    unset value defers to ``ir.compile()``'s default (a single-chip
+    ``CompiledProgram``) and keeps it out of the cache key for non-distributed
+    callers.
+
+    ``analyze_auto_scopes_for_deps`` is forwarded because it changes the pass
+    pipeline's dependency derivation and therefore the generated orchestration.
+
+    ``memory_planner`` is forwarded only when set: ``ir.compile()`` rejects an
+    explicit planner while a ``PassContext`` is active, and an unset value must
+    defer to that context (or to the ``PYPTO`` default when there is none).
+    """
+    kwargs: dict[str, Any] = {
+        "strategy": run_config.strategy,
+        "dump_passes": run_config.dump_passes,
+        "profiling": run_config.compile_profiling,
+        "diagnostic_phase": run_config.diagnostic_phase,
+        "disabled_diagnostics": run_config.disabled_diagnostics,
+        "analyze_auto_scopes_for_deps": run_config.analyze_auto_scopes_for_deps,
+    }
+    if run_config.save_kernels_dir is not None:
+        kwargs["output_dir"] = run_config.save_kernels_dir
+    if run_config.distributed_config is not None:
+        kwargs["distributed_config"] = run_config.distributed_config
+    if run_config.memory_planner is not None:
+        kwargs["memory_planner"] = run_config.memory_planner
+    return kwargs
+
+
+def freeze_config_value(value: Any) -> Any:
+    """Recursively convert a value into a hashable, deterministic form.
+
+    Dataclasses become a tuple of ``(field_name, frozen_value)`` pairs and
+    lists/tuples become tuples, so a ``DistributedConfig`` (which has a mutable
+    ``device_ids`` list and is therefore unhashable) can participate in a
+    cache key. Field-name pairing keeps the key stable and self-describing if
+    new fields are added.
+    """
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return tuple((f.name, freeze_config_value(getattr(value, f.name))) for f in dataclasses.fields(value))
+    if isinstance(value, (list, tuple)):
+        return tuple(freeze_config_value(v) for v in value)
+    return value
+
+
+def resolve_memory_planner(run_config: "RunConfig | None") -> MemoryPlanner:
+    """Resolve the planner a compile would actually use, for a cache key.
+
+    Mirrors ``ir.compile()``'s own precedence — explicit argument, then the
+    active ``PassContext``, then ``PYPTO``. Reading the context matters: the
+    planner is most often selected by wrapping a call in
+    ``with PassContext([], memory_planner=...)``, which never reaches
+    ``RunConfig`` at all. Keying only on the ``RunConfig`` field would let a
+    PTOAS-wrapped call reuse a PYPTO-compiled artifact.
+    """
+    if run_config is not None and run_config.memory_planner is not None:
+        return run_config.memory_planner
+    ctx = PassContext.current()
+    if ctx is not None:
+        return ctx.get_memory_planner()
+    return MemoryPlanner.PYPTO
+
+
+def resolve_enable_pypto_l0c_double_buffer() -> bool:
+    """Resolve the effective dbC=2 (L0C double-buffer) opt-in for a cache key.
+
+    Like :func:`resolve_memory_planner`, this flag is most often set by wrapping
+    a call in ``with PassContext([], enable_pypto_l0c_double_buffer=True)``,
+    which ``ir.compile()`` inherits. ``RunConfig`` does not carry this
+    PassContext-only flag, so the active context is the only source. Keying on
+    it matters: without it a JIT kernel first compiled with the flag off would
+    be handed that dbC=1 artifact when later called under a context with the
+    flag on (or vice versa).
+    """
+    ctx = PassContext.current()
+    return ctx.get_enable_pypto_l0c_double_buffer() if ctx is not None else False
+
+
+def run_config_compile_identity(run_config: "RunConfig | None") -> tuple[Any, ...]:
+    """The hashable compile-identity tuple of a jit call, for artifact caches.
+
+    Every field here changes the compiled artifact (or which artifact type a
+    call must receive), so a cache that reuses compiled programs must key on
+    all of them — two calls that differ in any component must never share an
+    entry (design doc 03-entrance.md §5.4, ``ArtifactKey``). Diagnostic-only
+    knobs (``dump_passes``, ``profiling``, ``output_dir``) are deliberately
+    absent: they do not change the artifact and would only split the cache.
+
+    ``run_config=None`` normalizes to the no-config defaults, but the
+    PassContext-derived values (memory planner, L0C double-buffer) are still
+    resolved — ``ir.compile()`` inherits them from the active context, so an
+    ambient ``PassContext`` must split the cache exactly like an explicit one.
+    """
+    platform = run_config.platform if run_config is not None else None
+    strategy = run_config.strategy if run_config is not None else OptimizationStrategy.Default
+    distributed = (
+        freeze_config_value(run_config.distributed_config)
+        if run_config is not None and run_config.distributed_config is not None
+        else None
+    )
+    analyze = run_config.analyze_auto_scopes_for_deps if run_config is not None else False
+    return (
+        platform,
+        strategy,
+        distributed,
+        analyze,
+        str(resolve_memory_planner(run_config)),
+        resolve_enable_pypto_l0c_double_buffer(),
+    )
+
+
 @dataclass
 class RunResult:
     """Result of a program run or harness test execution.
@@ -789,7 +934,7 @@ class RunResult:
 # what compilation reads, what a dispatch reads, and which diagnostics a
 # dispatch collects. ``RunConfig`` keeps every field and every caller — these
 # are the vocabulary underneath it, and what code that only needs one half
-# should take. See ``docs/en/dev/08-entry-points.md``.
+# should take.
 # ---------------------------------------------------------------------------
 
 

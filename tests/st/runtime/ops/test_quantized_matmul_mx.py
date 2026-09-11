@@ -15,6 +15,8 @@ import pypto.language as pl
 import pytest
 import torch
 from harness.core.harness import DataType, PTOTestCase, TensorSpec
+from pypto import ir
+from pypto.language.tracer.decorators.jit import _eager_trace_record
 from pypto.runtime.runner import RunConfig
 
 M, K, N = 64, 256, 64
@@ -105,6 +107,15 @@ def staged_quant_matmul_mx(
     return staged_cube_matmul(a_quant, a_scale, b, b_scale, out)
 
 
+def _program(fn: ir.Function) -> ir.Program:
+    """The eager-lane program route: the entry plus every callee its
+    decoration trace reached (the eager record's assembly — the same
+    functions the lazy lane's ``compile()`` would assemble)."""
+    record = _eager_trace_record(fn)
+    callees = list(record.assembly.functions) if record is not None else []
+    return ir.Program([fn, *callees], fn.name, fn.span)
+
+
 class GmCase(PTOTestCase):
     __test__ = False
 
@@ -115,7 +126,7 @@ class GmCase(PTOTestCase):
         return "quantized_matmul_mx_gm_64x256x64"
 
     def get_program(self) -> Any:
-        return staged_quant_matmul_mx.specialize()
+        return _program(staged_quant_matmul_mx)
 
     def define_tensors(self) -> list[TensorSpec]:
         a, b, b_scale = _mx_matmul_inputs()
@@ -178,7 +189,7 @@ class MixCase(PTOTestCase):
         return "quantized_matmul_mx_mix_64x256x64"
 
     def get_program(self) -> Any:
-        return mixed_quant_matmul_mx.specialize()
+        return _program(mixed_quant_matmul_mx)
 
     def define_tensors(self) -> list[TensorSpec]:
         scale_boxes = (M // 16, GROUPS // 2)
@@ -230,7 +241,7 @@ class MixRhsCase(PTOTestCase):
         return "quantized_matmul_mx_mix_rhs_64x256x64"
 
     def get_program(self) -> Any:
-        return mixed_quant_rhs_matmul_mx.specialize()
+        return _program(mixed_quant_rhs_matmul_mx)
 
     def define_tensors(self) -> list[TensorSpec]:
         a, a_scale, b = _mx_rhs_matmul_inputs()

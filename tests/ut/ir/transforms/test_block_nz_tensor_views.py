@@ -175,7 +175,7 @@ class NzMatmul:
         return out
 
 
-@pl.jit
+@pl.jit_specializer
 def _batched_nz_mm(
     x: pl.Tensor[[64, 512], pl.INT8],
     w: pl.Tensor[[4, 256, 512], pl.INT8, pl.NZ],
@@ -298,7 +298,7 @@ def test_maps_an_spmd_derived_slice_offset():
     `nb * 16` — see `test_does_not_reassociate_the_offset_arithmetic`.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def _spmd_offset(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -340,7 +340,7 @@ def test_does_not_reassociate_the_offset_arithmetic():
     multiply by the reduced factor 256/16 was synthesized.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def _no_reassoc(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -388,7 +388,7 @@ def test_maps_a_loop_variable_slice_offset():
     answer, and it is exact precisely because the divisibility was proven first.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def _loop_offset(
         x: pl.Tensor[[64, 1024], pl.INT8],
         w: pl.Tensor[[256, 1024], pl.INT8, pl.NZ],
@@ -493,7 +493,7 @@ def test_codegen_emits_the_divided_offset():
     offset the kernel computed, divided, rather than a re-derived index.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def _spmd_offset(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -657,7 +657,7 @@ def test_rejects_a_slice_offset_whose_alignment_cannot_be_proven():
     diagnostic anywhere downstream.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def _unprovable(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -688,7 +688,7 @@ def test_rejects_a_slice_offset_whose_sign_cannot_be_proven():
     written inline and waved through once bound to a name.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def _maybe_negative(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -716,7 +716,7 @@ def test_rejects_a_loop_variable_whose_step_breaks_alignment():
     the start alone would silently mis-address every later iteration.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def _bad_step(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[256, 512], pl.INT8, pl.NZ],

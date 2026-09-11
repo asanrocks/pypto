@@ -23,7 +23,6 @@ same loop-local names without the renamer emitting an out-of-scope bridge.
 
 import pypto.language as pl
 import pytest
-from pypto.jit.decorator import jit
 from pypto.pypto_core import ir
 
 # Module-level constants — the JIT specializer inlines module-level ints at
@@ -39,7 +38,7 @@ def test_jit_spmd_for_loop():
     """``for i in pl.spmd(N)`` inside a plain @pl.jit entry compiles end-to-end."""
     torch = pytest.importorskip("torch")
 
-    @jit
+    @pl.jit
     def spmd_add(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
         for i in pl.spmd(2):
             offset = i * 64
@@ -48,7 +47,7 @@ def test_jit_spmd_for_loop():
             c = pl.store(pl.add(tile_a, tile_b), [offset, 0], c)
         return c
 
-    post = spmd_add.lower(torch.randn(128, 128), torch.randn(128, 128), torch.empty(128, 128))
+    post = spmd_add.compile_for_test(torch.randn(128, 128), torch.randn(128, 128), torch.empty(128, 128))
     func_types = {f.func_type for f in post.functions.values()}
     assert ir.FunctionType.Spmd in func_types, (
         f"expected an Spmd function from `for i in pl.spmd()`, got {func_types}"
@@ -62,21 +61,21 @@ def test_jit_spmd_with_form():
     """``with pl.spmd(N): kernel(...)`` dispatching a @pl.jit.incore dep."""
     torch = pytest.importorskip("torch")
 
-    @jit.incore
+    @pl.jit.incore
     def add_kernel(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
-        # @jit.incore already establishes the InCore context — no pl.at needed.
+        # @pl.jit.incore already establishes the InCore context — no pl.at needed.
         tile_a = pl.load(a, [0, 0], [64, 128])
         tile_b = pl.load(b, [0, 0], [64, 128])
         c = pl.store(pl.add(tile_a, tile_b), [0, 0], c)
         return c
 
-    @jit
+    @pl.jit
     def entry(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
         with pl.spmd(2):
             c = add_kernel(a, b, c)
         return c
 
-    post = entry.lower(torch.randn(128, 128), torch.randn(128, 128), torch.empty(128, 128))
+    post = entry.compile_for_test(torch.randn(128, 128), torch.randn(128, 128), torch.empty(128, 128))
     func_types = {f.func_type for f in post.functions.values()}
     assert ir.FunctionType.Spmd in func_types, (
         f"expected an Spmd function from `with pl.spmd()`, got {func_types}"
@@ -93,7 +92,7 @@ def test_jit_spmd_inline_with_form_no_tid():
     """
     torch = pytest.importorskip("torch")
 
-    @jit
+    @pl.jit
     def entry(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
         with pl.spmd(2):
             i = pl.tile.get_block_idx()
@@ -103,7 +102,7 @@ def test_jit_spmd_inline_with_form_no_tid():
             c = pl.store(pl.add(tile_a, tile_b), [offset, 0], c)
         return c
 
-    post = entry.lower(torch.randn(128, 128), torch.randn(128, 128), torch.empty(128, 128))
+    post = entry.compile_for_test(torch.randn(128, 128), torch.randn(128, 128), torch.empty(128, 128))
     func_types = {f.func_type for f in post.functions.values()}
     assert ir.FunctionType.Spmd in func_types, (
         f"expected an Spmd function from the inline `with pl.spmd()` body, got {func_types}"
@@ -131,7 +130,7 @@ def test_jit_inline_helper_spmd_for_loop():
     """A @pl.jit.inline helper using ``for i in pl.spmd(N)`` is spliced + dispatched."""
     torch = pytest.importorskip("torch")
 
-    @jit.inline
+    @pl.jit.inline
     def spmd_helper(a: pl.Tensor, b: pl.Tensor, c: pl.Tensor):
         for i in pl.spmd(2):
             offset = i * 64
@@ -140,12 +139,12 @@ def test_jit_inline_helper_spmd_for_loop():
             c = pl.store(pl.add(tile_a, tile_b), [offset, 0], c)
         return c
 
-    @jit
+    @pl.jit
     def entry(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
         c = spmd_helper(a, b, c)
         return c
 
-    post = entry.lower(torch.randn(128, 128), torch.randn(128, 128), torch.empty(128, 128))
+    post = entry.compile_for_test(torch.randn(128, 128), torch.randn(128, 128), torch.empty(128, 128))
     func_types = {f.func_type for f in post.functions.values()}
     # InlineFunctions splices away every Inline helper.
     assert ir.FunctionType.Inline not in func_types, (
@@ -167,7 +166,7 @@ def test_jit_spmd_sibling_pipeline_loops_reuse_names():
     """
     torch = pytest.importorskip("torch")
 
-    @jit.inline
+    @pl.jit.inline
     def rmsnorm_like(a: pl.Tensor, out: pl.Tensor):
         # Each SPMD block owns a column-half of `hidden`; `k0` and `chunk` are
         # reused across the two sibling pl.pipeline loops on purpose.
@@ -184,12 +183,12 @@ def test_jit_spmd_sibling_pipeline_loops_reuse_names():
                 out = pl.assemble(out, pl.cast(chunk, target_type=pl.BF16), [0, k0])
         return out
 
-    @jit
+    @pl.jit
     def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
         out = rmsnorm_like(a, out)
         return out
 
-    post = entry.lower(
+    post = entry.compile_for_test(
         # Input is BF16 so the `pl.cast(..., FP32)` in `rmsnorm_like` is a
         # real cross-dtype promotion. Same-dtype casts are rejected at IR
         # construction time, so this fixture must not feed FP32 in.
@@ -215,7 +214,7 @@ def test_jit_spmd_with_form_as_tid_captures_and_wires_deps():
     """
     torch = pytest.importorskip("torch")
 
-    @jit
+    @pl.jit
     def entry(a: pl.Tensor, out1: pl.Out[pl.Tensor], out2: pl.Out[pl.Tensor]):
         with pl.spmd(2, name_hint="stage1") as tid0:
             i = pl.tile.get_block_idx()
@@ -227,7 +226,7 @@ def test_jit_spmd_with_form_as_tid_captures_and_wires_deps():
             out2 = pl.store(pl.add(u, u), [j * 64, 0], out2)
         return out2
 
-    post = entry.lower(torch.randn(128, 128), torch.empty(128, 128), torch.empty(128, 128))
+    post = entry.compile_for_test(torch.randn(128, 128), torch.empty(128, 128), torch.empty(128, 128))
     spmd_fns = [f for f in post.functions.values() if f.func_type == ir.FunctionType.Spmd]
     assert len(spmd_fns) == 2, (
         f"expected two Spmd functions from the two captured pl.spmd() dispatches, got {len(spmd_fns)}"

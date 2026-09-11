@@ -30,7 +30,7 @@ of which branch executed. Only the runtime valid-shape value differs.
 
 The programs below are written with ``@pl.program`` and explicit
 ``pl.Scalar[...]`` parameters. The final section covers the same pattern
-reached through ``@pl.jit``, where the specializer must leave the in-DSL
+reached through ``@pl.jit_specializer``, where the specializer must leave the in-DSL
 ``if``/``else`` intact for the branch to survive to an ``scf.if``.
 """
 
@@ -225,7 +225,7 @@ def test_loop_if_else_dyn_valid_shape_has_scf_if(loop_mlir: str):
 
 
 # ---------------------------------------------------------------------------
-# The same patterns reached through @pl.jit
+# The same patterns reached through @pl.jit_specializer
 # ---------------------------------------------------------------------------
 #
 # The JIT specializer rewrites the user's function into the @pl.program form
@@ -237,11 +237,11 @@ def test_loop_if_else_dyn_valid_shape_has_scf_if(loop_mlir: str):
 
 
 def _jit_device_mlir(jit_func, *args) -> str:
-    """Lower a @pl.jit kernel and run PTO codegen on its device function."""
+    """Lower a @pl.jit_specializer kernel and run PTO codegen on its device function."""
     backend.reset_for_testing()
     backend.set_backend_type(BackendType.Ascend910B)
 
-    program = jit_func.lower(*args)
+    program = jit_func.compile_for_test(*args)
     device_funcs = [f for f in program.functions.values() if f.func_type != ir.FunctionType.Orchestration]
     assert len(device_funcs) == 1, (
         f"expected exactly one device function, got {[f.name for f in device_funcs]}"
@@ -278,7 +278,7 @@ def _dyn_valid_shape_example():
 
 @pytest.fixture(scope="module")
 def jit_if_else_mlir() -> str:
-    """Codegen the @pl.jit if/else kernel once for all tests in this module."""
+    """Codegen the @pl.jit_specializer if/else kernel once for all tests in this module."""
     torch = pytest.importorskip("torch")
     example = _dyn_valid_shape_example()
 
@@ -290,7 +290,7 @@ def jit_if_else_mlir() -> str:
 
 @pytest.fixture(scope="module")
 def jit_loop_mlir() -> str:
-    """Codegen the @pl.jit loop + if/else kernel once for all tests in this module."""
+    """Codegen the @pl.jit_specializer loop + if/else kernel once for all tests in this module."""
     torch = pytest.importorskip("torch")
     example = _dyn_valid_shape_example()
 
@@ -302,7 +302,7 @@ def jit_loop_mlir() -> str:
 
 @pytest.fixture(scope="module")
 def jit_scalar_param_mlir() -> str:
-    """Codegen the @pl.jit scalar-parameter kernel (the specialized-constant form)."""
+    """Codegen the @pl.jit_specializer scalar-parameter kernel (the specialized-constant form)."""
     torch = pytest.importorskip("torch")
     example = _dyn_valid_shape_example()
 

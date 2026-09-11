@@ -11,7 +11,7 @@
 
 This module uses ``from __future__ import annotations`` so every parameter
 annotation is a *string* at runtime. :func:`make_closure_kernel` returns a
-``@pl.jit`` kernel defined inside a function whose tensor annotations reference a
+``@pl.jit_specializer`` kernel defined inside a function whose tensor annotations reference a
 ``pl.dynamic`` var captured as a **closure free variable** (not a module global).
 Resolving those string annotations therefore requires
 ``typing.get_type_hints(..., globalns=<globals + closure free-vars>)`` — the

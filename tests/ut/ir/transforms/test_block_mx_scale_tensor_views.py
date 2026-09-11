@@ -223,7 +223,7 @@ def test_proves_floor_divided_loop_offset():
 
 
 def test_proves_offset_through_outlined_scalar_params():
-    @pl.jit
+    @pl.jit_specializer
     def outlined(a_s: pl.Tensor[[32, 2], pl.FP8E8M0, pl.MX_A_ZZ]):
         for mt in pl.parallel(2):
             row = mt * 16

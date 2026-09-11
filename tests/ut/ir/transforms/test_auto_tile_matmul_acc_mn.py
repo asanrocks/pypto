@@ -54,7 +54,7 @@ BOX_CAP_K_TOTAL = 256
 BOX_CAP_K_TILE = 128
 
 
-@pl.jit
+@pl.jit_specializer
 def issue_2232_repro(
     a: pl.Tensor[[M, K_TOTAL], pl.INT8],
     b: pl.Tensor[[K_TOTAL, N_TOTAL], pl.INT8],
@@ -76,7 +76,7 @@ def issue_2232_repro(
     return c
 
 
-@pl.jit
+@pl.jit_specializer
 def issue_2232_repro_predicated(
     a: pl.Tensor[[M, K_TOTAL], pl.INT8],
     b: pl.Tensor[[K_TOTAL, N_TOTAL], pl.INT8],
@@ -95,7 +95,7 @@ def issue_2232_repro_predicated(
     return c
 
 
-@pl.jit
+@pl.jit_specializer
 def canonical_split_k_mn(
     a: pl.Tensor[[WIDE_M, WIDE_K_TOTAL], pl.INT8],
     b: pl.Tensor[[WIDE_K_TOTAL, WIDE_N], pl.INT8],
@@ -116,7 +116,7 @@ def canonical_split_k_mn(
     return c
 
 
-@pl.jit
+@pl.jit_specializer
 def canonical_split_k_mn_predicated(
     a: pl.Tensor[[WIDE_M, WIDE_K_TOTAL], pl.INT8],
     b: pl.Tensor[[WIDE_K_TOTAL, WIDE_N], pl.INT8],
@@ -134,7 +134,7 @@ def canonical_split_k_mn_predicated(
     return c
 
 
-@pl.jit
+@pl.jit_specializer
 def canonical_split_k_n_boundary_retiles_k(
     a: pl.Tensor[[WIDE_M, COMPOSE_K_TOTAL], pl.INT8],
     b: pl.Tensor[[COMPOSE_K_TOTAL, WIDE_N], pl.INT8],
@@ -155,7 +155,7 @@ def canonical_split_k_n_boundary_retiles_k(
     return c
 
 
-@pl.jit
+@pl.jit_specializer
 def canonical_split_k_n_boundary_retiles_k_predicated(
     a: pl.Tensor[[WIDE_M, COMPOSE_K_TOTAL], pl.INT8],
     b: pl.Tensor[[COMPOSE_K_TOTAL, WIDE_N], pl.INT8],

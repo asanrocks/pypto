@@ -38,7 +38,8 @@ Typical usage:
 """
 
 from pypto.ir import TensorView, TileView
-from pypto.jit import JITFunction, jit
+from pypto.jit import JITFunction
+from pypto.jit import jit as jit_specializer
 from pypto.pypto_core import DataType
 from pypto.pypto_core.ir import (
     AccPhase,
@@ -248,6 +249,7 @@ from .parser.decorator import (
 )
 from .parser.text_parser import loads, loads_program, parse, parse_program
 from .tracer.decorators.expand import expand
+from .tracer.decorators.jit import jit
 from .typing import (
     RUNTIME,
     Array,
@@ -312,6 +314,7 @@ intrin = _intrin_module
 __all__ = [
     "intrin",
     "jit",
+    "jit_specializer",
     "JITFunction",
     "function",
     "function_parser",

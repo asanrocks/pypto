@@ -226,7 +226,7 @@ class TestSpecialize:
         """The entry and its dep are both present, untransformed."""
         program = _abs_entry.specialize(torch.randn(M, N), torch.zeros(M, N))
         assert isinstance(program, ir.Program)
-        assert len(list(program.functions)) == 2, "entry + its @pl.jit.incore dep"
+        assert len(list(program.functions)) == 2, "entry + its @pl.jit_specializer.incore dep"
 
     def test_matches_hand_written_program_after_passes(self):
         """The specialized program lowers to the same IR as the reference.
