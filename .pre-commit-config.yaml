@@ -105,6 +105,13 @@ repos:
           language_version: python3
           pass_filenames: false
 
+        - id: check-md-refs
+          name: check-md-refs
+          entry: python tests/lint/check_md_refs.py
+          language: python
+          language_version: python3
+          pass_filenames: false
+
     - repo: https://github.com/pre-commit/pre-commit-hooks
       rev: v4.6.0
       hooks:
@@ -137,6 +144,7 @@ repos:
       rev: v0.20.0
       hooks:
         - id: markdownlint-cli2
+          exclude: ^3rdparty/
           args:
             - --fix
             - --config
