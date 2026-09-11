@@ -1172,7 +1172,7 @@ def test_allreduce_in_while_loop_now_succeeds():
             data: pl.InOut[pld.DistributedTensor[[1, SIZE], pl.FP32]],
             signal: pl.InOut[pld.DistributedTensor[[nr, 1], pl.INT32]],
         ) -> pld.DistributedTensor[[1, SIZE], pl.FP32]:
-            while True:
+            while pl.const(True, pl.BOOL):
                 data = pld.tensor.allreduce(data, signal, op=pld.ReduceOp.Sum)
             return data
 
@@ -1225,8 +1225,13 @@ def test_all_to_all_v_in_while_loop_now_succeeds():
             signal: pl.InOut[pld.DistributedTensor[[nr, 1], pl.INT32]],
             recv_counts: pl.InOut[pld.DistributedTensor[[nr, 1], pl.INT32]],
         ) -> pld.DistributedTensor[[total, SIZE], pl.FP32]:
-            while True:
+            # A staged predicate (not a host literal) keeps the while on the IR
+            # side: one representative iteration is collected.
+            step = pl.const(0, pl.INT32)
+            limit = pl.const(4, pl.INT32)
+            while step < limit:
                 data = pld.tensor.all_to_all_v(inp, data, signal, counts, recv_counts)
+                step = pl.add(step, pl.const(1, pl.INT32))
             return data
 
     passes.lower_composite_ops()(LoopAllToAllV)

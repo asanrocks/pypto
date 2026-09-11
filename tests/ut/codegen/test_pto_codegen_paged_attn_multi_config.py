@@ -48,7 +48,8 @@ def make_kernel_softmax_prepare(q_tile: int, block_size: int, n_unroll_q: int):
         pl.Tensor[[q_tile, 1], pl.FP32],
     ]:
         """Two-pass softmax: pass 1 finds global row_max, pass 2 computes exp+sum (VECTOR)."""
-        for i, (mi_out_iter,) in pl.range(n_blocks, init_values=(mi_out,)):
+        (mi_out_iter,) = pl.intrin.carry(mi_out)
+        for i in pl.range(n_blocks):
             s_tile = pl.load(
                 sij_buf,
                 [i * q_tile, 0],
@@ -66,10 +67,12 @@ def make_kernel_softmax_prepare(q_tile: int, block_size: int, n_unroll_q: int):
                 lm_nd = pl.reshape(local_max, [1, q_tile])
                 new_max = pl.reshape(pl.maximum(gm_nd, lm_nd), [q_tile, 1])
                 mi_out_updated: pl.Tensor[[q_tile, 1], pl.FP32] = pl.store(new_max, [0, 0], mi_out_iter)
-            (mi_out_carry,) = pl.yield_(mi_out_updated)
+            pl.intrin.yield_(mi_out_updated)
+        (mi_out_carry,) = pl.intrin.leak()
+        (pij_buf_iter, li_out_iter) = pl.intrin.carry(pij_buf, li_out)
 
-        for i, (pij_buf_iter, li_out_iter) in pl.range(n_blocks, init_values=(pij_buf, li_out)):
-            global_max = pl.load(mi_out_carry, [0, 0], [q_tile, 1], target_memory=pl.MemorySpace.Vec)
+        for i in pl.range(n_blocks):
+            global_max_p2 = pl.load(mi_out_carry, [0, 0], [q_tile, 1], target_memory=pl.MemorySpace.Vec)
             s_tile_p2 = pl.load(
                 sij_buf,
                 [i * q_tile, 0],
@@ -77,7 +80,7 @@ def make_kernel_softmax_prepare(q_tile: int, block_size: int, n_unroll_q: int):
                 target_memory=pl.MemorySpace.Vec,
             )
             scaled_p2 = pl.mul(s_tile_p2, scale)
-            centered = pl.row_expand_sub(scaled_p2, global_max)
+            centered = pl.row_expand_sub(scaled_p2, global_max_p2)
             exp_tile = pl.exp(centered)
             pij_bf16 = pl.cast(exp_tile, target_type=pl.BF16)
             pij_f32 = pl.cast(pij_bf16, target_type=pl.FP32)
@@ -94,7 +97,8 @@ def make_kernel_softmax_prepare(q_tile: int, block_size: int, n_unroll_q: int):
                 li_acc_nd = pl.reshape(li_acc, [1, q_tile])
                 li_sum = pl.reshape(pl.add(li_acc_nd, li_local_nd), [q_tile, 1])
                 li_out_updated: pl.Tensor[[q_tile, 1], pl.FP32] = pl.store(li_sum, [0, 0], li_out_iter)
-            pij_buf_carry, li_out_carry = pl.yield_(pij_buf_updated, li_out_updated)
+            pl.intrin.yield_(pij_buf_updated, li_out_updated)
+        (pij_buf_carry, li_out_carry) = pl.intrin.leak()
 
         return pij_buf_carry, mi_out_carry, li_out_carry
 
@@ -199,7 +203,8 @@ def make_kernel_qk_matmul(
         n_blocks: pl.Scalar[pl.INDEX],
     ) -> pl.Tensor[[n_unroll_q, block_size], pl.FP32]:
         """Multi-block QK matmul: sij[i] = qi @ kj[i].T, vertically stacked (CUBE)."""
-        for i, (sij_buf_iter,) in pl.range(n_blocks, init_values=(sij_buf,)):
+        (sij_buf_iter,) = pl.intrin.carry(sij_buf)
+        for i in pl.range(n_blocks):
             phys_block = pl.read(block_indices, i)
             kj_row = phys_block * block_size
             qi_l1 = pl.load(qi, [0, 0], [q_tile, head_dim], target_memory=pl.MemorySpace.Mat)
@@ -214,7 +219,8 @@ def make_kernel_qk_matmul(
             kj_l0b = pl.move(kj_l1, target_memory=pl.MemorySpace.Right)
             sij_l0c = pl.matmul(qi_l0a, kj_l0b)
             sij_buf_updated = pl.store(sij_l0c, [i * q_tile, 0], sij_buf_iter)
-            (sij_buf_out,) = pl.yield_(sij_buf_updated)
+            pl.intrin.yield_(sij_buf_updated)
+        (sij_buf_out,) = pl.intrin.leak()
         return sij_buf_out
 
     return kernel_qk_matmul
@@ -253,8 +259,9 @@ def make_kernel_pv_matmul(
         pij_l0a = pl.move(pij_l1, target_memory=pl.MemorySpace.Left)
         vj_l0b = pl.move(vj_l1, target_memory=pl.MemorySpace.Right)
         oi_l0c = pl.matmul(pij_l0a, vj_l0b)
+        (oi_l0c_iter,) = pl.intrin.carry(oi_l0c)
 
-        for i, (oi_l0c_iter,) in pl.range(1, n_blocks, init_values=(oi_l0c,)):
+        for i in pl.range(1, n_blocks):
             phys_block = pl.read(block_indices, i)
             vj_row = phys_block * block_size
             pij_l1_i = pl.load(
@@ -272,7 +279,8 @@ def make_kernel_pv_matmul(
             pij_l0a_i = pl.move(pij_l1_i, target_memory=pl.MemorySpace.Left)
             vj_l0b_i = pl.move(vj_l1_i, target_memory=pl.MemorySpace.Right)
             oi_l0c_acc = pl.matmul_acc(oi_l0c_iter, pij_l0a_i, vj_l0b_i)
-            (oi_l0c_out,) = pl.yield_(oi_l0c_acc)
+            pl.intrin.yield_(oi_l0c_acc)
+        (oi_l0c_out,) = pl.intrin.leak()
 
         oi_new = pl.store(oi_l0c_out, [0, 0], oi_new)
         return oi_new
@@ -396,13 +404,15 @@ def build_paged_attention_multi_config_program(
                         oi_new = _pv(pij_buf, value_cache, oi_new, block_indices, n_blocks)
 
                         if bn == 0:
-                            is_first: pl.Scalar[pl.INT64] = pl.yield_(pl.const(1, pl.INT64))
+                            pl.intrin.yield_(pl.const(1, pl.INDEX))
                         else:
-                            is_first: pl.Scalar[pl.INT64] = pl.yield_(pl.const(0, pl.INT64))
+                            pl.intrin.yield_(pl.const(0, pl.INDEX))
+                        (is_first,) = pl.intrin.leak()
                         if bn + n_blocks == max_bn:
-                            is_last: pl.Scalar[pl.INT64] = pl.yield_(pl.const(1, pl.INT64))
+                            pl.intrin.yield_(pl.const(1, pl.INDEX))
                         else:
-                            is_last: pl.Scalar[pl.INT64] = pl.yield_(pl.const(0, pl.INT64))
+                            pl.intrin.yield_(pl.const(0, pl.INDEX))
+                        (is_last,) = pl.intrin.leak()
 
                         out_view: pl.Tensor[[q_tile, head_dim], pl.FP32] = pl.slice(
                             out,

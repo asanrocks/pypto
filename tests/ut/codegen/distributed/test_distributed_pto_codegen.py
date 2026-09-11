@@ -1389,8 +1389,10 @@ def test_tensor_view_preserves_loop_carried_distributed_metadata():
     class P:
         @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, data: pld.DistributedTensor[[16, 16], pl.INT32]):
-            for _i, (carried,) in pl.range(1, init_values=(data,)):
-                result = pl.yield_(carried)
+            (carried,) = pl.intrin.carry(data)
+            for _i in pl.range(1):
+                pl.intrin.yield_(carried)
+            (result,) = pl.intrin.leak()
             viewed = pl.tensor.view(result, [16, 16])
             pld.system.wait(viewed, offsets=[0, 0], expected=1, cmp=pld.WaitCmp.Eq)
 
@@ -1407,10 +1409,11 @@ def test_tensor_view_preserves_while_carried_distributed_metadata():
     class P:
         @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, data: pld.DistributedTensor[[16, 16], pl.INT32]):
-            limit: pl.Scalar[pl.INT64] = 1
-            for (carried,) in pl.while_(init_values=(data,)):
-                pl.cond(limit > 0)
-                result = pl.yield_(carried)
+            limit: pl.Scalar[pl.INT64] = pl.const(1, pl.INT64)
+            (carried,) = pl.intrin.carry(data)
+            while limit > 0:
+                pl.intrin.yield_(carried)
+            (result,) = pl.intrin.leak()
             viewed = pl.tensor.view(result, [16, 16])
             pld.system.wait(viewed, offsets=[0, 0], expected=1, cmp=pld.WaitCmp.Eq)
 

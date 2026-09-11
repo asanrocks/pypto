@@ -231,19 +231,23 @@ class TestForLoops:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init = pl.create_tensor([64], dtype=pl.FP32)
-                for i, (acc,) in pl.range(10, init_values=(init,)):
+                (acc,) = pl.intrin.carry(init)
+                for i in pl.range(10):
                     new_acc = pl.add(acc, x)
-                    result = pl.yield_(new_acc)
+                    pl.intrin.yield_(new_acc)
+                (result,) = pl.intrin.leak()
                 return result
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for i_0, (acc_0,) in pl.range(10, init_values=(init_0,)):
+                (acc_0,) = pl.intrin.carry(init_0)
+                for i_0 in pl.range(10):
                     new_acc_0 = pl.add(acc_0, x)
-                    result_0 = pl.yield_(new_acc_0)
+                    pl.intrin.yield_(new_acc_0)
+                (result_0,) = pl.intrin.leak()
                 return result_0
 
         After = passes.convert_to_ssa()(Before)
@@ -258,23 +262,27 @@ class TestForLoops:
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init1: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                 init2: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for i, (acc1, acc2) in pl.range(5, init_values=(init1, init2)):
+                (acc1, acc2) = pl.intrin.carry(init1, init2)
+                for i in pl.range(5):
                     new1: pl.Tensor[[64], pl.FP32] = pl.add(acc1, x)
                     new2: pl.Tensor[[64], pl.FP32] = pl.mul(acc2, 2.0)
-                    out1, out2 = pl.yield_(new1, new2)
+                    pl.intrin.yield_(new1, new2)
+                (out1, out2) = pl.intrin.leak()
                 result: pl.Tensor[[64], pl.FP32] = pl.add(out1, out2)
                 return result
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init1_0 = pl.create_tensor([64], dtype=pl.FP32)
                 init2_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for i_0, (acc1_0, acc2_0) in pl.range(5, init_values=(init1_0, init2_0)):
+                (acc1_0, acc2_0) = pl.intrin.carry(init1_0, init2_0)
+                for i_0 in pl.range(5):
                     new1_0 = pl.add(acc1_0, x)
                     new2_0 = pl.mul(acc2_0, 2.0)
-                    out1_0, out2_0 = pl.yield_(new1_0, new2_0)
+                    pl.intrin.yield_(new1_0, new2_0)
+                (out1_0, out2_0) = pl.intrin.leak()
                 result_0 = pl.add(out1_0, out2_0)
                 return result_0
 
@@ -289,19 +297,23 @@ class TestForLoops:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for i, (acc,) in pl.range(0, 10, 2, init_values=(init,)):
+                (acc,) = pl.intrin.carry(init)
+                for i in pl.range(0, 10, 2):
                     new_acc: pl.Tensor[[64], pl.FP32] = pl.add(acc, x)
-                    result = pl.yield_(new_acc)
+                    pl.intrin.yield_(new_acc)
+                (result,) = pl.intrin.leak()
                 return result
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for i_0, (acc_0,) in pl.range(0, 10, 2, init_values=(init_0,)):
+                (acc_0,) = pl.intrin.carry(init_0)
+                for i_0 in pl.range(0, 10, 2):
                     new_acc_0 = pl.add(acc_0, x)
-                    result_0 = pl.yield_(new_acc_0)
+                    pl.intrin.yield_(new_acc_0)
+                (result_0,) = pl.intrin.leak()
                 return result_0
 
         After = passes.convert_to_ssa()(Before)
@@ -315,23 +327,31 @@ class TestForLoops:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for i, (outer,) in pl.range(3, init_values=(init,)):
-                    for j, (inner,) in pl.range(2, init_values=(outer,)):
+                (outer,) = pl.intrin.carry(init)
+                for i in pl.range(3):
+                    (inner,) = pl.intrin.carry(outer)
+                    for j in pl.range(2):
                         new_inner: pl.Tensor[[64], pl.FP32] = pl.add(inner, 1.0)
-                        inner_out = pl.yield_(new_inner)
-                    outer_out = pl.yield_(inner_out)
+                        pl.intrin.yield_(new_inner)
+                    (inner_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(inner_out)
+                (outer_out,) = pl.intrin.leak()
                 return outer_out
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for i_0, (outer_0,) in pl.range(3, init_values=(init_0,)):
-                    for j_0, (inner_0,) in pl.range(2, init_values=(outer_0,)):
+                (outer_0,) = pl.intrin.carry(init_0)
+                for i_0 in pl.range(3):
+                    (inner_0,) = pl.intrin.carry(outer_0)
+                    for j_0 in pl.range(2):
                         new_inner_0 = pl.add(inner_0, 1.0)
-                        inner_out_0 = pl.yield_(new_inner_0)
-                    outer_out_0 = pl.yield_(inner_out_0)
+                        pl.intrin.yield_(new_inner_0)
+                    (inner_out_0,) = pl.intrin.leak()
+                    pl.intrin.yield_(inner_out_0)
+                (outer_out_0,) = pl.intrin.leak()
                 return outer_out_0
 
         After = passes.convert_to_ssa()(Before)
@@ -345,25 +365,33 @@ class TestForLoops:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for i, (acc,) in pl.range(5, init_values=(init,)):
+                (acc,) = pl.intrin.carry(init)
+                for i in pl.range(5):
                     new_acc: pl.Tensor[[64], pl.FP32] = pl.add(acc, 1.0)
-                    result1 = pl.yield_(new_acc)
-                for j, (acc2,) in pl.range(3, init_values=(result1,)):
+                    pl.intrin.yield_(new_acc)
+                (result1,) = pl.intrin.leak()
+                (acc2,) = pl.intrin.carry(result1)
+                for j in pl.range(3):
                     new_acc2: pl.Tensor[[64], pl.FP32] = pl.mul(acc2, 2.0)
-                    result2 = pl.yield_(new_acc2)
+                    pl.intrin.yield_(new_acc2)
+                (result2,) = pl.intrin.leak()
                 return result2
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for i_0, (acc_0,) in pl.range(5, init_values=(init_0,)):
+                (acc_0,) = pl.intrin.carry(init_0)
+                for i_0 in pl.range(5):
                     new_acc_0 = pl.add(acc_0, 1.0)
-                    result1_0 = pl.yield_(new_acc_0)
-                for j_0, (acc2_0,) in pl.range(3, init_values=(result1_0,)):
+                    pl.intrin.yield_(new_acc_0)
+                (result1_0,) = pl.intrin.leak()
+                (acc2_0,) = pl.intrin.carry(result1_0)
+                for j_0 in pl.range(3):
                     new_acc2_0 = pl.mul(acc2_0, 2.0)
-                    result2_0 = pl.yield_(new_acc2_0)
+                    pl.intrin.yield_(new_acc2_0)
+                (result2_0,) = pl.intrin.leak()
                 return result2_0
 
         After = passes.convert_to_ssa()(Before)
@@ -385,20 +413,21 @@ class TestWhileLoops:
         class Before:
             @pl.function
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x: pl.Scalar[pl.INT64] = 0
+                x: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 while x < n:
                     x = x + 1
                 return x
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, n_0: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x_0: pl.Scalar[pl.INT64] = 0
-                for (x_iter_1,) in pl.while_(init_values=(x_0,)):
-                    pl.cond(x_iter_1 < n_0)
+                x_0: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                (x_iter_1,) = pl.intrin.carry(x_0)
+                while x_iter_1 < n_0:
                     x_3 = x_iter_1 + 1
-                    x_2 = pl.yield_(x_3)
+                    pl.intrin.yield_(x_3)
+                (x_2,) = pl.intrin.leak()
                 return x_2
 
         After = passes.convert_to_ssa()(Before)
@@ -411,8 +440,8 @@ class TestWhileLoops:
         class Before:
             @pl.function
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x: pl.Scalar[pl.INT64] = 0
-                y: pl.Scalar[pl.INT64] = 1
+                x: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                y: pl.Scalar[pl.INT64] = pl.const(1, pl.INT64)
                 while x < n:
                     x = x + 1
                     y = y * 2
@@ -420,15 +449,16 @@ class TestWhileLoops:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, n_0: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x_0: pl.Scalar[pl.INT64] = 0
-                y_0: pl.Scalar[pl.INT64] = 1
-                for x_iter_1, y_iter_1 in pl.while_(init_values=(x_0, y_0)):
-                    pl.cond(x_iter_1 < n_0)
+                x_0: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                y_0: pl.Scalar[pl.INT64] = pl.const(1, pl.INT64)
+                (x_iter_1, y_iter_1) = pl.intrin.carry(x_0, y_0)
+                while x_iter_1 < n_0:
                     x_3 = x_iter_1 + 1
                     y_3 = y_iter_1 * 2
-                    x_2, y_2 = pl.yield_(x_3, y_3)
+                    pl.intrin.yield_(x_3, y_3)
+                (x_2, y_2) = pl.intrin.leak()
                 return y_2
 
         After = passes.convert_to_ssa()(Before)
@@ -441,9 +471,9 @@ class TestWhileLoops:
         class Before:
             @pl.function
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x: pl.Scalar[pl.INT64] = 0
+                x: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 while x < n:
-                    y: pl.Scalar[pl.INT64] = 0
+                    y: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                     while y < 3:
                         y = y + 1
                     x = x + 1
@@ -451,18 +481,20 @@ class TestWhileLoops:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, n_0: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x_0: pl.Scalar[pl.INT64] = 0
-                for (x_iter_1,) in pl.while_(init_values=(x_0,)):
-                    pl.cond(x_iter_1 < n_0)
-                    y_0: pl.Scalar[pl.INT64] = 0
-                    for (y_iter_1,) in pl.while_(init_values=(y_0,)):
-                        pl.cond(y_iter_1 < 3)
+                x_0: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                (x_iter_1,) = pl.intrin.carry(x_0)
+                while x_iter_1 < n_0:
+                    y_0: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                    (y_iter_1,) = pl.intrin.carry(y_0)
+                    while y_iter_1 < 3:
                         y_3 = y_iter_1 + 1
-                        y_2 = pl.yield_(y_3)  # noqa: F841
+                        pl.intrin.yield_(y_3)
+                    (y_2,) = pl.intrin.leak()
                     x_3 = x_iter_1 + 1
-                    x_2 = pl.yield_(x_3)
+                    pl.intrin.yield_(x_3)
+                (x_2,) = pl.intrin.leak()
                 return x_2
 
         After = passes.convert_to_ssa()(Before)
@@ -475,28 +507,33 @@ class TestWhileLoops:
         class Before:
             @pl.function
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                init_sum: pl.Scalar[pl.INT64] = 0
-                for i, (sum_val,) in pl.range(5, init_values=(init_sum,)):
-                    x: pl.Scalar[pl.INT64] = 0
+                init_sum: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                (sum_val,) = pl.intrin.carry(init_sum)
+                for i in pl.range(5):
+                    x: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                     while x < i:
                         x = x + 1
                     new_sum: pl.Scalar[pl.INT64] = sum_val + x
-                    sum_out = pl.yield_(new_sum)
+                    pl.intrin.yield_(new_sum)
+                (sum_out,) = pl.intrin.leak()
                 return sum_out
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, n_0: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                init_sum_0: pl.Scalar[pl.INT64] = 0
-                for i_0, (sum_val,) in pl.range(0, 5, 1, init_values=(init_sum_0,)):
-                    x_0: pl.Scalar[pl.INT64] = 0
-                    for (x_iter_1,) in pl.while_(init_values=(x_0,)):
-                        pl.cond(x_iter_1 < i_0)
+                init_sum_0: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                (sum_val,) = pl.intrin.carry(init_sum_0)
+                for i_0 in pl.range(0, 5, 1):
+                    x_0: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                    (x_iter_1,) = pl.intrin.carry(x_0)
+                    while x_iter_1 < i_0:
                         x_3 = x_iter_1 + 1
-                        x_2 = pl.yield_(x_3)
+                        pl.intrin.yield_(x_3)
+                    (x_2,) = pl.intrin.leak()
                     new_sum_0 = sum_val + x_2
-                    sum_val_out = pl.yield_(new_sum_0)
+                    pl.intrin.yield_(new_sum_0)
+                (sum_val_out,) = pl.intrin.leak()
                 return sum_val_out
 
         After = passes.convert_to_ssa()(Before)
@@ -509,28 +546,33 @@ class TestWhileLoops:
         class Before:
             @pl.function
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x: pl.Scalar[pl.INT64] = 0
+                x: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 while x < n:
                     init_acc: pl.Scalar[pl.INT64] = x
-                    for i, (acc,) in pl.range(3, init_values=(init_acc,)):
+                    (acc,) = pl.intrin.carry(init_acc)
+                    for i in pl.range(3):
                         new_acc: pl.Scalar[pl.INT64] = acc + 1
-                        acc_out = pl.yield_(new_acc)
+                        pl.intrin.yield_(new_acc)
+                    (acc_out,) = pl.intrin.leak()
                     x = acc_out
                 return x
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, n_0: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x_0: pl.Scalar[pl.INT64] = 0
-                for (x_iter_1,) in pl.while_(init_values=(x_0,)):
-                    pl.cond(x_iter_1 < n_0)
+                x_0: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                (x_iter_1,) = pl.intrin.carry(x_0)
+                while x_iter_1 < n_0:
                     init_acc_0 = x_iter_1
-                    for i_0, (acc,) in pl.range(0, 3, 1, init_values=(init_acc_0,)):
+                    (acc,) = pl.intrin.carry(init_acc_0)
+                    for i_0 in pl.range(0, 3, 1):
                         new_acc_0 = acc + 1
-                        acc_out = pl.yield_(new_acc_0)
+                        pl.intrin.yield_(new_acc_0)
+                    (acc_out,) = pl.intrin.leak()
                     x_3 = acc_out
-                    x_2 = pl.yield_(x_3)
+                    pl.intrin.yield_(x_3)
+                (x_2,) = pl.intrin.leak()
                 return x_2
 
         After = passes.convert_to_ssa()(Before)
@@ -543,7 +585,7 @@ class TestWhileLoops:
         class Before:
             @pl.function
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x: pl.Scalar[pl.INT64] = 0
+                x: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 while x < n:
                     x = x + 1
                 y: pl.Scalar[pl.INT64] = x
@@ -553,18 +595,20 @@ class TestWhileLoops:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
-                x_0: pl.Scalar[pl.INT64] = 0
-                for (x_1,) in pl.while_(init_values=(x_0,)):
-                    pl.cond(x_1 < n)
+                x_0: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                (x_1,) = pl.intrin.carry(x_0)
+                while x_1 < n:
                     x_2 = x_1 + 1
-                    x_3 = pl.yield_(x_2)
+                    pl.intrin.yield_(x_2)
+                (x_3,) = pl.intrin.leak()
                 y_0 = x_3
-                for (y_1,) in pl.while_(init_values=(y_0,)):
-                    pl.cond(y_1 < 10)
+                (y_1,) = pl.intrin.carry(y_0)
+                while y_1 < 10:
                     y_2 = y_1 + 2
-                    y_3 = pl.yield_(y_2)
+                    pl.intrin.yield_(y_2)
+                (y_3,) = pl.intrin.leak()
                 return y_3
 
         After = passes.convert_to_ssa()(Before)
@@ -577,7 +621,7 @@ class TestWhileLoops:
         class Before:
             @pl.function
             def main(self, n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                i: pl.Scalar[pl.INT64] = 0
+                i: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 acc: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                 while i < n:
                     i = i + 1
@@ -586,15 +630,16 @@ class TestWhileLoops:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, n: pl.Scalar[pl.INT64], x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                i_0: pl.Scalar[pl.INT64] = 0
+                i_0: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 acc_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for acc_1, i_1 in pl.while_(init_values=(acc_0, i_0)):
-                    pl.cond(i_1 < n)
+                (acc_1, i_1) = pl.intrin.carry(acc_0, i_0)
+                while i_1 < n:
                     i_2 = i_1 + 1
                     acc_2 = pl.add(acc_1, x)
-                    acc_3, i_3 = pl.yield_(acc_2, i_2)
+                    pl.intrin.yield_(acc_2, i_2)
+                (acc_3, i_3) = pl.intrin.leak()
                 return acc_3
 
         After = passes.convert_to_ssa()(Before)
@@ -617,29 +662,35 @@ class TestIfStatements:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for i, (acc,) in pl.range(5, init_values=(init,)):
+                (acc,) = pl.intrin.carry(init)
+                for i in pl.range(5):
                     if i == 0:
                         val = pl.mul(acc, 2.0)
-                        out = pl.yield_(val)
+                        pl.intrin.yield_(val)
                     else:
                         val2 = pl.add(acc, x)
-                        out = pl.yield_(val2)
-                    result = pl.yield_(out)
+                        pl.intrin.yield_(val2)
+                    (out,) = pl.intrin.leak()
+                    pl.intrin.yield_(out)
+                (result,) = pl.intrin.leak()
                 return result
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for i_0, (acc_0,) in pl.range(5, init_values=(init_0,)):
+                (acc_0,) = pl.intrin.carry(init_0)
+                for i_0 in pl.range(5):
                     if i_0 == 0:
                         val_0 = pl.mul(acc_0, 2.0)
-                        out_0 = pl.yield_(val_0)
+                        pl.intrin.yield_(val_0)
                     else:
                         val2_0 = pl.add(acc_0, x)
-                        out_0 = pl.yield_(val2_0)
-                    result_0 = pl.yield_(out_0)
+                        pl.intrin.yield_(val2_0)
+                    (out_0,) = pl.intrin.leak()
+                    pl.intrin.yield_(out_0)
+                (result_0,) = pl.intrin.leak()
                 return result_0
 
         After = passes.convert_to_ssa()(Before)
@@ -653,27 +704,33 @@ class TestIfStatements:
             @pl.function
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for i, (acc,) in pl.range(3, init_values=(init,)):
+                (acc,) = pl.intrin.carry(init)
+                for i in pl.range(3):
                     if i == 0:
                         new_acc: pl.Tensor[[64], pl.FP32] = pl.mul(acc, 2.0)
-                        val = pl.yield_(new_acc)
+                        pl.intrin.yield_(new_acc)
                     else:
-                        val = pl.yield_(acc)
-                    result = pl.yield_(val)
+                        pl.intrin.yield_(acc)
+                    (val,) = pl.intrin.leak()
+                    pl.intrin.yield_(val)
+                (result,) = pl.intrin.leak()
                 return result
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for i_0, (acc_0,) in pl.range(3, init_values=(init_0,)):
+                (acc_0,) = pl.intrin.carry(init_0)
+                for i_0 in pl.range(3):
                     if i_0 == 0:
                         new_acc_0 = pl.mul(acc_0, 2.0)
-                        val_0 = pl.yield_(new_acc_0)
+                        pl.intrin.yield_(new_acc_0)
                     else:
-                        val_0 = pl.yield_(acc_0)
-                    result_0 = pl.yield_(val_0)
+                        pl.intrin.yield_(acc_0)
+                    (val_0,) = pl.intrin.leak()
+                    pl.intrin.yield_(val_0)
+                (result_0,) = pl.intrin.leak()
                 return result_0
 
         After = passes.convert_to_ssa()(Before)
@@ -688,31 +745,37 @@ class TestIfStatements:
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init1: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
                 init2: pl.Tensor[[64], pl.FP32] = pl.create_tensor([64], dtype=pl.FP32)
-                for i, (a, b) in pl.range(5, init_values=(init1, init2)):
+                (a, b) = pl.intrin.carry(init1, init2)
+                for i in pl.range(5):
                     if i == 0:
                         new_a: pl.Tensor[[64], pl.FP32] = pl.mul(a, 2.0)
                         new_b: pl.Tensor[[64], pl.FP32] = pl.mul(b, 3.0)
-                        out_a, out_b = pl.yield_(new_a, new_b)
+                        pl.intrin.yield_(new_a, new_b)
                     else:
-                        out_a, out_b = pl.yield_(a, b)
-                    res_a, res_b = pl.yield_(out_a, out_b)
+                        pl.intrin.yield_(a, b)
+                    (out_a, out_b) = pl.intrin.leak()
+                    pl.intrin.yield_(out_a, out_b)
+                (res_a, res_b) = pl.intrin.leak()
                 result: pl.Tensor[[64], pl.FP32] = pl.add(res_a, res_b)
                 return result
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 init1_0 = pl.create_tensor([64], dtype=pl.FP32)
                 init2_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for i_0, (a_0, b_0) in pl.range(5, init_values=(init1_0, init2_0)):
+                (a_0, b_0) = pl.intrin.carry(init1_0, init2_0)
+                for i_0 in pl.range(5):
                     if i_0 == 0:
                         new_a_0 = pl.mul(a_0, 2.0)
                         new_b_0 = pl.mul(b_0, 3.0)
-                        out_a_0, out_b_0 = pl.yield_(new_a_0, new_b_0)
+                        pl.intrin.yield_(new_a_0, new_b_0)
                     else:
-                        out_a_0, out_b_0 = pl.yield_(a_0, b_0)
-                    res_a_0, res_b_0 = pl.yield_(out_a_0, out_b_0)
+                        pl.intrin.yield_(a_0, b_0)
+                    (out_a_0, out_b_0) = pl.intrin.leak()
+                    pl.intrin.yield_(out_a_0, out_b_0)
+                (res_a_0, res_b_0) = pl.intrin.leak()
                 result_0 = pl.add(res_a_0, res_b_0)
                 return result_0
 
@@ -893,7 +956,7 @@ class TestEdgeCases:
                 self,
                 x: pl.Tensor[[16, 64], pl.FP32],
                 n: pl.Scalar[pl.INDEX],
-            ) -> pl.Tensor[[8, 64], pl.FP32]:
+            ) -> pl.Tensor[[16, 64], pl.FP32]:
                 valid_len: pl.Scalar[pl.INDEX] = pl.min(n, 64)
                 t = pl.load(x, [0, 0], [16, 64])
                 s = pl.tile.slice(t, [8, 64], [0, 0], valid_shape=[8, valid_len])
@@ -907,7 +970,7 @@ class TestEdgeCases:
                 self,
                 x: pl.Tensor[[16, 64], pl.FP32],
                 n: pl.Scalar[pl.INDEX],
-            ) -> pl.Tensor[[8, 64], pl.FP32]:
+            ) -> pl.Tensor[[16, 64], pl.FP32]:
                 valid_len_0: pl.Scalar[pl.INDEX] = pl.min(n, 64)
                 t_0 = pl.load(x, [0, 0], [16, 64])
                 s_0 = pl.tile.slice(t_0, [8, 64], [0, 0], valid_shape=[8, valid_len_0])
@@ -1019,12 +1082,14 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 acc_0 = pl.create_tensor([64], dtype=pl.FP32)
-                for i_0, (acc_iter_1,) in pl.range(0, 10, 1, init_values=(acc_0,)):
+                (acc_iter_1,) = pl.intrin.carry(acc_0)
+                for i_0 in pl.range(0, 10, 1):
                     acc_2 = pl.add(acc_iter_1, 1.0)
-                    acc_1 = pl.yield_(acc_2)
+                    pl.intrin.yield_(acc_2)
+                (acc_1,) = pl.intrin.leak()
                 return acc_1
 
         After = passes.convert_to_ssa()(Before)
@@ -1044,12 +1109,14 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result_0 = x_0
-                for i_0, (result_iter_1,) in pl.range(0, 5, 1, init_values=(result_0,)):
+                (result_iter_1,) = pl.intrin.carry(result_0)
+                for i_0 in pl.range(0, 5, 1):
                     result_2 = pl.add(result_iter_1, 1.0)
-                    result_1 = pl.yield_(result_2)
+                    pl.intrin.yield_(result_2)
+                (result_1,) = pl.intrin.leak()
                 return result_1
 
         After = passes.convert_to_ssa()(Before)
@@ -1072,14 +1139,16 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 a_0 = x_0
                 b_0 = pl.mul(x_0, 2.0)
-                for i_0, (a_iter_1, b_iter_2) in pl.range(0, 3, 1, init_values=(a_0, b_0)):
+                (a_iter_1, b_iter_2) = pl.intrin.carry(a_0, b_0)
+                for i_0 in pl.range(0, 3, 1):
                     a_3 = pl.add(a_iter_1, 1.0)
                     b_4 = pl.mul(b_iter_2, 1.5)
-                    a_1, b_2 = pl.yield_(a_3, b_4)
+                    pl.intrin.yield_(a_3, b_4)
+                (a_1, b_2) = pl.intrin.leak()
                 result_0 = pl.add(a_1, b_2)
                 return result_0
 
@@ -1125,14 +1194,18 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result_0 = x_0
-                for i_0, (result_iter_1,) in pl.range(0, 3, 1, init_values=(result_0,)):
-                    for j_0, (result_iter_2,) in pl.range(0, 2, 1, init_values=(result_iter_1,)):
+                (result_iter_1,) = pl.intrin.carry(result_0)
+                for i_0 in pl.range(0, 3, 1):
+                    (result_iter_2,) = pl.intrin.carry(result_iter_1)
+                    for j_0 in pl.range(0, 2, 1):
                         result_3 = pl.add(result_iter_2, 1.0)
-                        result_2 = pl.yield_(result_3)
-                    result_1 = pl.yield_(result_2)
+                        pl.intrin.yield_(result_3)
+                    (result_2,) = pl.intrin.leak()
+                    pl.intrin.yield_(result_2)
+                (result_1,) = pl.intrin.leak()
                 return result_1
 
         After = passes.convert_to_ssa()(Before)
@@ -1155,16 +1228,20 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 outer_0 = x_0
                 inner_0 = pl.mul(x_0, 2.0)
-                for i_0, (inner_iter_1, outer_iter_1) in pl.range(0, 2, 1, init_values=(inner_0, outer_0)):
-                    for j_0, (inner_iter_3,) in pl.range(0, 3, 1, init_values=(inner_iter_1,)):
+                (inner_iter_1, outer_iter_1) = pl.intrin.carry(inner_0, outer_0)
+                for i_0 in pl.range(0, 2, 1):
+                    (inner_iter_3,) = pl.intrin.carry(inner_iter_1)
+                    for j_0 in pl.range(0, 3, 1):
                         inner_5 = pl.add(inner_iter_3, 1.0)
-                        inner_4 = pl.yield_(inner_5)
+                        pl.intrin.yield_(inner_5)
+                    (inner_4,) = pl.intrin.leak()
                     outer_3 = pl.add(outer_iter_1, inner_4)
-                    inner_2, outer_2 = pl.yield_(inner_4, outer_3)
+                    pl.intrin.yield_(inner_4, outer_3)
+                (inner_2, outer_2) = pl.intrin.leak()
                 return outer_2
 
         After = passes.convert_to_ssa()(Before)
@@ -1187,17 +1264,20 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result_0 = x_0
-                for i_0, (result_iter_1,) in pl.range(0, 5, 1, init_values=(result_0,)):
+                (result_iter_1,) = pl.intrin.carry(result_0)
+                for i_0 in pl.range(0, 5, 1):
                     if i_0 == 0:
                         result_3 = pl.mul(result_iter_1, 2.0)
-                        result_5 = pl.yield_(result_3)
+                        pl.intrin.yield_(result_3)
                     else:
                         result_4 = pl.add(result_iter_1, 1.0)
-                        result_5 = pl.yield_(result_4)
-                    result_2 = pl.yield_(result_5)
+                        pl.intrin.yield_(result_4)
+                    (result_5,) = pl.intrin.leak()
+                    pl.intrin.yield_(result_5)
+                (result_2,) = pl.intrin.leak()
                 return result_2
 
         After = passes.convert_to_ssa()(Before)
@@ -1221,19 +1301,24 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result_0 = x_0
-                for i_0, (result_iter_1,) in pl.range(0, 3, 1, init_values=(result_0,)):
-                    for j_0, (result_iter_3,) in pl.range(0, 2, 1, init_values=(result_iter_1,)):
+                (result_iter_1,) = pl.intrin.carry(result_0)
+                for i_0 in pl.range(0, 3, 1):
+                    (result_iter_3,) = pl.intrin.carry(result_iter_1)
+                    for j_0 in pl.range(0, 2, 1):
                         if j_0 == 0:
                             result_5 = pl.add(result_iter_3, 1.0)
-                            result_7 = pl.yield_(result_5)
+                            pl.intrin.yield_(result_5)
                         else:
                             result_6 = pl.mul(result_iter_3, 1.5)
-                            result_7 = pl.yield_(result_6)
-                        result_4 = pl.yield_(result_7)
-                    result_2 = pl.yield_(result_4)
+                            pl.intrin.yield_(result_6)
+                        (result_7,) = pl.intrin.leak()
+                        pl.intrin.yield_(result_7)
+                    (result_4,) = pl.intrin.leak()
+                    pl.intrin.yield_(result_4)
+                (result_2,) = pl.intrin.leak()
                 return result_2
 
         After = passes.convert_to_ssa()(Before)
@@ -1259,20 +1344,25 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 a_0 = x_0
                 b_0 = pl.mul(x_0, 2.0)
-                for i_0, (a_iter_1, b_iter_1) in pl.range(0, 2, 1, init_values=(a_0, b_0)):
+                (a_iter_1, b_iter_1) = pl.intrin.carry(a_0, b_0)
+                for i_0 in pl.range(0, 2, 1):
                     if i_0 == 0:
-                        for j_0, (a_iter_3,) in pl.range(0, 2, 1, init_values=(a_iter_1,)):
+                        (a_iter_3,) = pl.intrin.carry(a_iter_1)
+                        for j_0 in pl.range(0, 2, 1):
                             a_5 = pl.add(a_iter_3, 1.0)
-                            a_4 = pl.yield_(a_5)
-                        a_6, b_4 = pl.yield_(a_4, b_iter_1)
+                            pl.intrin.yield_(a_5)
+                        (a_4,) = pl.intrin.leak()
+                        pl.intrin.yield_(a_4, b_iter_1)
                     else:
                         b_3 = pl.mul(b_iter_1, 2.0)
-                        a_6, b_4 = pl.yield_(a_iter_1, b_3)
-                    a_2, b_2 = pl.yield_(a_6, b_4)
+                        pl.intrin.yield_(a_iter_1, b_3)
+                    (a_6, b_4) = pl.intrin.leak()
+                    pl.intrin.yield_(a_6, b_4)
+                (a_2, b_2) = pl.intrin.leak()
                 result_0 = pl.add(a_2, b_2)
                 return result_0
 
@@ -1295,15 +1385,19 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result_0 = x_0
-                for i_0, (result_iter_1,) in pl.range(0, 2, 1, init_values=(result_0,)):
+                (result_iter_1,) = pl.intrin.carry(result_0)
+                for i_0 in pl.range(0, 2, 1):
                     result_2 = pl.add(result_iter_1, 1.0)
-                    result_1 = pl.yield_(result_2)
-                for j_0, (result_iter_3,) in pl.range(0, 3, 1, init_values=(result_1,)):
+                    pl.intrin.yield_(result_2)
+                (result_1,) = pl.intrin.leak()
+                (result_iter_3,) = pl.intrin.carry(result_1)
+                for j_0 in pl.range(0, 3, 1):
                     result_4 = pl.mul(result_iter_3, 1.5)
-                    result_3 = pl.yield_(result_4)
+                    pl.intrin.yield_(result_4)
+                (result_3,) = pl.intrin.leak()
                 return result_3
 
         After = passes.convert_to_ssa()(Before)
@@ -1328,18 +1422,21 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 a_0 = x_0
                 b_0 = pl.mul(x_0, 2.0)
-                for i_0, (a_iter_1, b_iter_1) in pl.range(0, 1, 1, init_values=(a_0, b_0)):
+                (a_iter_1, b_iter_1) = pl.intrin.carry(a_0, b_0)
+                for i_0 in pl.range(0, 1, 1):
                     if i_0 == 0:
                         a_3 = pl.add(a_iter_1, 1.0)
-                        a_4, b_4 = pl.yield_(a_3, b_iter_1)
+                        pl.intrin.yield_(a_3, b_iter_1)
                     else:
                         b_3 = pl.add(b_iter_1, 1.0)
-                        a_4, b_4 = pl.yield_(a_iter_1, b_3)
-                    a_2, b_2 = pl.yield_(a_4, b_4)
+                        pl.intrin.yield_(a_iter_1, b_3)
+                    (a_4, b_4) = pl.intrin.leak()
+                    pl.intrin.yield_(a_4, b_4)
+                (a_2, b_2) = pl.intrin.leak()
                 result_0 = pl.add(a_2, b_2)
                 return result_0
 
@@ -1361,12 +1458,14 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result_0 = x_0
-                for i_0, (result_iter_1,) in pl.range(0, 3, 1, init_values=(result_0,)):
+                (result_iter_1,) = pl.intrin.carry(result_0)
+                for i_0 in pl.range(0, 3, 1):
                     result_2 = pl.add(result_iter_1, 1.0)
-                    result_1 = pl.yield_(result_2)
+                    pl.intrin.yield_(result_2)
+                (result_1,) = pl.intrin.leak()
                 final_0 = pl.mul(result_1, 2.0)
                 return final_0
 
@@ -1394,16 +1493,19 @@ class TestPlainSyntax:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result_0 = x_0
-                for i_0, (result_iter_1,) in pl.range(0, 10, 1, init_values=(result_0,)):
+                (result_iter_1,) = pl.intrin.carry(result_0)
+                for i_0 in pl.range(0, 10, 1):
                     if i_0 > 5:
-                        result_4 = pl.yield_(result_iter_1)
+                        pl.intrin.yield_(result_iter_1)
                     else:
                         result_3 = pl.add(result_iter_1, 1.0)
-                        result_4 = pl.yield_(result_3)
-                    result_2 = pl.yield_(result_4)
+                        pl.intrin.yield_(result_3)
+                    (result_4,) = pl.intrin.leak()
+                    pl.intrin.yield_(result_4)
+                (result_2,) = pl.intrin.leak()
                 return result_2
 
         After = passes.convert_to_ssa()(Before)
@@ -1467,15 +1569,17 @@ class TestEscapingVariables:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(
                 self,
                 a: pl.Tensor[[64], pl.FP32],
                 c: pl.Out[pl.Tensor[[64], pl.FP32]],
             ) -> pl.Tensor[[64], pl.FP32]:
-                for i_0, (out_iter_0,) in pl.range(0, 4, 1, init_values=(c,)):
+                (out_iter_0,) = pl.intrin.carry(c)
+                for i_0 in pl.range(0, 4, 1):
                     out_2 = pl.add(a, c)
-                    out_1 = pl.yield_(out_2)
+                    pl.intrin.yield_(out_2)
+                (out_1,) = pl.intrin.leak()
                 return out_1
 
         After = passes.convert_to_ssa()(program)
@@ -1501,13 +1605,15 @@ class TestEscapingVariables:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 result_0 = x_0
-                for i_0, (result_iter_1,) in pl.range(0, 4, 1, init_values=(result_0,)):
+                (result_iter_1,) = pl.intrin.carry(result_0)
+                for i_0 in pl.range(0, 4, 1):
                     tmp_0 = pl.add(result_iter_1, 1.0)
                     result_2 = pl.add(tmp_0, 1.0)
-                    result_1 = pl.yield_(result_2)
+                    pl.intrin.yield_(result_2)
+                (result_1,) = pl.intrin.leak()
                 return result_1
 
         After = passes.convert_to_ssa()(Before)
@@ -1577,18 +1683,22 @@ class TestEscapingVariables:
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 a_0 = x_0
                 b_0 = pl.mul(x_0, 2.0)
-                for i_0, (a_iter_1,) in pl.range(0, 4, 1, init_values=(a_0,)):
+                (a_iter_1,) = pl.intrin.carry(a_0)
+                for i_0 in pl.range(0, 4, 1):
                     tmp_0 = pl.add(x_0, 1.0)
                     a_2 = pl.add(a_iter_1, tmp_0)
-                    a_1 = pl.yield_(a_2)
-                for j_0, (b_iter_1,) in pl.range(0, 4, 1, init_values=(b_0,)):
+                    pl.intrin.yield_(a_2)
+                (a_1,) = pl.intrin.leak()
+                (b_iter_1,) = pl.intrin.carry(b_0)
+                for j_0 in pl.range(0, 4, 1):
                     tmp_1 = pl.add(x_0, 2.0)
                     b_2 = pl.add(b_iter_1, tmp_1)
-                    b_1 = pl.yield_(b_2)
+                    pl.intrin.yield_(b_2)
+                (b_1,) = pl.intrin.leak()
                 result_0 = pl.add(a_1, b_1)
                 return result_0
 
@@ -1653,19 +1763,22 @@ class TestEscapingVariables:
         # iter value (out_iter), the else-branch yields the newly computed value.
         @pl.program
         class Expected:
-            @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
                 c: pl.Out[pl.Tensor[[64], pl.FP32]],
             ) -> pl.Tensor[[64], pl.FP32]:
-                for i_0, (out_iter_0,) in pl.range(0, 4, 1, init_values=(c,)):
+                (out_iter_0,) = pl.intrin.carry(c)
+                for i_0 in pl.range(0, 4, 1):
                     if i_0 % 2 != 0:
-                        out_phi_0 = pl.yield_(out_iter_0)
+                        pl.intrin.yield_(out_iter_0)
                     else:
                         out_2 = pl.add(x, c)
-                        out_phi_0 = pl.yield_(out_2)
-                    out_1 = pl.yield_(out_phi_0)
+                        pl.intrin.yield_(out_2)
+                    (out_phi_0,) = pl.intrin.leak()
+                    pl.intrin.yield_(out_phi_0)
+                (out_1,) = pl.intrin.leak()
                 return out_1
 
         After = passes.convert_to_ssa()(program)
@@ -1699,14 +1812,16 @@ class TestEscapingVariables:
         # assignments — only ``acc`` is loop-carried (init_values + yield_).
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 acc_0 = x_0
-                for i_0, (acc_iter_1,) in pl.range(0, 4, 1, init_values=(acc_0,)):
+                (acc_iter_1,) = pl.intrin.carry(acc_0)
+                for i_0 in pl.range(0, 4, 1):
                     k0_0 = i_0 * 8
                     chunk_0 = pl.add(x_0, pl.cast(k0_0, pl.INT32))
                     acc_2 = pl.add(acc_iter_1, chunk_0)
-                    acc_1 = pl.yield_(acc_2)
+                    pl.intrin.yield_(acc_2)
+                (acc_1,) = pl.intrin.leak()
                 result_0 = pl.mul(acc_1, 2.0)
                 return result_0
 
@@ -1723,7 +1838,7 @@ class TestEscapingVariables:
         @pl.program
         class Before:
             @pl.function
-            def main(self, x: pl.Tensor[[16, 128], pl.FP32]) -> pl.Tensor[[16, 128], pl.FP32]:
+            def main(self, x: pl.Tensor[[16, 128], pl.FP32]) -> pl.Tensor[[16, 1], pl.FP32]:
                 result = pl.create_tensor([16, 1], dtype=pl.FP32)
                 result = pl.mul(result, 0.0)
                 for b0 in pl.range(0, 16, 4):
@@ -1746,20 +1861,24 @@ class TestEscapingVariables:
         # created each iteration and never escapes, so it is not loop-carried.
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
-            def main(self, x_0: pl.Tensor[[16, 128], pl.FP32]) -> pl.Tensor[[16, 128], pl.FP32]:
+            @pl.function()
+            def main(self, x_0: pl.Tensor[[16, 128], pl.FP32]) -> pl.Tensor[[16, 1], pl.FP32]:
                 result_0 = pl.create_tensor([16, 1], dtype=pl.FP32)
                 result_1 = pl.mul(result_0, 0.0)
-                for b0_0, (result_iter_2,) in pl.range(0, 16, 4, init_values=(result_1,)):
+                (result_iter_2,) = pl.intrin.carry(result_1)
+                for b0_0 in pl.range(0, 16, 4):
                     result_4 = pl.mul(result_iter_2, 2.0)
-                    result_3 = pl.yield_(result_4)
+                    pl.intrin.yield_(result_4)
+                (result_3,) = pl.intrin.leak()
                 out_0 = pl.mul(result_3, 2.0)
                 for b0_1 in pl.range(0, 16, 4):
                     local_var_0 = pl.create_tensor([4, 1], dtype=pl.FP32)
                     local_var_1 = pl.mul(local_var_0, 0.0)
-                    for kb_0, (local_var_iter_2,) in pl.range(0, 40, 1, init_values=(local_var_1,)):
+                    (local_var_iter_2,) = pl.intrin.carry(local_var_1)
+                    for kb_0 in pl.range(0, 40, 1):
                         local_var_4 = pl.add(local_var_iter_2, 1.0)
-                        local_var_3 = pl.yield_(local_var_4)
+                        pl.intrin.yield_(local_var_4)
+                    (local_var_3,) = pl.intrin.leak()
                     _tmp_0 = pl.mul(local_var_3, 3.0)
                 return out_0
 
@@ -1801,7 +1920,7 @@ class TestSubmitSSA:
                 x: pl.Tensor[[64], pl.FP32],
                 out: pl.Out[pl.Tensor[[64], pl.FP32]],
             ) -> pl.Tensor[[64], pl.FP32]:
-                # Reassign x so SSA mints a fresh version; the producer Submit
+                # Reassign x so SSA creates a fresh version; the producer Submit
                 # must reference that latest version in args_, not the param.
                 x = pl.add(x, 1.0)
                 with pl.manual_scope():
@@ -2217,10 +2336,12 @@ class TestScopeTransparentToSSA:
 
                 @pl.function(type=pl.FunctionType.Orchestration, auto_scope=False)
                 def orch(self, a: pl.Tensor[[16, 16], pl.FP32], out: pl.Out[pl.Tensor[[16, 16], pl.FP32]]):
-                    for i, (acc,) in pl.range(4, init_values=(out,)):
+                    (acc,) = pl.intrin.carry(out)
+                    for i in pl.range(4):
                         with pl.scope():
                             nxt: pl.Tensor[[16, 16], pl.FP32] = self.kernel(a, acc)
-                            acc = pl.yield_(nxt)
+                            pl.intrin.yield_(nxt)
+                    (acc,) = pl.intrin.leak()
                     return acc
 
             after = passes.convert_to_ssa()(Prog)
@@ -2353,10 +2474,12 @@ class TestScopeOutlineBoundary:
                 x: pl.Tensor[[16, 16], pl.FP32],
                 out: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
             ) -> pl.Tensor[[16, 16], pl.FP32]:
-                for i, (acc,) in pl.range(4, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.range(4):
                     with pl.scope():
                         nxt: pl.Tensor[[16, 16], pl.FP32] = pl.tensor.adds(acc, 1.0)
-                        acc = pl.yield_(nxt)
+                        pl.intrin.yield_(nxt)
+                (acc,) = pl.intrin.leak()
                 return acc
 
         After = passes.convert_to_ssa()(Before)
@@ -2429,23 +2552,26 @@ class TestSplitAivRegionTransparentToSSA:
                 a: pl.Tensor[[256, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
             ) -> pl.Tensor[[256, 128], pl.FP32]:
-                for i, (acc,) in pl.range(2, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.range(2):
                     for aiv_id in pl.split_aiv(2, mode=pl.SplitMode.UP_DOWN):
                         offset = aiv_id * 128
                         t: pl.Tile[[128, 128], pl.FP32] = pl.load(a, [offset, 0], [128, 128])
                         acc = pl.store(pl.add(t, t), [offset, 0], acc)
-                    acc = pl.yield_(acc)
+                    pl.intrin.yield_(acc)
+                (acc,) = pl.intrin.leak()
                 return acc
 
         @pl.program
         class Expected:
-            @pl.function(type=pl.FunctionType.Orchestration, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.Orchestration)
             def main(
                 self,
                 a: pl.Tensor[[256, 128], pl.FP32],
                 out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
             ) -> pl.Tensor[[256, 128], pl.FP32]:
-                for i, (acc,) in pl.range(2, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.range(2):
                     with pl.at(level=pl.Level.CORE_GROUP):
                         for aiv_id in pl.split_aiv(2, mode=pl.SplitMode.UP_DOWN):
                             offset: pl.Scalar[pl.INDEX] = aiv_id * 128
@@ -2453,7 +2579,8 @@ class TestSplitAivRegionTransparentToSSA:
                             acc_inner: pl.Tensor[[256, 128], pl.FP32] = pl.store(
                                 pl.add(t, t), [offset, 0], acc
                             )
-                    acc_out = pl.yield_(acc_inner)
+                    pl.intrin.yield_(acc_inner)
+                (acc_out,) = pl.intrin.leak()
                 return acc_out
 
         After = passes.convert_to_ssa()(Before)

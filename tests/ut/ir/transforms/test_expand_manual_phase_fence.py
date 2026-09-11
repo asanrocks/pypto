@@ -121,10 +121,12 @@ def test_parallel_iter_arg_dep_falls_back_even_with_visible_init_value():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (tids_iter,) in pl.parallel(4, init_values=(tids,)):
+                (tids_iter,) = pl.intrin.carry(tids)
+                for p in pl.parallel(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids_iter])
                     b, b_tid = pl.submit(self.kernel, deps=[tids_iter])
-                    tids_out = pl.yield_(tids_iter)
+                    pl.intrin.yield_(tids_iter)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     @pl.program
@@ -137,10 +139,12 @@ def test_parallel_iter_arg_dep_falls_back_even_with_visible_init_value():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (tids_iter,) in pl.parallel(4, init_values=(tids,)):
+                (tids_iter,) = pl.intrin.carry(tids)
+                for p in pl.parallel(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids_iter])
                     b, b_tid = pl.submit(self.kernel, deps=[tids_iter])
-                    tids_out = pl.yield_(tids_iter)
+                    pl.intrin.yield_(tids_iter)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     _assert_expands(Before, Expected)
@@ -156,10 +160,12 @@ def test_parallel_iter_arg_without_visible_init_is_not_hoisted():
         @pl.function(type=pl.FunctionType.Orchestration)
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
-                for p, (tids_iter,) in pl.parallel(4, init_values=(pl.array.create(4, pl.TASK_ID),)):
+                (tids_iter,) = pl.intrin.carry(pl.array.create(4, pl.TASK_ID))
+                for p in pl.parallel(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids_iter])
                     b, b_tid = pl.submit(self.kernel, deps=[tids_iter])
-                    tids_out = pl.yield_(tids_iter)
+                    pl.intrin.yield_(tids_iter)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     @pl.program
@@ -171,10 +177,12 @@ def test_parallel_iter_arg_without_visible_init_is_not_hoisted():
         @pl.function(type=pl.FunctionType.Orchestration)
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
-                for p, (tids_iter,) in pl.parallel(4, init_values=(pl.array.create(4, pl.TASK_ID),)):
+                (tids_iter,) = pl.intrin.carry(pl.array.create(4, pl.TASK_ID))
+                for p in pl.parallel(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids_iter])
                     b, b_tid = pl.submit(self.kernel, deps=[tids_iter])
-                    tids_out = pl.yield_(tids_iter)
+                    pl.intrin.yield_(tids_iter)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     _assert_expands(Before, Expected)
@@ -191,10 +199,12 @@ def test_sequential_iter_arg_dep_falls_back_even_with_visible_init_value():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (tids_iter,) in pl.range(4, init_values=(tids,)):
+                (tids_iter,) = pl.intrin.carry(tids)
+                for p in pl.range(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids_iter])
                     b, b_tid = pl.submit(self.kernel, deps=[tids_iter])
-                    tids_out = pl.yield_(tids_iter)
+                    pl.intrin.yield_(tids_iter)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     @pl.program
@@ -207,10 +217,12 @@ def test_sequential_iter_arg_dep_falls_back_even_with_visible_init_value():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (tids_iter,) in pl.range(4, init_values=(tids,)):
+                (tids_iter,) = pl.intrin.carry(tids)
+                for p in pl.range(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids_iter])
                     b, b_tid = pl.submit(self.kernel, deps=[tids_iter])
-                    tids_out = pl.yield_(tids_iter)
+                    pl.intrin.yield_(tids_iter)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     _assert_expands(Before, Expected)
@@ -335,11 +347,13 @@ def test_parallel_iter_arg_alias_update_of_dep_array_falls_back():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (tids_branch,) in pl.parallel(4, init_values=(tids,)):
+                (tids_branch,) = pl.intrin.carry(tids)
+                for p in pl.parallel(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids])
                     tids_branch_after_a = pl.array.update_element(tids_branch, 0, a)
                     b, b_tid = pl.submit(self.kernel, deps=[tids])
-                    tids_out = pl.yield_(tids_branch_after_a)
+                    pl.intrin.yield_(tids_branch_after_a)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     @pl.program
@@ -352,11 +366,13 @@ def test_parallel_iter_arg_alias_update_of_dep_array_falls_back():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (tids_branch,) in pl.parallel(4, init_values=(tids,)):
+                (tids_branch,) = pl.intrin.carry(tids)
+                for p in pl.parallel(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids])
                     tids_branch_after_a = pl.array.update_element(tids_branch, 0, a)
                     b, b_tid = pl.submit(self.kernel, deps=[tids])
-                    tids_out = pl.yield_(tids_branch_after_a)
+                    pl.intrin.yield_(tids_branch_after_a)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     _assert_expands(Before, Expected)
@@ -373,11 +389,13 @@ def test_sequential_iter_arg_alias_update_of_dep_array_falls_back():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (tids_branch,) in pl.range(4, init_values=(tids,)):
+                (tids_branch,) = pl.intrin.carry(tids)
+                for p in pl.range(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids])
                     tids_branch_after_a = pl.array.update_element(tids_branch, 0, a)
                     b, b_tid = pl.submit(self.kernel, deps=[tids])
-                    tids_out = pl.yield_(tids_branch_after_a)
+                    pl.intrin.yield_(tids_branch_after_a)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     @pl.program
@@ -390,11 +408,13 @@ def test_sequential_iter_arg_alias_update_of_dep_array_falls_back():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (tids_branch,) in pl.range(4, init_values=(tids,)):
+                (tids_branch,) = pl.intrin.carry(tids)
+                for p in pl.range(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids])
                     tids_branch_after_a = pl.array.update_element(tids_branch, 0, a)
                     b, b_tid = pl.submit(self.kernel, deps=[tids])
-                    tids_out = pl.yield_(tids_branch_after_a)
+                    pl.intrin.yield_(tids_branch_after_a)
+                (tids_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     _assert_expands(Before, Expected)
@@ -411,13 +431,17 @@ def test_nested_iter_arg_alias_update_of_dep_array_falls_back():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (outer_tids,) in pl.parallel(4, init_values=(tids,)):
-                    for q, (inner_tids,) in pl.parallel(4, init_values=(outer_tids,)):
+                (outer_tids,) = pl.intrin.carry(tids)
+                for p in pl.parallel(4):
+                    (inner_tids,) = pl.intrin.carry(outer_tids)
+                    for q in pl.parallel(4):
                         a, a_tid = pl.submit(self.kernel, deps=[tids])
                         inner_tids_after_a = pl.array.update_element(inner_tids, 0, a)
                         b, b_tid = pl.submit(self.kernel, deps=[tids])
-                        inner_out = pl.yield_(inner_tids_after_a)
-                    outer_out = pl.yield_(inner_out)
+                        pl.intrin.yield_(inner_tids_after_a)
+                    (inner_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(inner_out)
+                (outer_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     @pl.program
@@ -430,13 +454,17 @@ def test_nested_iter_arg_alias_update_of_dep_array_falls_back():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (outer_tids,) in pl.parallel(4, init_values=(tids,)):
-                    for q, (inner_tids,) in pl.parallel(4, init_values=(outer_tids,)):
+                (outer_tids,) = pl.intrin.carry(tids)
+                for p in pl.parallel(4):
+                    (inner_tids,) = pl.intrin.carry(outer_tids)
+                    for q in pl.parallel(4):
                         a, a_tid = pl.submit(self.kernel, deps=[tids])
                         inner_tids_after_a = pl.array.update_element(inner_tids, 0, a)
                         b, b_tid = pl.submit(self.kernel, deps=[tids])
-                        inner_out = pl.yield_(inner_tids_after_a)
-                    outer_out = pl.yield_(inner_out)
+                        pl.intrin.yield_(inner_tids_after_a)
+                    (inner_out,) = pl.intrin.leak()
+                    pl.intrin.yield_(inner_out)
+                (outer_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     _assert_expands(Before, Expected)
@@ -453,13 +481,17 @@ def test_outer_dep_array_consumers_fall_back_when_nested_loop_updates_alias():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (outer_tids,) in pl.parallel(4, init_values=(tids,)):
+                (outer_tids,) = pl.intrin.carry(tids)
+                for p in pl.parallel(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids])
-                    for q, (inner_tids,) in pl.parallel(4, init_values=(outer_tids,)):
+                    (inner_tids,) = pl.intrin.carry(outer_tids)
+                    for q in pl.parallel(4):
                         inner_tids_after_a = pl.array.update_element(inner_tids, 0, a)
-                        inner_out = pl.yield_(inner_tids_after_a)
+                        pl.intrin.yield_(inner_tids_after_a)
+                    (inner_out,) = pl.intrin.leak()
                     b, b_tid = pl.submit(self.kernel, deps=[tids])
-                    outer_out = pl.yield_(inner_out)
+                    pl.intrin.yield_(inner_out)
+                (outer_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     @pl.program
@@ -472,13 +504,17 @@ def test_outer_dep_array_consumers_fall_back_when_nested_loop_updates_alias():
         def main(self) -> pl.Scalar[pl.TASK_ID]:
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
-                for p, (outer_tids,) in pl.parallel(4, init_values=(tids,)):
+                (outer_tids,) = pl.intrin.carry(tids)
+                for p in pl.parallel(4):
                     a, a_tid = pl.submit(self.kernel, deps=[tids])
-                    for q, (inner_tids,) in pl.parallel(4, init_values=(outer_tids,)):
+                    (inner_tids,) = pl.intrin.carry(outer_tids)
+                    for q in pl.parallel(4):
                         inner_tids_after_a = pl.array.update_element(inner_tids, 0, a)
-                        inner_out = pl.yield_(inner_tids_after_a)
+                        pl.intrin.yield_(inner_tids_after_a)
+                    (inner_out,) = pl.intrin.leak()
                     b, b_tid = pl.submit(self.kernel, deps=[tids])
-                    outer_out = pl.yield_(inner_out)
+                    pl.intrin.yield_(inner_out)
+                (outer_out,) = pl.intrin.leak()
             return pl.system.task_invalid()
 
     _assert_expands(Before, Expected)
@@ -535,10 +571,11 @@ def test_nested_if_return_dep_array_is_not_moved_before_definition():
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
                 for p in pl.parallel(4):
-                    if True:
-                        local_tids = pl.yield_(tids)
+                    if pl.const(True, pl.BOOL):
+                        pl.intrin.yield_(tids)
                     else:
-                        local_tids = pl.yield_(tids)
+                        pl.intrin.yield_(tids)
+                    (local_tids,) = pl.intrin.leak()
                     a, a_tid = pl.submit(self.kernel, deps=[local_tids])
                     b, b_tid = pl.submit(self.kernel, deps=[local_tids])
             return pl.system.task_invalid()
@@ -554,10 +591,11 @@ def test_nested_if_return_dep_array_is_not_moved_before_definition():
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
                 for p in pl.parallel(4):
-                    if True:
-                        local_tids = pl.yield_(tids)
+                    if pl.const(True, pl.BOOL):
+                        pl.intrin.yield_(tids)
                     else:
-                        local_tids = pl.yield_(tids)
+                        pl.intrin.yield_(tids)
+                    (local_tids,) = pl.intrin.leak()
                     a, a_tid = pl.submit(self.kernel, deps=[local_tids])
                     b, b_tid = pl.submit(self.kernel, deps=[local_tids])
             return pl.system.task_invalid()
@@ -577,8 +615,10 @@ def test_parallel_nested_for_return_dep_array_is_not_moved_before_definition():
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
                 for p in pl.parallel(4):
-                    for q, (iter_tids,) in pl.range(1, init_values=(tids,)):
-                        local_tids = pl.yield_(iter_tids)
+                    (iter_tids,) = pl.intrin.carry(tids)
+                    for q in pl.range(1):
+                        pl.intrin.yield_(iter_tids)
+                    (local_tids,) = pl.intrin.leak()
                     a, a_tid = pl.submit(self.kernel, deps=[local_tids])
                     b, b_tid = pl.submit(self.kernel, deps=[local_tids])
             return pl.system.task_invalid()
@@ -594,8 +634,10 @@ def test_parallel_nested_for_return_dep_array_is_not_moved_before_definition():
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
                 for p in pl.parallel(4):
-                    for q, (iter_tids,) in pl.range(1, init_values=(tids,)):
-                        local_tids = pl.yield_(iter_tids)
+                    (iter_tids,) = pl.intrin.carry(tids)
+                    for q in pl.range(1):
+                        pl.intrin.yield_(iter_tids)
+                    (local_tids,) = pl.intrin.leak()
                     a, a_tid = pl.submit(self.kernel, deps=[local_tids])
                     b, b_tid = pl.submit(self.kernel, deps=[local_tids])
             return pl.system.task_invalid()
@@ -615,8 +657,10 @@ def test_sequential_nested_for_return_dep_array_is_not_moved_before_definition()
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
                 for p in pl.range(4):
-                    for q, (iter_tids,) in pl.range(1, init_values=(tids,)):
-                        local_tids = pl.yield_(iter_tids)
+                    (iter_tids,) = pl.intrin.carry(tids)
+                    for q in pl.range(1):
+                        pl.intrin.yield_(iter_tids)
+                    (local_tids,) = pl.intrin.leak()
                     a, a_tid = pl.submit(self.kernel, deps=[local_tids])
                     b, b_tid = pl.submit(self.kernel, deps=[local_tids])
             return pl.system.task_invalid()
@@ -632,8 +676,10 @@ def test_sequential_nested_for_return_dep_array_is_not_moved_before_definition()
             with pl.manual_scope():
                 tids = pl.array.create(4, pl.TASK_ID)
                 for p in pl.range(4):
-                    for q, (iter_tids,) in pl.range(1, init_values=(tids,)):
-                        local_tids = pl.yield_(iter_tids)
+                    (iter_tids,) = pl.intrin.carry(tids)
+                    for q in pl.range(1):
+                        pl.intrin.yield_(iter_tids)
+                    (local_tids,) = pl.intrin.leak()
                     a, a_tid = pl.submit(self.kernel, deps=[local_tids])
                     b, b_tid = pl.submit(self.kernel, deps=[local_tids])
             return pl.system.task_invalid()

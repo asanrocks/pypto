@@ -125,7 +125,7 @@ class TestCanonicalizeIOOrder:
             def main(self, in_a: pl.Tensor[[128, 64], pl.FP32], out: pl.Tensor[[128, 64], pl.FP32]):
                 for i in pl.pipeline(0, 2, 1, stage=1):
                     ta: pl.Tile[[64, 64], pl.FP32] = pl.tile.load(in_a, [0, 0], [64, 64])
-                    off: pl.Scalar[pl.INDEX] = 64
+                    off: pl.Scalar[pl.INDEX] = pl.const(64, pl.INDEX)
                     ta2: pl.Tile[[64, 64], pl.FP32] = pl.tile.load(in_a, [off, 0], [64, 64])
                     tc: pl.Tile[[64, 64], pl.FP32] = pl.tile.add(ta, ta2)
                     pl.tile.store(tc, [0, 0], out)
@@ -135,7 +135,7 @@ class TestCanonicalizeIOOrder:
             @pl.function(strict_ssa=True)
             def main(self, in_a: pl.Tensor[[128, 64], pl.FP32], out: pl.Tensor[[128, 64], pl.FP32]):
                 for i in pl.range(0, 2, 1):
-                    off: pl.Scalar[pl.INDEX] = 64
+                    off: pl.Scalar[pl.INDEX] = pl.const(64, pl.INDEX)
                     ta: pl.Tile[[64, 64], pl.FP32] = pl.tile.load(in_a, [0, 0], [64, 64])
                     ta2: pl.Tile[[64, 64], pl.FP32] = pl.tile.load(in_a, [off, 0], [64, 64])
                     tc: pl.Tile[[64, 64], pl.FP32] = pl.tile.add(ta, ta2)
@@ -496,11 +496,13 @@ class TestCanonicalizeIOOrder:
                 out: pl.Tensor[[64, 64], pl.FP32],
                 s0: pl.Scalar[pl.INDEX],
             ) -> pl.Scalar[pl.INDEX]:
-                for i, (acc,) in pl.pipeline(0, 2, 1, stage=1, init_values=(s0,)):
+                (acc,) = pl.intrin.carry(s0)
+                for i in pl.pipeline(0, 2, 1, stage=1):
                     t: pl.Tile[[64, 64], pl.FP32] = pl.tile.load(in_a, [0, 0], [64, 64])
                     pl.tile.store(t, [0, 0], out)
                     nxt: pl.Scalar[pl.INDEX] = acc + i
-                    r = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (r,) = pl.intrin.leak()
                 return r
 
         @pl.program
@@ -512,15 +514,16 @@ class TestCanonicalizeIOOrder:
                 out: pl.Tensor[[64, 64], pl.FP32],
                 s0: pl.Scalar[pl.INDEX],
             ) -> pl.Scalar[pl.INDEX]:
-                for i, (acc,) in pl.range(0, 2, 1, init_values=(s0,)):
+                (acc,) = pl.intrin.carry(s0)
+                for i in pl.range(0, 2, 1):
                     # ScalarCompute lifts to the top.
                     nxt: pl.Scalar[pl.INDEX] = acc + i
                     # Load follows.
                     t: pl.Tile[[64, 64], pl.FP32] = pl.tile.load(in_a, [0, 0], [64, 64])
                     # Store sinks — but only among non-terminators.
                     pl.tile.store(t, [0, 0], out)
-                    # The terminator stays absolutely last.
-                    r = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (r,) = pl.intrin.leak()
                 return r
 
         After = _run_pass(Before)
@@ -784,7 +787,9 @@ class TestCanonicalizeCrossCore:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [0, 0], [16, 64])
                     rs: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aiv(rs, split=0)
-                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e, e)
                     pl.tile.store(oi, [0, 0], out)
 
@@ -796,7 +801,9 @@ class TestCanonicalizeCrossCore:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [0, 0], [16, 64])
                     rs: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aiv(rs, split=0)
-                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e, e)
                     pl.tile.store(oi, [0, 0], out)
 
@@ -820,7 +827,9 @@ class TestCanonicalizeCrossCore:
                     qa: pl.Tile[[16, 64], pl.FP32] = pl.tile.load(q, [off, 0], [16, 64])
                     rs: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa, qa)
                     pl.tile.tpush_to_aiv(rs, split=0)
-                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e, e)
                     pl.tile.store(oi, [off, 0], out)
 
@@ -840,12 +849,14 @@ class TestCanonicalizeCrossCore:
                     rs1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(qa1, qa1)
                     pl.tile.tpush_to_aiv(rs1, split=0)
                     offc: pl.Scalar[pl.INDEX] = (i - 1) * 16
-                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                    e0: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(
+                        shape=[16, 64], dtype=pl.FP32, split=0
+                    )
                     oi0: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e0, e0)
                     pl.tile.store(oi0, [offc, 0], out)
                 # epilogue: consume(1)
                 off1: pl.Scalar[pl.INDEX] = pl.const(1, pl.INDEX) * pl.const(16, pl.INDEX)
-                e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(split=0)
+                e1: pl.Tile[[16, 64], pl.FP32] = pl.tile.tpop_from_aiv(shape=[16, 64], dtype=pl.FP32, split=0)
                 oi1: pl.Tile[[16, 64], pl.FP32] = pl.tile.add(e1, e1)
                 pl.tile.store(oi1, [off1, 0], out)
 

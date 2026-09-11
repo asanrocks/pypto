@@ -368,13 +368,13 @@ def test_comm_group_program_emits_domain_provider_with_block():
     assert re.search(r"workers=\[\*range\(world_size\)\],", code), code
     # window_size is the sum of aligned physical slot sizes. Each spec keeps
     # its exact logical size in count and exposes only its physical size via
-    # nbytes.
-    # Single slot → `window_size=((((64 * 4) + 31) // 32) * 32),`. The inner
-    # parentheses come from the Mul expression.
-    aligned_size = r"\(\(\(\(64 \* 4\) \+ 31\) // 32\) \* 32\)"
+    # nbytes. The host arithmetic folds at trace time (trace-time execution
+    # determines the IR: 64 * get_byte() is a host product), so count states
+    # the folded 256; the 32-alignment stays an IR expression.
+    aligned_size = r"\(\(\(256 \+ 31\) // 32\) \* 32\)"
     assert re.search(rf"window_size=\({aligned_size}\),", code), code
     assert re.search(
-        rf'CommBufferSpec\(name="data_buf", dtype="opaque", count=\(64 \* 4\), nbytes={aligned_size}\),',
+        rf'CommBufferSpec\(name="data_buf", dtype="opaque", count=256, nbytes={aligned_size}\),',
         code,
     ), code
     assert "as __comm_d0:" in code, code
@@ -406,8 +406,10 @@ def test_comm_buffer_specs_align_each_physical_allocation():
             return self.chip_orch(data, signal, device=0)
 
     code = _lower(Prog)
-    data_logical = r"\(17 \* 2\)"
-    signal_logical = r"\(2 \* 4\)"
+    # Trace-time host fold: 17 * 2 and 2 * 4 are host products, so the specs
+    # state 34 and 8; the 32-alignment arithmetic stays an IR expression.
+    data_logical = "34"
+    signal_logical = "8"
     data_alloc = rf"\(\(\({data_logical} \+ 31\) // 32\) \* 32\)"
     signal_alloc = rf"\(\(\({signal_logical} \+ 31\) // 32\) \* 32\)"
     assert re.search(
@@ -1688,7 +1690,9 @@ def test_if_cross_branch_phi_yields_tensors() -> None:
                 else:
                     boundary = self.chip_run(x)
                 self.chip_run(boundary)
-            return 0  # pyright: ignore[reportReturnType]
+            # A staged constant (not a bare host literal) so the declared ->
+            # has a traced return value to match against.
+            return pl.const(0, pl.INT32)
 
     code = _lower(Prog, convert_to_ssa=True)
 

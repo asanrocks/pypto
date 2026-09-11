@@ -467,7 +467,7 @@ def build_paged_attention_spmd_program(
             block_num_capacity_cfg = pl.tensor.read(config, [5])
             active_block_num_cfg = pl.tensor.read(config, [6])
             scale_value: pl.Scalar[pl.FP32] = pl.tensor.read(scale, [0])
-            zero_bn_cfg: pl.Scalar[pl.INT64] = 0
+            zero_bn_cfg: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
             if batch_cfg == 0:
                 max_bn_cfg: pl.Scalar[pl.INT64] = pl.yield_(zero_bn_cfg)
             else:

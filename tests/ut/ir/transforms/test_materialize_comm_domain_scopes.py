@@ -166,23 +166,19 @@ def _apply(program: ir.Program) -> ir.Program:
 
 
 def _synthesize(program: ir.Program) -> ir.Program:
-    return cast(ir.Program, passes.synthesize_allreduce_signals()(program))
+    return passes.synthesize_allreduce_signals()(program)
 
 
-def _mul(left: int, right: int) -> ir.Expr:
-    """Build ``Mul(ConstInt(left, INDEX), ConstInt(right, INDEX))``.
+def _size_bytes(count: int, width: int) -> ir.Expr:
+    """Build ``ConstInt(count * width, INDEX)`` — the traced size of one slot.
 
-    Matches the expression the parser produces when a ``@pl.program`` body
-    contains ``N * pl.<DType>.get_byte()`` (e.g. ``256 * pl.FP32.get_byte()``
-    → ``256 * 4``, a ``Mul`` of two ``ConstInt`` with dtype ``INDEX``).
+    The fixtures allocate ``pld.alloc_window_buffer(N * pl.<DType>.get_byte())``.
+    ``get_byte()`` is a host value, so the product is host arithmetic and the
+    tracing frontend folds it at trace time: the operand boundary lifts one
+    ``ConstInt(N * width)`` (the parser kept the ``Mul`` node — that form
+    belongs to round-trip text, not to the traced surface).
     """
-    span = ir.Span.unknown()
-    return ir.Mul(
-        ir.ConstInt(left, DataType.INDEX, span),
-        ir.ConstInt(right, DataType.INDEX, span),
-        DataType.INDEX,
-        span,
-    )
+    return ir.ConstInt(count * width, DataType.INDEX, ir.Span.unknown())
 
 
 def _expected_slot(name: str, size: ir.Expr) -> ir.WindowBuffer:
@@ -191,9 +187,9 @@ def _expected_slot(name: str, size: ir.Expr) -> ir.WindowBuffer:
     Each ``pld.alloc_window_buffer(size, *, name)`` materialises
     ``WindowBuffer(base=Var(name, PtrType), size=size, load_from_host=False,
     store_to_host=False)`` with ``name_hint`` inherited from the base Ptr Var.
-    The ``size`` is the alloc's first arg passed through unchanged — the DSL
-    emits it as a ``ConstInt`` (bare literal) or a ``Mul`` of two ``ConstInt``
-    (``N * dtype.get_byte()`` form), always with dtype ``index``.
+    The ``size`` is the alloc's first arg passed through unchanged — the
+    traced DSL emits it as one folded ``ConstInt`` (host arithmetic over
+    ``dtype.get_byte()`` folds at trace time; see ``_size_bytes``).
     """
     base = ir.Var(name, ir.PtrType(), ir.Span.unknown())
     return ir.WindowBuffer(base, size)
@@ -255,7 +251,7 @@ def test_single_alloc_all_devices_world_size_loop():
     # on the wire as an empty ``devices`` list, with a single slot for ``buf``.
     scopes = _get_comm_domain_scopes(host)
     assert len(scopes) == 1
-    _assert_scope_fields(scopes[0], [], [_expected_slot("buf", _mul(256, 4))])
+    _assert_scope_fields(scopes[0], [], [_expected_slot("buf", _size_bytes(256, 4))])
 
     # The view's window_buffer back-reference now points to the (same) slot.
     # Pointer-identity between the scope's slot and the view type's
@@ -292,7 +288,9 @@ def test_allreduce_signal_inherits_data_comm_domain():
     scopes = _get_comm_domain_scopes(host)
     assert len(scopes) == 1
     _assert_scope_fields(
-        scopes[0], [], [_expected_slot("data_buf", _mul(256, 4)), _expected_slot("signal_buf", _mul(4, 4))]
+        scopes[0],
+        [],
+        [_expected_slot("data_buf", _size_bytes(256, 4)), _expected_slot("signal_buf", _size_bytes(4, 4))],
     )
 
 
@@ -1176,8 +1174,13 @@ def test_implicit_allreduce_in_while_loop_uses_shared_signal():
                 self.chip_orch(data, device=r)
             for r in pl.range(pld.world_size()):
                 self.chip_orch(data, device=r)
-            while True:
+            # A staged predicate (not a host literal) keeps the while on the IR
+            # side: one representative iteration is collected.
+            step = pl.const(0, pl.INT32)
+            limit = pl.const(4, pl.INT32)
+            while step < limit:
                 data = pld.tensor.allreduce(data, op=pld.ReduceOp.Sum)
+                step = pl.add(step, pl.const(1, pl.INT32))
             return data
 
     synthesized = _synthesize(P)
@@ -1245,8 +1248,11 @@ def test_explicit_allreduce_in_while_loop_is_accepted():
             signal = pld.window(signal_buf, [pld.world_size(), 1], dtype=pl.INT32)
             for r in pl.range(pld.world_size()):
                 self.chip_orch(data, device=r)
-            while True:
+            step = pl.const(0, pl.INT32)
+            limit = pl.const(4, pl.INT32)
+            while step < limit:
                 data = pld.tensor.allreduce(data, signal, op=pld.ReduceOp.Sum)
+                step = pl.add(step, pl.const(1, pl.INT32))
             return data
 
     # An explicit signal needs no synthesis, and the lowered kernel restores its
@@ -1305,11 +1311,11 @@ def test_all_to_all_v_signal_and_recv_counts_inherit_data_comm_domain():
         scopes[0],
         [],
         [
-            _expected_slot("input_buf", _mul(8 * 64, 4)),
-            _expected_slot("data_buf", _mul(8 * 64, 4)),
-            _expected_slot("signal_buf", _mul(4, 4)),
-            _expected_slot("counts_buf", _mul(4, 4)),
-            _expected_slot("recv_buf", _mul(4, 4)),
+            _expected_slot("input_buf", _size_bytes(8 * 64, 4)),
+            _expected_slot("data_buf", _size_bytes(8 * 64, 4)),
+            _expected_slot("signal_buf", _size_bytes(4, 4)),
+            _expected_slot("counts_buf", _size_bytes(4, 4)),
+            _expected_slot("recv_buf", _size_bytes(4, 4)),
         ],
     )
 
@@ -1378,8 +1384,11 @@ def test_all_to_all_v_in_while_loop_is_rejected():
             recv = pld.window(recv_buf, [4, 1], dtype=pl.INT32)
             for r in pl.range(pld.world_size()):
                 self.chip_orch(inp, data, signal, counts, recv, device=r)
-            while True:
+            step = pl.const(0, pl.INT32)
+            limit = pl.const(4, pl.INT32)
+            while step < limit:
                 data = pld.tensor.all_to_all_v(inp, data, signal, counts, recv)
+                step = pl.add(step, pl.const(1, pl.INT32))
             return 0
 
     with pytest.raises(ValueError, match="all_to_all_v is not supported inside a for/while loop"):
@@ -1387,45 +1396,52 @@ def test_all_to_all_v_in_while_loop_is_rejected():
 
 
 def test_nested_explicit_allreduce_expression_is_rejected():
-    @pl.program
-    class P:
-        @pl.function(type=pl.FunctionType.Orchestration)
-        def chip_orch(self, data: pld.DistributedTensor[[256], pl.FP32]):
-            return data
+    """An allreduce nested in a host container is rejected at trace time.
 
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
-        def host_orch(self):
-            data_buf = pld.alloc_window_buffer(256 * pl.FP32.get_byte())
-            signal_buf = pld.alloc_window_buffer(4 * pl.INT32.get_byte())
-            data = pld.window(data_buf, [256], dtype=pl.FP32)
-            signal = pld.window(signal_buf, [4], dtype=pl.INT32)
-            for r in pl.range(pld.world_size()):
-                self.chip_orch(data, device=r)
-            wrapped = (pld.tensor.allreduce(data, signal, op=pld.ReduceOp.Sum),)
-            return wrapped
+    The parser emitted a tuple construction the synthesize-allreduce-signals
+    pass rejects; under tracing the call would be silently dropped whenever the
+    container never reaches a return. The Frame rejects the bind loudly, with
+    the pass's wording, at decoration time (before any pass runs)."""
 
     with pytest.raises(ValueError, match="must be a direct assignment"):
-        _apply(P)
+
+        @pl.program
+        class P:
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def chip_orch(self, data: pld.DistributedTensor[[256], pl.FP32]):
+                return data
+
+            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            def host_orch(self):
+                data_buf = pld.alloc_window_buffer(256 * pl.FP32.get_byte())
+                signal_buf = pld.alloc_window_buffer(4 * pl.INT32.get_byte())
+                data = pld.window(data_buf, [256], dtype=pl.FP32)
+                signal = pld.window(signal_buf, [4], dtype=pl.INT32)
+                for r in pl.range(pld.world_size()):
+                    self.chip_orch(data, device=r)
+                wrapped = (pld.tensor.allreduce(data, signal, op=pld.ReduceOp.Sum),)
+                return wrapped
 
 
 def test_nested_implicit_allreduce_expression_is_rejected():
-    @pl.program
-    class P:
-        @pl.function(type=pl.FunctionType.Orchestration)
-        def chip_orch(self, data: pld.DistributedTensor[[256], pl.FP32]):
-            return data
-
-        @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
-        def host_orch(self):
-            data_buf = pld.alloc_window_buffer(256 * pl.FP32.get_byte())
-            data = pld.window(data_buf, [256], dtype=pl.FP32)
-            for r in pl.range(pld.world_size()):
-                self.chip_orch(data, device=r)
-            wrapped = (pld.tensor.allreduce(data, op=pld.ReduceOp.Sum),)
-            return wrapped
+    """Same rejection for the implicit-signal form: at trace time, not pass time."""
 
     with pytest.raises(ValueError, match="must be a direct assignment"):
-        _apply(P)
+
+        @pl.program
+        class P:
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def chip_orch(self, data: pld.DistributedTensor[[256], pl.FP32]):
+                return data
+
+            @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)
+            def host_orch(self):
+                data_buf = pld.alloc_window_buffer(256 * pl.FP32.get_byte())
+                data = pld.window(data_buf, [256], dtype=pl.FP32)
+                for r in pl.range(pld.world_size()):
+                    self.chip_orch(data, device=r)
+                wrapped = (pld.tensor.allreduce(data, op=pld.ReduceOp.Sum),)
+                return wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -1456,7 +1472,7 @@ def test_single_alloc_subset_const_int_devices():
     # over a single ``buf`` slot.
     scopes = _get_comm_domain_scopes(host)
     assert len(scopes) == 1
-    _assert_scope_fields(scopes[0], [0, 1], [_expected_slot("buf", _mul(256, 4))])
+    _assert_scope_fields(scopes[0], [0, 1], [_expected_slot("buf", _size_bytes(256, 4))])
 
 
 # ---------------------------------------------------------------------------
@@ -1486,7 +1502,7 @@ def test_single_alloc_bounded_loop_devices():
     # ``pl.range(2)`` expands the induction-var descriptor to subset {0, 1}.
     scopes = _get_comm_domain_scopes(host)
     assert len(scopes) == 1
-    _assert_scope_fields(scopes[0], [0, 1], [_expected_slot("buf", _mul(256, 4))])
+    _assert_scope_fields(scopes[0], [0, 1], [_expected_slot("buf", _size_bytes(256, 4))])
 
 
 # ---------------------------------------------------------------------------
@@ -1525,7 +1541,7 @@ def test_two_allocs_same_descriptor_one_group():
     _assert_scope_fields(
         scopes[0],
         [],  # kAll
-        [_expected_slot("buf_data", _mul(256, 4)), _expected_slot("buf_signal", _mul(8, 4))],
+        [_expected_slot("buf_data", _size_bytes(256, 4)), _expected_slot("buf_signal", _size_bytes(8, 4))],
     )
 
 
@@ -1565,8 +1581,8 @@ def test_two_allocs_different_descriptors_two_groups():
     # outermost = buf_a, innermost = buf_b.
     scopes = _get_comm_domain_scopes(host)
     assert len(scopes) == 2
-    _assert_scope_fields(scopes[0], [0, 1], [_expected_slot("buf_a", _mul(256, 4))])
-    _assert_scope_fields(scopes[1], [2, 3], [_expected_slot("buf_b", _mul(256, 4))])
+    _assert_scope_fields(scopes[0], [0, 1], [_expected_slot("buf_a", _size_bytes(256, 4))])
+    _assert_scope_fields(scopes[1], [2, 3], [_expected_slot("buf_b", _size_bytes(256, 4))])
 
 
 def test_four_allocs_three_descriptors_three_groups():
@@ -1617,12 +1633,12 @@ def test_four_allocs_three_descriptors_three_groups():
     host = _get_func(result, "host_orch")
     scopes = _get_comm_domain_scopes(host)
     assert len(scopes) == 3
-    _assert_scope_fields(scopes[0], [0, 1], [_expected_slot("buf_a", _mul(256, 4))])
-    _assert_scope_fields(scopes[1], [2, 3], [_expected_slot("buf_b", _mul(256, 4))])
+    _assert_scope_fields(scopes[0], [0, 1], [_expected_slot("buf_a", _size_bytes(256, 4))])
+    _assert_scope_fields(scopes[1], [2, 3], [_expected_slot("buf_b", _size_bytes(256, 4))])
     _assert_scope_fields(
         scopes[2],
         [4, 5],
-        [_expected_slot("buf_c", _mul(256, 4)), _expected_slot("buf_d", _mul(256, 4))],
+        [_expected_slot("buf_c", _size_bytes(256, 4)), _expected_slot("buf_d", _size_bytes(256, 4))],
     )
 
 

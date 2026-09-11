@@ -86,8 +86,8 @@ class TestLowerPipelineMechanics:
                     _y_1: pl.Scalar[pl.INDEX] = i + 1
                     _y_2: pl.Scalar[pl.INDEX] = i + 2
                     _y_3: pl.Scalar[pl.INDEX] = i + 3
-                _y_4: pl.Scalar[pl.INDEX] = 8
-                _y_5: pl.Scalar[pl.INDEX] = 9
+                _y_4: pl.Scalar[pl.INDEX] = pl.const(8, pl.INDEX)
+                _y_5: pl.Scalar[pl.INDEX] = pl.const(9, pl.INDEX)
                 return x
 
         After = _run_pass(Before)
@@ -228,23 +228,27 @@ class TestLowerPipelineMechanics:
 
         @pl.program
         class Before:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32], s0: pl.Scalar[pl.INDEX]) -> pl.Scalar[pl.INDEX]:
-                for i, (a,) in pl.pipeline(0, 8, 1, stage=4, init_values=(s0,)):
+                (a,) = pl.intrin.carry(s0)
+                for i in pl.pipeline(0, 8, 1, stage=4):
                     b: pl.Scalar[pl.INDEX] = a + i
-                    r = pl.yield_(b)
+                    pl.intrin.yield_(b)
+                (r,) = pl.intrin.leak()
                 return r
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32], s0: pl.Scalar[pl.INDEX]) -> pl.Scalar[pl.INDEX]:
-                for i, (a,) in pl.range(0, 8, 4, init_values=(s0,)):
+                (a,) = pl.intrin.carry(s0)
+                for i in pl.range(0, 8, 4):
                     b: pl.Scalar[pl.INDEX] = a + i
                     b_1: pl.Scalar[pl.INDEX] = b + (i + 1)
                     b_2: pl.Scalar[pl.INDEX] = b_1 + (i + 2)
                     b_3: pl.Scalar[pl.INDEX] = b_2 + (i + 3)
-                    r = pl.yield_(b_3)
+                    pl.intrin.yield_(b_3)
+                (r,) = pl.intrin.leak()
                 return r
 
         After = _run_pass(Before)
@@ -257,23 +261,27 @@ class TestLowerPipelineMechanics:
 
         @pl.program
         class Before:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32], s0: pl.Scalar[pl.INDEX]) -> pl.Scalar[pl.INDEX]:
-                for i, (a,) in pl.pipeline(0, 10, 1, stage=4, init_values=(s0,)):
+                (a,) = pl.intrin.carry(s0)
+                for i in pl.pipeline(0, 10, 1, stage=4):
                     b: pl.Scalar[pl.INDEX] = a + i
-                    r = pl.yield_(b)
+                    pl.intrin.yield_(b)
+                (r,) = pl.intrin.leak()
                 return r
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32], s0: pl.Scalar[pl.INDEX]) -> pl.Scalar[pl.INDEX]:
-                for i, (a,) in pl.range(0, 8, 4, init_values=(s0,)):
+                (a,) = pl.intrin.carry(s0)
+                for i in pl.range(0, 8, 4):
                     b: pl.Scalar[pl.INDEX] = a + i
                     b_1: pl.Scalar[pl.INDEX] = b + (i + 1)
                     b_2: pl.Scalar[pl.INDEX] = b_1 + (i + 2)
                     b_3: pl.Scalar[pl.INDEX] = b_2 + (i + 3)
-                    r_main = pl.yield_(b_3)
+                    pl.intrin.yield_(b_3)
+                (r_main,) = pl.intrin.leak()
                 # Tail clones — iter-arg `a` is substituted by r_main directly.
                 b_4: pl.Scalar[pl.INDEX] = r_main + 8
                 b_5: pl.Scalar[pl.INDEX] = b_4 + 9
@@ -291,21 +299,23 @@ class TestLowerPipelineMechanics:
 
         @pl.program
         class Before:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
                 s0: pl.Scalar[pl.INDEX],
                 n: pl.Scalar[pl.INDEX],
             ) -> pl.Scalar[pl.INDEX]:
-                for i, (a,) in pl.pipeline(0, n, 1, stage=4, init_values=(s0,)):
+                (a,) = pl.intrin.carry(s0)
+                for i in pl.pipeline(0, n, 1, stage=4):
                     b: pl.Scalar[pl.INDEX] = a + i
-                    r = pl.yield_(b)
+                    pl.intrin.yield_(b)
+                (r,) = pl.intrin.leak()
                 return r
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -313,12 +323,14 @@ class TestLowerPipelineMechanics:
                 n: pl.Scalar[pl.INDEX],
             ) -> pl.Scalar[pl.INDEX]:
                 unroll_main_end: pl.Scalar[pl.INDEX] = 0 + (n - 0) // 4 * 4
-                for i, (a,) in pl.range(0, unroll_main_end, 4, init_values=(s0,)):
+                (a,) = pl.intrin.carry(s0)
+                for i in pl.range(0, unroll_main_end, 4):
                     b: pl.Scalar[pl.INDEX] = a + i
                     b_1: pl.Scalar[pl.INDEX] = b + (i + 1)
                     b_2: pl.Scalar[pl.INDEX] = b_1 + (i + 2)
                     b_3: pl.Scalar[pl.INDEX] = b_2 + (i + 3)
-                    r_main = pl.yield_(b_3)
+                    pl.intrin.yield_(b_3)
+                (r_main,) = pl.intrin.leak()
                 unroll_rem: pl.Scalar[pl.INDEX] = n - unroll_main_end
                 # Each IfStmt level carries its own return_vars and yield — the
                 # cascade is nested (not elif/else), because every inner IfStmt
@@ -328,22 +340,25 @@ class TestLowerPipelineMechanics:
                 # clones are substituted with r_main directly.
                 if unroll_rem == 1:
                     b_4: pl.Scalar[pl.INDEX] = r_main + unroll_main_end
-                    r = pl.yield_(b_4)
+                    pl.intrin.yield_(b_4)
                 else:
                     if unroll_rem == 2:
                         b_5: pl.Scalar[pl.INDEX] = r_main + unroll_main_end
                         b_6: pl.Scalar[pl.INDEX] = b_5 + (unroll_main_end + 1)
-                        r_rem2 = pl.yield_(b_6)
+                        pl.intrin.yield_(b_6)
                     else:
                         if unroll_rem == 3:
                             b_7: pl.Scalar[pl.INDEX] = r_main + unroll_main_end
                             b_8: pl.Scalar[pl.INDEX] = b_7 + (unroll_main_end + 1)
                             b_9: pl.Scalar[pl.INDEX] = b_8 + (unroll_main_end + 2)
-                            r_rem3 = pl.yield_(b_9)
+                            pl.intrin.yield_(b_9)
                         else:
-                            r_rem3 = pl.yield_(r_main)
-                        r_rem2 = pl.yield_(r_rem3)
-                    r = pl.yield_(r_rem2)
+                            pl.intrin.yield_(r_main)
+                        (r_rem3,) = pl.intrin.leak()
+                        pl.intrin.yield_(r_rem3)
+                    (r_rem2,) = pl.intrin.leak()
+                    pl.intrin.yield_(r_rem2)
+                (r,) = pl.intrin.leak()
                 return r
 
         After = _run_pass(Before)
@@ -409,8 +424,8 @@ class TestLowerPipelineMechanics:
             @pl.function(strict_ssa=True)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
                 # No outer loop at all — just the two tail clones at offsets 0, 1.
-                _y: pl.Scalar[pl.INDEX] = 0
-                _y_1: pl.Scalar[pl.INDEX] = 1
+                _y: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                _y_1: pl.Scalar[pl.INDEX] = pl.const(1, pl.INDEX)
                 return x
 
         After = _run_pass(Before)
@@ -432,11 +447,13 @@ class TestLowerPipelineMechanics:
 
         @pl.program
         class Before:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(self, x: pl.Tensor[[64], pl.FP32], s0: pl.Scalar[pl.INDEX]) -> pl.Scalar[pl.INDEX]:
-                for i, (a,) in pl.pipeline(0, 3, 1, stage=4, init_values=(s0,)):
+                (a,) = pl.intrin.carry(s0)
+                for i in pl.pipeline(0, 3, 1, stage=4):
                     b: pl.Scalar[pl.INDEX] = a + i
-                    r = pl.yield_(b)
+                    pl.intrin.yield_(b)
+                (r,) = pl.intrin.leak()
                 return r
 
         @pl.program
@@ -515,21 +532,23 @@ class TestLowerPipelineMechanics:
 
         @pl.program
         class Before:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
                 s0: pl.Scalar[pl.INDEX],
                 n: pl.Scalar[pl.INDEX],
             ) -> pl.Scalar[pl.INDEX]:
-                for i, (a,) in pl.pipeline(0, n, 2, stage=4, init_values=(s0,)):
+                (a,) = pl.intrin.carry(s0)
+                for i in pl.pipeline(0, n, 2, stage=4):
                     b: pl.Scalar[pl.INDEX] = a + i
-                    r = pl.yield_(b)
+                    pl.intrin.yield_(b)
+                (r,) = pl.intrin.leak()
                 return r
 
         @pl.program
         class Expected:
-            @pl.function(strict_ssa=True)
+            @pl.function()
             def main(
                 self,
                 x: pl.Tensor[[64], pl.FP32],
@@ -538,32 +557,37 @@ class TestLowerPipelineMechanics:
             ) -> pl.Scalar[pl.INDEX]:
                 # main_end = 0 + ceil_div(n-0, 2)//4 * (4*2) = 0 + (n-0+1)//2//4 * 8
                 unroll_main_end: pl.Scalar[pl.INDEX] = 0 + (n - 0 + 1) // 2 // 4 * 8
-                for i, (a,) in pl.range(0, unroll_main_end, 8, init_values=(s0,)):
+                (a,) = pl.intrin.carry(s0)
+                for i in pl.range(0, unroll_main_end, 8):
                     b: pl.Scalar[pl.INDEX] = a + i
                     b_1: pl.Scalar[pl.INDEX] = b + (i + 2)
                     b_2: pl.Scalar[pl.INDEX] = b_1 + (i + 4)
                     b_3: pl.Scalar[pl.INDEX] = b_2 + (i + 6)
-                    r_main = pl.yield_(b_3)
+                    pl.intrin.yield_(b_3)
+                (r_main,) = pl.intrin.leak()
                 # rem in ITERATION units: trip_iters - main_iters*factor.
                 unroll_rem: pl.Scalar[pl.INDEX] = (n - 0 + 1) // 2 - (n - 0 + 1) // 2 // 4 * 4
                 if unroll_rem == 1:
                     t1: pl.Scalar[pl.INDEX] = r_main + unroll_main_end
-                    r = pl.yield_(t1)
+                    pl.intrin.yield_(t1)
                 else:
                     if unroll_rem == 2:
                         t2: pl.Scalar[pl.INDEX] = r_main + unroll_main_end
                         t3: pl.Scalar[pl.INDEX] = t2 + (unroll_main_end + 2)
-                        r_rem2 = pl.yield_(t3)
+                        pl.intrin.yield_(t3)
                     else:
                         if unroll_rem == 3:
                             t4: pl.Scalar[pl.INDEX] = r_main + unroll_main_end
                             t5: pl.Scalar[pl.INDEX] = t4 + (unroll_main_end + 2)
                             t6: pl.Scalar[pl.INDEX] = t5 + (unroll_main_end + 4)
-                            r_rem3 = pl.yield_(t6)
+                            pl.intrin.yield_(t6)
                         else:
-                            r_rem3 = pl.yield_(r_main)
-                        r_rem2 = pl.yield_(r_rem3)
-                    r = pl.yield_(r_rem2)
+                            pl.intrin.yield_(r_main)
+                        (r_rem3,) = pl.intrin.leak()
+                        pl.intrin.yield_(r_rem3)
+                    (r_rem2,) = pl.intrin.leak()
+                    pl.intrin.yield_(r_rem2)
+                (r,) = pl.intrin.leak()
                 return r
 
         After = _run_pass(Before)
@@ -592,14 +616,15 @@ class TestAccumulatorMembership:
 
         @pl.program
         class Before:
-            @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.InCore)
             def kernel(
                 self,
                 a: pl.Tensor[[64, 32], pl.BF16],
                 b: pl.Tensor[[32, 32], pl.BF16],
                 out: pl.Out[pl.Tensor[[64, 32], pl.FP32]],
             ) -> pl.Tensor[[64, 32], pl.FP32]:
-                for i, (acc,) in pl.pipeline(0, 64, 32, stage=2, init_values=(out,)):
+                (acc,) = pl.intrin.carry(out)
+                for i in pl.pipeline(0, 64, 32, stage=2):
                     am: pl.Tile[[32, 32], pl.BF16, pl.Mem.Mat] = pl.tile.load(
                         a, [i, 0], [32, 32], target_memory=pl.Mem.Mat
                     )
@@ -616,7 +641,8 @@ class TestAccumulatorMembership:
                         bm, 0, 0, [32, 32], target_memory=pl.Mem.Acc
                     )
                     nxt: pl.Tensor[[64, 32], pl.FP32] = pl.store(c, [i, 0], acc)
-                    r = pl.yield_(nxt)
+                    pl.intrin.yield_(nxt)
+                (r,) = pl.intrin.leak()
                 return r
 
         After = passes.lower_pipeline_loops()(Before)

@@ -44,15 +44,15 @@ class TestBreakOnly:
         class Expected:
             @pl.function(type=pl.FunctionType.InCore)
             def main(self, x: pl.Tensor[[64], pl.FP32], n: pl.Scalar[pl.INT64]) -> pl.Tensor[[64], pl.FP32]:
-                i: pl.Scalar[pl.INDEX] = 0
-                brk: pl.Scalar[pl.BOOL] = False
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
                 while i < n and not brk:
                     if i > 5:
-                        brk: pl.Scalar[pl.BOOL] = True
-                        pl.yield_()
+                        brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_()
                     else:
                         x = pl.add(x, 1.0)
-                        pl.yield_()
+                        pl.intrin.yield_()
                     if not brk:
                         i = i + 1
                 return x
@@ -76,14 +76,14 @@ class TestBreakOnly:
         class Expected:
             @pl.function(type=pl.FunctionType.InCore)
             def main(self, x: pl.Tensor[[64], pl.FP32], n: pl.Scalar[pl.INT64]) -> pl.Tensor[[64], pl.FP32]:
-                i: pl.Scalar[pl.INDEX] = 0
-                brk: pl.Scalar[pl.BOOL] = False
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
                 while i < n and not brk:
                     if i > 0:
-                        brk: pl.Scalar[pl.BOOL] = True
-                        pl.yield_()
+                        brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_()
                     else:
-                        pl.yield_()
+                        pl.intrin.yield_()
                     if not brk:
                         i = i + 1
                 return x
@@ -146,19 +146,19 @@ class TestBreakAndContinue:
         class Expected:
             @pl.function(type=pl.FunctionType.InCore)
             def main(self, x: pl.Tensor[[64], pl.FP32], n: pl.Scalar[pl.INT64]) -> pl.Tensor[[64], pl.FP32]:
-                i: pl.Scalar[pl.INDEX] = 0
-                brk: pl.Scalar[pl.BOOL] = False
+                i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
                 while i < n and not brk:
                     if i > 10:
-                        brk: pl.Scalar[pl.BOOL] = True
-                        pl.yield_()
+                        brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_()
                     else:
                         x = pl.add(x, 1.0)
                         if i > 5:
                             pass
                         else:
                             x = pl.mul(x, 2.0)
-                        pl.yield_()
+                        pl.intrin.yield_()
                     if not brk:
                         i = i + 1
                 return x
@@ -177,7 +177,7 @@ class TestWhileLoops:
         class Before:
             @pl.function(type=pl.FunctionType.InCore)
             def main(self, x: pl.Tensor[[64], pl.FP32], n: pl.Scalar[pl.INT64]) -> pl.Tensor[[64], pl.FP32]:
-                i: pl.Scalar[pl.INT64] = 0
+                i: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 while i < n:
                     if i > 5:
                         break
@@ -189,16 +189,16 @@ class TestWhileLoops:
         class Expected:
             @pl.function(type=pl.FunctionType.InCore)
             def main(self, x: pl.Tensor[[64], pl.FP32], n: pl.Scalar[pl.INT64]) -> pl.Tensor[[64], pl.FP32]:
-                i: pl.Scalar[pl.INT64] = 0
-                brk: pl.Scalar[pl.BOOL] = False
+                i: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
                 while i < n and not brk:
                     if i > 5:
-                        brk: pl.Scalar[pl.BOOL] = True
-                        pl.yield_()
+                        brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_()
                     else:
                         x = pl.add(x, 1.0)
                         i = i + 1
-                        pl.yield_()
+                        pl.intrin.yield_()
                 return x
 
         After = passes.ctrl_flow_transform()(Before)
@@ -211,7 +211,7 @@ class TestWhileLoops:
         class Before:
             @pl.function(type=pl.FunctionType.InCore)
             def main(self, x: pl.Tensor[[64], pl.FP32], n: pl.Scalar[pl.INT64]) -> pl.Tensor[[64], pl.FP32]:
-                i: pl.Scalar[pl.INT64] = 0
+                i: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 while i < n:
                     i = i + 1
                     if i > 5:
@@ -223,7 +223,7 @@ class TestWhileLoops:
         class Expected:
             @pl.function(type=pl.FunctionType.InCore)
             def main(self, x: pl.Tensor[[64], pl.FP32], n: pl.Scalar[pl.INT64]) -> pl.Tensor[[64], pl.FP32]:
-                i: pl.Scalar[pl.INT64] = 0
+                i: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
                 while i < n:
                     i = i + 1
                     if i > 5:
@@ -240,34 +240,37 @@ class TestWhileLoops:
 
         @pl.program
         class Before:
-            @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.InCore)
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                n: pl.Scalar[pl.INT64] = 0
-                for cnt, x_iter in pl.while_(init_values=(n, x_0)):
-                    pl.cond(cnt < 10)
+                n: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                (cnt, x_iter) = pl.intrin.carry(n, x_0)
+                while cnt < 10:
                     if cnt > 5:
                         break
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                     c2: pl.Scalar[pl.INT64] = cnt + 1
-                    cnt, x_iter = pl.yield_(c2, y)
+                    pl.intrin.yield_(c2, y)
+                (cnt, x_iter) = pl.intrin.leak()
                 return x_iter
 
         @pl.program
         class Expected:
-            @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.InCore)
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                n: pl.Scalar[pl.INT64] = 0
-                brk: pl.Scalar[pl.BOOL] = False
-                for cnt, x_iter in pl.while_(init_values=(n, x_0)):
-                    pl.cond(cnt < 10 and not brk)
+                n: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+                (cnt, x_iter) = pl.intrin.carry(n, x_0)
+                while cnt < 10 and not brk:
                     if cnt > 5:
-                        brk: pl.Scalar[pl.BOOL] = True
-                        cnt_phi, x_phi = pl.yield_(cnt, x_iter)
+                        brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(cnt, x_iter)
                     else:
                         y = pl.add(x_iter, x_iter)
                         c2 = cnt + 1
-                        cnt_phi, x_phi = pl.yield_(c2, y)
-                    cnt, x_iter = pl.yield_(cnt_phi, x_phi)
+                        pl.intrin.yield_(c2, y)
+                    (cnt_phi, x_phi) = pl.intrin.leak()
+                    pl.intrin.yield_(cnt_phi, x_phi)
+                (cnt, x_iter) = pl.intrin.leak()
                 return x_iter
 
         After = passes.ctrl_flow_transform()(Before)
@@ -282,32 +285,35 @@ class TestWhileLoops:
 
         @pl.program
         class Before:
-            @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.InCore)
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                n: pl.Scalar[pl.INT64] = 0
-                for cnt, x_iter in pl.while_(init_values=(n, x_0)):
-                    pl.cond(cnt < 10)
+                n: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                (cnt, x_iter) = pl.intrin.carry(n, x_0)
+                while cnt < 10:
                     if cnt > 5:
                         break
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
-                    cnt, x_iter = pl.yield_(cnt + 1, y)
+                    pl.intrin.yield_(cnt + 1, y)
+                (cnt, x_iter) = pl.intrin.leak()
                 return x_iter
 
         @pl.program
         class Expected:
-            @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.InCore)
             def main(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                n: pl.Scalar[pl.INT64] = 0
-                brk: pl.Scalar[pl.BOOL] = False
-                for cnt, x_iter in pl.while_(init_values=(n, x_0)):
-                    pl.cond(cnt < 10 and not brk)
+                n: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
+                brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+                (cnt, x_iter) = pl.intrin.carry(n, x_0)
+                while cnt < 10 and not brk:
                     if cnt > 5:
-                        brk: pl.Scalar[pl.BOOL] = True
-                        cnt_phi, x_phi = pl.yield_(cnt, x_iter)
+                        brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(cnt, x_iter)
                     else:
                         y = pl.add(x_iter, x_iter)
-                        cnt_phi, x_phi = pl.yield_(cnt + 1, y)
-                    cnt, x_iter = pl.yield_(cnt_phi, x_phi)
+                        pl.intrin.yield_(cnt + 1, y)
+                    (cnt_phi, x_phi) = pl.intrin.leak()
+                    pl.intrin.yield_(cnt_phi, x_phi)
+                (cnt, x_iter) = pl.intrin.leak()
                 return x_iter
 
         After = passes.ctrl_flow_transform()(Before)
@@ -388,15 +394,15 @@ class TestNestedLoops:
                 self, x: pl.Tensor[[64], pl.FP32], m: pl.Scalar[pl.INT64], n: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
                 for j in pl.range(m):
-                    i: pl.Scalar[pl.INDEX] = 0
-                    brk: pl.Scalar[pl.BOOL] = False
+                    i: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                    brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
                     while i < n and not brk:
                         if i > 5:
-                            brk: pl.Scalar[pl.BOOL] = True
-                            pl.yield_()
+                            brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                            pl.intrin.yield_()
                         else:
                             x = pl.add(x, 1.0)
-                            pl.yield_()
+                            pl.intrin.yield_()
                         if not brk:
                             i = i + 1
                 return x
@@ -430,24 +436,27 @@ class TestEndToEnd:
             def main(
                 self, x__ssa_v0: pl.Tensor[[64], pl.FP32], n__ssa_v0: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
-                i__ssa_v0: pl.Scalar[pl.INDEX] = 0
-                break__ssa_v0: pl.Scalar[pl.BOOL] = False
-                for break__iter_v1, i__iter_v1, x__iter_v1 in pl.while_(
-                    init_values=(break__ssa_v0, i__ssa_v0, x__ssa_v0)
-                ):
-                    pl.cond(i__iter_v1 < n__ssa_v0 and not break__iter_v1)
+                i__ssa_v0: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                break__ssa_v0: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+                (break__iter_v1, i__iter_v1, x__iter_v1) = pl.intrin.carry(
+                    break__ssa_v0, i__ssa_v0, x__ssa_v0
+                )  # noqa: E501
+                while i__iter_v1 < n__ssa_v0 and not break__iter_v1:
                     if i__iter_v1 > 5:
-                        break__ssa_v3: pl.Scalar[pl.BOOL] = True
-                        break__phi_v4, x__phi_v4 = pl.yield_(break__ssa_v3, x__iter_v1)
+                        break__ssa_v3: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(break__ssa_v3, x__iter_v1)
                     else:
                         x__ssa_v3 = pl.add(x__iter_v1, 1.0)
-                        break__phi_v4, x__phi_v4 = pl.yield_(break__iter_v1, x__ssa_v3)
+                        pl.intrin.yield_(break__iter_v1, x__ssa_v3)
+                    (break__phi_v4, x__phi_v4) = pl.intrin.leak()
                     if not break__phi_v4:
                         i__ssa_v3 = i__iter_v1 + 1
-                        i__phi_v4 = pl.yield_(i__ssa_v3)
+                        pl.intrin.yield_(i__ssa_v3)
                     else:
-                        i__phi_v4 = pl.yield_(i__iter_v1)
-                    break__rv_v2, i__rv_v2, x__rv_v2 = pl.yield_(break__phi_v4, i__phi_v4, x__phi_v4)
+                        pl.intrin.yield_(i__iter_v1)
+                    (i__phi_v4,) = pl.intrin.leak()
+                    pl.intrin.yield_(break__phi_v4, i__phi_v4, x__phi_v4)
+                (break__rv_v2, i__rv_v2, x__rv_v2) = pl.intrin.leak()
                 return x__rv_v2
 
         ir.assert_structural_equal(After, Expected)
@@ -470,17 +479,20 @@ class TestEndToEnd:
 
         @pl.program
         class Expected:
-            @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+            @pl.function(type=pl.FunctionType.InCore)
             def main(
                 self, x_0: pl.Tensor[[64], pl.FP32], n_0: pl.Scalar[pl.INT64]
             ) -> pl.Tensor[[64], pl.FP32]:
-                for i, (x_iter,) in pl.range(n_0, init_values=(x_0,)):
+                (x_iter,) = pl.intrin.carry(x_0)
+                for i in pl.range(n_0):
                     if i > 5:
-                        x_phi = pl.yield_(x_iter)
+                        pl.intrin.yield_(x_iter)
                     else:
                         x_1 = pl.add(x_iter, 1.0)
-                        x_phi = pl.yield_(x_1)
-                    x_rv = pl.yield_(x_phi)
+                        pl.intrin.yield_(x_1)
+                    (x_phi,) = pl.intrin.leak()
+                    pl.intrin.yield_(x_phi)
+                (x_rv,) = pl.intrin.leak()
                 return x_rv
 
         ir.assert_structural_equal(After, Expected)
@@ -517,26 +529,31 @@ def test_continue_in_for():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i < 5:
                     continue
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(10, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(10):
                 if i < 5:
-                    phi = pl.yield_(x_iter)
+                    pl.intrin.yield_(x_iter)
                 else:
                     y = pl.add(x_iter, x_iter)
-                    phi = pl.yield_(y)
-                x_iter = pl.yield_(phi)
+                    pl.intrin.yield_(y)
+                (phi,) = pl.intrin.leak()
+                pl.intrin.yield_(phi)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -548,32 +565,36 @@ def test_break_in_for():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i > 5:
                     break
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 0
-            brk: pl.Scalar[pl.BOOL] = False
-            for (x_iter,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i_idx < 10 and not brk)
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter,) = pl.intrin.carry(x_0)
+            while i_idx < 10 and not brk:
                 if i_idx > 5:
-                    brk: pl.Scalar[pl.BOOL] = True
-                    phi = pl.yield_(x_iter)
+                    brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_(x_iter)
                 else:
                     y = pl.add(x_iter, x_iter)
-                    phi = pl.yield_(y)
+                    pl.intrin.yield_(y)
+                (phi,) = pl.intrin.leak()
                 if not brk:
                     i_idx = i_idx + 1
-                x_iter = pl.yield_(phi)
+                pl.intrin.yield_(phi)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -585,38 +606,43 @@ def test_break_and_continue_in_for():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i < 3:
                     continue
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                 if i > 7:
                     break
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i__idx_v1: pl.Scalar[pl.INDEX] = 0
-            break__tmp_v0: pl.Scalar[pl.BOOL] = False
-            for (x_iter_1,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i__idx_v1 < 10 and not break__tmp_v0)
+            i__idx_v1: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter_1,) = pl.intrin.carry(x_0)
+            while i__idx_v1 < 10 and not break__tmp_v0:
                 if i__idx_v1 < 3:
-                    x_iter__phi_v4 = pl.yield_(x_iter_1)
+                    pl.intrin.yield_(x_iter_1)
                 else:
                     y = pl.add(x_iter_1, x_iter_1)
                     if i__idx_v1 > 7:
-                        break__tmp_v0: pl.Scalar[pl.BOOL] = True
-                        y__phi_v3 = pl.yield_(y)
+                        break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(y)
                     else:
-                        y__phi_v3 = pl.yield_(y)
-                    x_iter__phi_v4 = pl.yield_(y__phi_v3)
+                        pl.intrin.yield_(y)
+                    (y__phi_v3,) = pl.intrin.leak()
+                    pl.intrin.yield_(y__phi_v3)
+                (x_iter__phi_v4,) = pl.intrin.leak()
                 if not break__tmp_v0:
                     i__idx_v1 = i__idx_v1 + 1
-                x_iter = pl.yield_(x_iter__phi_v4)
+                pl.intrin.yield_(x_iter__phi_v4)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -628,11 +654,13 @@ def test_no_break_continue_noop():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -644,36 +672,41 @@ def test_continue_multiple_iter_args():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a_0: pl.Tensor[[64], pl.FP32],
             b_0: pl.Tensor[[64], pl.FP32],
         ) -> pl.Tensor[[64], pl.FP32]:
-            for i, (a_iter, b_iter) in pl.range(0, 10, 1, init_values=(a_0, b_0)):
+            (a_iter, b_iter) = pl.intrin.carry(a_0, b_0)
+            for i in pl.range(0, 10, 1):
                 if i < 5:
                     continue
                 a_new: pl.Tensor[[64], pl.FP32] = pl.add(a_iter, b_iter)
                 b_new: pl.Tensor[[64], pl.FP32] = pl.add(b_iter, a_iter)
-                a_iter, b_iter = pl.yield_(a_new, b_new)
+                pl.intrin.yield_(a_new, b_new)
+            (a_iter, b_iter) = pl.intrin.leak()
             return a_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a_0: pl.Tensor[[64], pl.FP32],
             b_0: pl.Tensor[[64], pl.FP32],
         ) -> pl.Tensor[[64], pl.FP32]:
-            for i, (a_iter, b_iter) in pl.range(10, init_values=(a_0, b_0)):
+            (a_iter, b_iter) = pl.intrin.carry(a_0, b_0)
+            for i in pl.range(10):
                 if i < 5:
-                    a_phi, b_phi = pl.yield_(a_iter, b_iter)
+                    pl.intrin.yield_(a_iter, b_iter)
                 else:
                     a_new = pl.add(a_iter, b_iter)
                     b_new = pl.add(b_iter, a_iter)
-                    a_phi, b_phi = pl.yield_(a_new, b_new)
-                a_iter, b_iter = pl.yield_(a_phi, b_phi)
+                    pl.intrin.yield_(a_new, b_new)
+                (a_phi, b_phi) = pl.intrin.leak()
+                pl.intrin.yield_(a_phi, b_phi)
+            (a_iter, b_iter) = pl.intrin.leak()
             return a_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -685,28 +718,33 @@ def test_continue_with_pre_continue_assignment():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                 if i < 5:
                     continue
                 z: pl.Tensor[[64], pl.FP32] = pl.add(y, y)
-                x_iter = pl.yield_(z)
+                pl.intrin.yield_(z)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(10, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(10):
                 y = pl.add(x_iter, x_iter)
                 if i < 5:
-                    phi = pl.yield_(x_iter)
+                    pl.intrin.yield_(x_iter)
                 else:
                     z = pl.add(y, y)
-                    phi = pl.yield_(z)
-                x_iter = pl.yield_(phi)
+                    pl.intrin.yield_(z)
+                (phi,) = pl.intrin.leak()
+                pl.intrin.yield_(phi)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -718,32 +756,36 @@ def test_break_negative_step():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(10, 0, -1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(10, 0, -1):
                 if i < 3:
                     break
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 10
-            brk: pl.Scalar[pl.BOOL] = False
-            for (x_iter,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i_idx > 0 and not brk)
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(10, pl.INDEX)
+            brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter,) = pl.intrin.carry(x_0)
+            while i_idx > 0 and not brk:
                 if i_idx < 3:
-                    brk: pl.Scalar[pl.BOOL] = True
-                    phi = pl.yield_(x_iter)
+                    brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_(x_iter)
                 else:
                     y = pl.add(x_iter, x_iter)
-                    phi = pl.yield_(y)
+                    pl.intrin.yield_(y)
+                (phi,) = pl.intrin.leak()
                 if not brk:
                     i_idx = i_idx + -1
-                x_iter = pl.yield_(phi)
+                pl.intrin.yield_(phi)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -755,26 +797,31 @@ def test_aic_function_type():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.AIC, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.AIC)
         def aic_kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i < 5:
                     continue
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.AIC, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.AIC)
         def aic_kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(10, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(10):
                 if i < 5:
-                    phi = pl.yield_(x_iter)
+                    pl.intrin.yield_(x_iter)
                 else:
                     y = pl.add(x_iter, x_iter)
-                    phi = pl.yield_(y)
-                x_iter = pl.yield_(phi)
+                    pl.intrin.yield_(y)
+                (phi,) = pl.intrin.leak()
+                pl.intrin.yield_(phi)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -824,17 +871,17 @@ def test_break_no_iter_args():
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 0
-            brk: pl.Scalar[pl.BOOL] = False
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
             while i_idx < 10 and not brk:
                 if i_idx > 5:
-                    brk: pl.Scalar[pl.BOOL] = True
-                    pl.yield_()
+                    brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_()
                 else:
                     _y = pl.add(x_0, x_0)
-                    pl.yield_()
+                    pl.intrin.yield_()
                 if not brk:
                     i_idx = i_idx + 1
             return x_0
@@ -848,34 +895,40 @@ def test_multiple_continues_in_body():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i < 2:
                     continue
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                 if i > 8:
                     continue
                 z: pl.Tensor[[64], pl.FP32] = pl.add(y, y)
-                x_iter = pl.yield_(z)
+                pl.intrin.yield_(z)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter_1,) in pl.range(10, init_values=(x_0,)):
+            (x_iter_1,) = pl.intrin.carry(x_0)
+            for i in pl.range(10):
                 if i < 2:
-                    x_iter__phi_v1 = pl.yield_(x_iter_1)
+                    pl.intrin.yield_(x_iter_1)
                 else:
                     y = pl.add(x_iter_1, x_iter_1)
                     if i > 8:
-                        x_iter__phi_v0 = pl.yield_(x_iter_1)
+                        pl.intrin.yield_(x_iter_1)
                     else:
                         z = pl.add(y, y)
-                        x_iter__phi_v0 = pl.yield_(z)
-                    x_iter__phi_v1 = pl.yield_(x_iter__phi_v0)
-                x_iter = pl.yield_(x_iter__phi_v1)
+                        pl.intrin.yield_(z)
+                    (x_iter__phi_v0,) = pl.intrin.leak()
+                    pl.intrin.yield_(x_iter__phi_v0)
+                (x_iter__phi_v1,) = pl.intrin.leak()
+                pl.intrin.yield_(x_iter__phi_v1)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -887,39 +940,44 @@ def test_back_to_back_breaks():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i > 8:
                     break
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                 if i > 5:
                     break
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i__idx_v1: pl.Scalar[pl.INDEX] = 0
-            break__tmp_v0: pl.Scalar[pl.BOOL] = False
-            for (x_iter_1,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i__idx_v1 < 10 and not break__tmp_v0)
+            i__idx_v1: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter_1,) = pl.intrin.carry(x_0)
+            while i__idx_v1 < 10 and not break__tmp_v0:
                 if i__idx_v1 > 8:
-                    break__tmp_v0: pl.Scalar[pl.BOOL] = True
-                    x_iter__phi_v3 = pl.yield_(x_iter_1)
+                    break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_(x_iter_1)
                 else:
                     y = pl.add(x_iter_1, x_iter_1)
                     if i__idx_v1 > 5:
-                        break__tmp_v0: pl.Scalar[pl.BOOL] = True
-                        y__phi_v2 = pl.yield_(y)
+                        break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(y)
                     else:
-                        y__phi_v2 = pl.yield_(y)
-                    x_iter__phi_v3 = pl.yield_(y__phi_v2)
+                        pl.intrin.yield_(y)
+                    (y__phi_v2,) = pl.intrin.leak()
+                    pl.intrin.yield_(y__phi_v2)
+                (x_iter__phi_v3,) = pl.intrin.leak()
                 if not break__tmp_v0:
                     i__idx_v1 = i__idx_v1 + 1
-                x_iter = pl.yield_(x_iter__phi_v3)
+                pl.intrin.yield_(x_iter__phi_v3)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -931,41 +989,45 @@ def test_break_then_continue():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i > 8:
                     break
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                 if i < 3:
                     continue
                 z: pl.Tensor[[64], pl.FP32] = pl.add(y, y)
-                x_iter = pl.yield_(z)
+                pl.intrin.yield_(z)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i__idx_v1: pl.Scalar[pl.INDEX] = 0
-            break__tmp_v0: pl.Scalar[pl.BOOL] = False
-            for (x_iter_1,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i__idx_v1 < 10 and not break__tmp_v0)
+            i__idx_v1: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter_1,) = pl.intrin.carry(x_0)
+            while i__idx_v1 < 10 and not break__tmp_v0:
                 if i__idx_v1 > 8:
-                    break__tmp_v0: pl.Scalar[pl.BOOL] = True
-                    x_iter__phi_v3 = pl.yield_(x_iter_1)
+                    break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_(x_iter_1)
                 else:
                     y = pl.add(x_iter_1, x_iter_1)
                     if i__idx_v1 < 3:
-                        x_iter__phi_v2 = pl.yield_(x_iter_1)
+                        pl.intrin.yield_(x_iter_1)
                     else:
                         z = pl.add(y, y)
-                        x_iter__phi_v2 = pl.yield_(z)
-                    # inner if yields x_iter_1 (continue), discarding x_iter__phi_v2
-                    x_iter__phi_v3 = pl.yield_(x_iter_1)
+                        pl.intrin.yield_(z)
+                    (x_iter__phi_v2,) = pl.intrin.leak()
+                    pl.intrin.yield_(x_iter_1)
+                (x_iter__phi_v3,) = pl.intrin.leak()
                 if not break__tmp_v0:
                     i__idx_v1 = i__idx_v1 + 1
-                x_iter = pl.yield_(x_iter__phi_v3)
+                pl.intrin.yield_(x_iter__phi_v3)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -977,42 +1039,46 @@ def test_multiple_iter_args_with_break():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a_0: pl.Tensor[[64], pl.FP32],
             b_0: pl.Tensor[[64], pl.FP32],
         ) -> pl.Tensor[[64], pl.FP32]:
-            for i, (a_iter, b_iter) in pl.range(0, 10, 1, init_values=(a_0, b_0)):
+            (a_iter, b_iter) = pl.intrin.carry(a_0, b_0)
+            for i in pl.range(0, 10, 1):
                 if i > 5:
                     break
                 a_new: pl.Tensor[[64], pl.FP32] = pl.add(a_iter, b_iter)
                 b_new: pl.Tensor[[64], pl.FP32] = pl.add(b_iter, a_iter)
-                a_iter, b_iter = pl.yield_(a_new, b_new)
+                pl.intrin.yield_(a_new, b_new)
+            (a_iter, b_iter) = pl.intrin.leak()
             return a_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(
             self,
             a_0: pl.Tensor[[64], pl.FP32],
             b_0: pl.Tensor[[64], pl.FP32],
         ) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 0
-            brk: pl.Scalar[pl.BOOL] = False
-            for a_iter, b_iter in pl.while_(init_values=(a_0, b_0)):
-                pl.cond(i_idx < 10 and not brk)
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (a_iter, b_iter) = pl.intrin.carry(a_0, b_0)
+            while i_idx < 10 and not brk:
                 if i_idx > 5:
-                    brk: pl.Scalar[pl.BOOL] = True
-                    a_phi, b_phi = pl.yield_(a_iter, b_iter)
+                    brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_(a_iter, b_iter)
                 else:
                     a_new = pl.add(a_iter, b_iter)
                     b_new = pl.add(b_iter, a_iter)
-                    a_phi, b_phi = pl.yield_(a_new, b_new)
+                    pl.intrin.yield_(a_new, b_new)
+                (a_phi, b_phi) = pl.intrin.leak()
                 if not brk:
                     i_idx = i_idx + 1
-                a_iter, b_iter = pl.yield_(a_phi, b_phi)
+                pl.intrin.yield_(a_phi, b_phi)
+            (a_iter, b_iter) = pl.intrin.leak()
             return a_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1029,25 +1095,28 @@ def test_unconditional_break():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 break
-                x_iter = pl.yield_(x_iter)
+                pl.intrin.yield_(x_iter)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 0
-            brk: pl.Scalar[pl.BOOL] = False
-            for (x_iter,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i_idx < 10 and not brk)
-                brk: pl.Scalar[pl.BOOL] = True
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter,) = pl.intrin.carry(x_0)
+            while i_idx < 10 and not brk:
+                brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
                 if not brk:
                     i_idx = i_idx + 1
-                x_iter = pl.yield_(x_iter)
+                pl.intrin.yield_(x_iter)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1059,19 +1128,23 @@ def test_unconditional_continue():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 continue
-                x_iter = pl.yield_(x_iter)
+                pl.intrin.yield_(x_iter)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(10, init_values=(x_0,)):
-                x_iter = pl.yield_(x_iter)
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(10):
+                pl.intrin.yield_(x_iter)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1088,30 +1161,39 @@ def test_nested_loops_only_inner():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(0, 4, 1, init_values=(x_0,)):
-                for j, (x_inner,) in pl.range(0, 8, 1, init_values=(x_outer,)):
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 4, 1):
+                (x_inner,) = pl.intrin.carry(x_outer)
+                for j in pl.range(0, 8, 1):
                     if j < 2:
                         continue
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_inner, x_inner)
-                    x_inner = pl.yield_(y)
-                x_outer = pl.yield_(x_inner)
+                    pl.intrin.yield_(y)
+                (x_inner,) = pl.intrin.leak()
+                pl.intrin.yield_(x_inner)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(4, init_values=(x_0,)):
-                for j, (x_inner,) in pl.range(8, init_values=(x_outer,)):
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(4):
+                (x_inner,) = pl.intrin.carry(x_outer)
+                for j in pl.range(8):
                     if j < 2:
-                        phi = pl.yield_(x_inner)
+                        pl.intrin.yield_(x_inner)
                     else:
                         y = pl.add(x_inner, x_inner)
-                        phi = pl.yield_(y)
-                    x_inner = pl.yield_(phi)
-                x_outer = pl.yield_(x_inner)
+                        pl.intrin.yield_(y)
+                    (phi,) = pl.intrin.leak()
+                    pl.intrin.yield_(phi)
+                (x_inner,) = pl.intrin.leak()
+                pl.intrin.yield_(x_inner)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1123,50 +1205,58 @@ def test_both_outer_and_inner_loop_have_break():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(0, 4, 1, init_values=(x_0,)):
-                for j, (x_inner,) in pl.range(0, 8, 1, init_values=(x_outer,)):
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 4, 1):
+                (x_inner,) = pl.intrin.carry(x_outer)
+                for j in pl.range(0, 8, 1):
                     if j > 3:
                         break
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_inner, x_inner)
-                    x_inner = pl.yield_(y)
+                    pl.intrin.yield_(y)
+                (x_inner,) = pl.intrin.leak()
                 if i > 2:
                     break
-                x_outer = pl.yield_(x_inner)
+                pl.intrin.yield_(x_inner)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     After = passes.ctrl_flow_transform()(Before)
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 0
-            brk_o: pl.Scalar[pl.BOOL] = False
-            for (x_outer,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i_idx < 4 and not brk_o)
-                j_idx: pl.Scalar[pl.INDEX] = 0
-                brk_i: pl.Scalar[pl.BOOL] = False
-                for (x_inner,) in pl.while_(init_values=(x_outer,)):
-                    pl.cond(j_idx < 8 and not brk_i)
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            brk_o: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_outer,) = pl.intrin.carry(x_0)
+            while i_idx < 4 and not brk_o:
+                j_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                brk_i: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+                (x_inner,) = pl.intrin.carry(x_outer)
+                while j_idx < 8 and not brk_i:
                     if j_idx > 3:
-                        brk_i: pl.Scalar[pl.BOOL] = True
-                        x_phi = pl.yield_(x_inner)
+                        brk_i: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(x_inner)
                     else:
                         y = pl.add(x_inner, x_inner)
-                        x_phi = pl.yield_(y)
+                        pl.intrin.yield_(y)
+                    (x_phi,) = pl.intrin.leak()
                     if not brk_i:
                         j_idx = j_idx + 1
-                    _x_rv = pl.yield_(x_phi)
+                    pl.intrin.yield_(x_phi)
+                (_x_rv,) = pl.intrin.leak()
                 if i_idx > 2:
-                    brk_o: pl.Scalar[pl.BOOL] = True
-                    o_phi = pl.yield_(x_outer)
+                    brk_o: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_(x_outer)
                 else:
-                    o_phi = pl.yield_(x_outer)
+                    pl.intrin.yield_(x_outer)
+                (o_phi,) = pl.intrin.leak()
                 if not brk_o:
                     i_idx = i_idx + 1
-                o_rv = pl.yield_(o_phi)
+                pl.intrin.yield_(o_phi)
+            (o_rv,) = pl.intrin.leak()
             return o_rv
 
     ir.assert_structural_equal(After, Expected)
@@ -1177,44 +1267,53 @@ def test_nested_continue_outer_break_inner():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(0, 4, 1, init_values=(x_0,)):
-                for j, (x_inner,) in pl.range(0, 8, 1, init_values=(x_outer,)):
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 4, 1):
+                (x_inner,) = pl.intrin.carry(x_outer)
+                for j in pl.range(0, 8, 1):
                     if j > 3:
                         break
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_inner, x_inner)
-                    x_inner = pl.yield_(y)
+                    pl.intrin.yield_(y)
+                (x_inner,) = pl.intrin.leak()
                 if i < 2:
                     continue
-                x_outer = pl.yield_(x_inner)
+                pl.intrin.yield_(x_inner)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     After = passes.ctrl_flow_transform()(Before)
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(4, init_values=(x_0,)):
-                j_idx: pl.Scalar[pl.INDEX] = 0
-                brk_i: pl.Scalar[pl.BOOL] = False
-                for (x_inner,) in pl.while_(init_values=(x_outer,)):
-                    pl.cond(j_idx < 8 and not brk_i)
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(4):
+                j_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                brk_i: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+                (x_inner,) = pl.intrin.carry(x_outer)
+                while j_idx < 8 and not brk_i:
                     if j_idx > 3:
-                        brk_i: pl.Scalar[pl.BOOL] = True
-                        x_phi = pl.yield_(x_inner)
+                        brk_i: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(x_inner)
                     else:
                         y = pl.add(x_inner, x_inner)
-                        x_phi = pl.yield_(y)
+                        pl.intrin.yield_(y)
+                    (x_phi,) = pl.intrin.leak()
                     if not brk_i:
                         j_idx = j_idx + 1
-                    _x_rv = pl.yield_(x_phi)
+                    pl.intrin.yield_(x_phi)
+                (_x_rv,) = pl.intrin.leak()
                 if i < 2:
-                    o_phi = pl.yield_(x_outer)
+                    pl.intrin.yield_(x_outer)
                 else:
-                    o_phi = pl.yield_(x_outer)
-                x_outer = pl.yield_(o_phi)
+                    pl.intrin.yield_(x_outer)
+                (o_phi,) = pl.intrin.leak()
+                pl.intrin.yield_(o_phi)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     ir.assert_structural_equal(After, Expected)
@@ -1225,38 +1324,48 @@ def test_nested_continue_both_loops():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(0, 4, 1, init_values=(x_0,)):
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 4, 1):
                 if i < 1:
                     continue
-                for j, (x_inner,) in pl.range(0, 8, 1, init_values=(x_outer,)):
+                (x_inner,) = pl.intrin.carry(x_outer)
+                for j in pl.range(0, 8, 1):
                     if j < 2:
                         continue
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_inner, x_inner)
-                    x_inner = pl.yield_(y)
-                x_outer = pl.yield_(x_inner)
+                    pl.intrin.yield_(y)
+                (x_inner,) = pl.intrin.leak()
+                pl.intrin.yield_(x_inner)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     After = passes.ctrl_flow_transform()(Before)
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(4, init_values=(x_0,)):
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(4):
                 if i < 1:
-                    x_outer_phi = pl.yield_(x_outer)
+                    pl.intrin.yield_(x_outer)
                 else:
-                    for j, (x_inner,) in pl.range(8, init_values=(x_outer,)):
+                    (x_inner,) = pl.intrin.carry(x_outer)
+                    for j in pl.range(8):
                         if j < 2:
-                            x_inner_phi = pl.yield_(x_inner)
+                            pl.intrin.yield_(x_inner)
                         else:
                             y = pl.add(x_inner, x_inner)
-                            x_inner_phi = pl.yield_(y)
-                        x_inner = pl.yield_(x_inner_phi)
-                    x_outer_phi = pl.yield_(x_outer)
-                x_outer = pl.yield_(x_outer_phi)
+                            pl.intrin.yield_(y)
+                        (x_inner_phi,) = pl.intrin.leak()
+                        pl.intrin.yield_(x_inner_phi)
+                    (x_inner,) = pl.intrin.leak()
+                    pl.intrin.yield_(x_outer)
+                (x_outer_phi,) = pl.intrin.leak()
+                pl.intrin.yield_(x_outer_phi)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     ir.assert_structural_equal(After, Expected)
@@ -1267,44 +1376,53 @@ def test_nested_break_and_continue_inner():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(0, 4, 1, init_values=(x_0,)):
-                for j, (x_inner,) in pl.range(0, 8, 1, init_values=(x_outer,)):
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 4, 1):
+                (x_inner,) = pl.intrin.carry(x_outer)
+                for j in pl.range(0, 8, 1):
                     if j < 2:
                         continue
                     if j > 5:
                         break
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_inner, x_inner)
-                    x_inner = pl.yield_(y)
-                x_outer = pl.yield_(x_inner)
+                    pl.intrin.yield_(y)
+                (x_inner,) = pl.intrin.leak()
+                pl.intrin.yield_(x_inner)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     After = passes.ctrl_flow_transform()(Before)
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(4, init_values=(x_0,)):
-                j_idx: pl.Scalar[pl.INDEX] = 0
-                brk_i: pl.Scalar[pl.BOOL] = False
-                for (x_inner,) in pl.while_(init_values=(x_outer,)):
-                    pl.cond(j_idx < 8 and not brk_i)
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(4):
+                j_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                brk_i: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+                (x_inner,) = pl.intrin.carry(x_outer)
+                while j_idx < 8 and not brk_i:
                     if j_idx < 2:
-                        x_phi2 = pl.yield_(x_inner)
+                        pl.intrin.yield_(x_inner)
                     else:
                         if j_idx > 5:
-                            brk_i: pl.Scalar[pl.BOOL] = True
-                            x_phi1 = pl.yield_(x_inner)
+                            brk_i: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                            pl.intrin.yield_(x_inner)
                         else:
                             y = pl.add(x_inner, x_inner)
-                            x_phi1 = pl.yield_(y)
-                        x_phi2 = pl.yield_(x_phi1)
+                            pl.intrin.yield_(y)
+                        (x_phi1,) = pl.intrin.leak()
+                        pl.intrin.yield_(x_phi1)
+                    (x_phi2,) = pl.intrin.leak()
                     if not brk_i:
                         j_idx = j_idx + 1
-                    x_rv = pl.yield_(x_phi2)
-                x_outer = pl.yield_(x_rv)
+                    pl.intrin.yield_(x_phi2)
+                (x_rv,) = pl.intrin.leak()
+                pl.intrin.yield_(x_rv)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     ir.assert_structural_equal(After, Expected)
@@ -1315,62 +1433,72 @@ def test_nested_loop_both_have_break_and_continue():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_outer,) in pl.range(0, 4, 1, init_values=(x_0,)):
+            (x_outer,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 4, 1):
                 if i < 1:
                     continue
-                for j, (x_inner,) in pl.range(0, 8, 1, init_values=(x_outer,)):
+                (x_inner,) = pl.intrin.carry(x_outer)
+                for j in pl.range(0, 8, 1):
                     if j < 2:
                         continue
                     if j > 5:
                         break
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_inner, x_inner)
-                    x_inner = pl.yield_(y)
+                    pl.intrin.yield_(y)
+                (x_inner,) = pl.intrin.leak()
                 if i > 2:
                     break
-                x_outer = pl.yield_(x_inner)
+                pl.intrin.yield_(x_inner)
+            (x_outer,) = pl.intrin.leak()
             return x_outer
 
     After = passes.ctrl_flow_transform()(Before)
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 0
-            brk_o: pl.Scalar[pl.BOOL] = False
-            for (x_outer,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i_idx < 4 and not brk_o)
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            brk_o: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_outer,) = pl.intrin.carry(x_0)
+            while i_idx < 4 and not brk_o:
                 if i_idx < 1:
-                    o_phi2 = pl.yield_(x_outer)
+                    pl.intrin.yield_(x_outer)
                 else:
-                    j_idx: pl.Scalar[pl.INDEX] = 0
-                    brk_i: pl.Scalar[pl.BOOL] = False
-                    for (x_inner,) in pl.while_(init_values=(x_outer,)):
-                        pl.cond(j_idx < 8 and not brk_i)
+                    j_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                    brk_i: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+                    (x_inner,) = pl.intrin.carry(x_outer)
+                    while j_idx < 8 and not brk_i:
                         if j_idx < 2:
-                            i_phi2 = pl.yield_(x_inner)
+                            pl.intrin.yield_(x_inner)
                         else:
                             if j_idx > 5:
-                                brk_i: pl.Scalar[pl.BOOL] = True
-                                i_phi1 = pl.yield_(x_inner)
+                                brk_i: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                                pl.intrin.yield_(x_inner)
                             else:
                                 y = pl.add(x_inner, x_inner)
-                                i_phi1 = pl.yield_(y)
-                            i_phi2 = pl.yield_(i_phi1)
+                                pl.intrin.yield_(y)
+                            (i_phi1,) = pl.intrin.leak()
+                            pl.intrin.yield_(i_phi1)
+                        (i_phi2,) = pl.intrin.leak()
                         if not brk_i:
                             j_idx = j_idx + 1
-                        _i_rv = pl.yield_(i_phi2)
+                        pl.intrin.yield_(i_phi2)
+                    (_i_rv,) = pl.intrin.leak()
                     if i_idx > 2:
-                        brk_o: pl.Scalar[pl.BOOL] = True
-                        o_phi1 = pl.yield_(x_outer)
+                        brk_o: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(x_outer)
                     else:
-                        o_phi1 = pl.yield_(x_outer)
-                    o_phi2 = pl.yield_(o_phi1)
+                        pl.intrin.yield_(x_outer)
+                    (o_phi1,) = pl.intrin.leak()
+                    pl.intrin.yield_(o_phi1)
+                (o_phi2,) = pl.intrin.leak()
                 if not brk_o:
                     i_idx = i_idx + 1
-                o_rv = pl.yield_(o_phi2)
+                pl.intrin.yield_(o_phi2)
+            (o_rv,) = pl.intrin.leak()
             return o_rv
 
     ir.assert_structural_equal(After, Expected)
@@ -1381,66 +1509,78 @@ def test_three_level_nesting_break_at_each():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_l1,) in pl.range(0, 3, 1, init_values=(x_0,)):
-                for j, (x_l2,) in pl.range(0, 4, 1, init_values=(x_l1,)):
-                    for k, (x_l3,) in pl.range(0, 5, 1, init_values=(x_l2,)):
+            (x_l1,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 3, 1):
+                (x_l2,) = pl.intrin.carry(x_l1)
+                for j in pl.range(0, 4, 1):
+                    (x_l3,) = pl.intrin.carry(x_l2)
+                    for k in pl.range(0, 5, 1):
                         if k > 2:
                             break
                         y: pl.Tensor[[64], pl.FP32] = pl.add(x_l3, x_l3)
-                        x_l3 = pl.yield_(y)
+                        pl.intrin.yield_(y)
+                    (x_l3,) = pl.intrin.leak()
                     if j > 1:
                         break
-                    x_l2 = pl.yield_(x_l3)
+                    pl.intrin.yield_(x_l3)
+                (x_l2,) = pl.intrin.leak()
                 if i > 0:
                     break
-                x_l1 = pl.yield_(x_l2)
+                pl.intrin.yield_(x_l2)
+            (x_l1,) = pl.intrin.leak()
             return x_l1
 
     After = passes.ctrl_flow_transform()(Before)
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 0
-            brk1: pl.Scalar[pl.BOOL] = False
-            for (x_l1,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i_idx < 3 and not brk1)
-                j_idx: pl.Scalar[pl.INDEX] = 0
-                brk2: pl.Scalar[pl.BOOL] = False
-                for (x_l2,) in pl.while_(init_values=(x_l1,)):
-                    pl.cond(j_idx < 4 and not brk2)
-                    k_idx: pl.Scalar[pl.INDEX] = 0
-                    brk3: pl.Scalar[pl.BOOL] = False
-                    for (x_l3,) in pl.while_(init_values=(x_l2,)):
-                        pl.cond(k_idx < 5 and not brk3)
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            brk1: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_l1,) = pl.intrin.carry(x_0)
+            while i_idx < 3 and not brk1:
+                j_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                brk2: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+                (x_l2,) = pl.intrin.carry(x_l1)
+                while j_idx < 4 and not brk2:
+                    k_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+                    brk3: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+                    (x_l3,) = pl.intrin.carry(x_l2)
+                    while k_idx < 5 and not brk3:
                         if k_idx > 2:
-                            brk3: pl.Scalar[pl.BOOL] = True
-                            l3_phi = pl.yield_(x_l3)
+                            brk3: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                            pl.intrin.yield_(x_l3)
                         else:
                             y = pl.add(x_l3, x_l3)
-                            l3_phi = pl.yield_(y)
+                            pl.intrin.yield_(y)
+                        (l3_phi,) = pl.intrin.leak()
                         if not brk3:
                             k_idx = k_idx + 1
-                        _l3_rv = pl.yield_(l3_phi)
+                        pl.intrin.yield_(l3_phi)
+                    (_l3_rv,) = pl.intrin.leak()
                     if j_idx > 1:
-                        brk2: pl.Scalar[pl.BOOL] = True
-                        l2_phi = pl.yield_(x_l2)
+                        brk2: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(x_l2)
                     else:
-                        l2_phi = pl.yield_(x_l2)
+                        pl.intrin.yield_(x_l2)
+                    (l2_phi,) = pl.intrin.leak()
                     if not brk2:
                         j_idx = j_idx + 1
-                    _l2_rv = pl.yield_(l2_phi)
+                    pl.intrin.yield_(l2_phi)
+                (_l2_rv,) = pl.intrin.leak()
                 if i_idx > 0:
-                    brk1: pl.Scalar[pl.BOOL] = True
-                    l1_phi = pl.yield_(x_l1)
+                    brk1: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_(x_l1)
                 else:
-                    l1_phi = pl.yield_(x_l1)
+                    pl.intrin.yield_(x_l1)
+                (l1_phi,) = pl.intrin.leak()
                 if not brk1:
                     i_idx = i_idx + 1
-                l1_rv = pl.yield_(l1_phi)
+                pl.intrin.yield_(l1_phi)
+            (l1_rv,) = pl.intrin.leak()
             return l1_rv
 
     ir.assert_structural_equal(After, Expected)
@@ -1456,27 +1596,32 @@ def test_continue_in_else_branch():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=False)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i > 5:
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                 else:
                     continue
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(10, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(10):
                 if i > 5:
                     y = pl.add(x_iter, x_iter)
-                    phi = pl.yield_(y)
+                    pl.intrin.yield_(y)
                 else:
-                    phi = pl.yield_(x_iter)
-                x_iter = pl.yield_(phi)
+                    pl.intrin.yield_(x_iter)
+                (phi,) = pl.intrin.leak()
+                pl.intrin.yield_(phi)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1488,33 +1633,37 @@ def test_break_in_else_branch():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=False)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i < 7:
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                 else:
                     break
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 0
-            brk: pl.Scalar[pl.BOOL] = False
-            for (x_iter,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i_idx < 10 and not brk)
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter,) = pl.intrin.carry(x_0)
+            while i_idx < 10 and not brk:
                 if i_idx < 7:
                     y = pl.add(x_iter, x_iter)
-                    phi = pl.yield_(y)
+                    pl.intrin.yield_(y)
                 else:
-                    brk: pl.Scalar[pl.BOOL] = True
-                    phi = pl.yield_(x_iter)
+                    brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_(x_iter)
+                (phi,) = pl.intrin.leak()
                 if not brk:
                     i_idx = i_idx + 1
-                x_iter = pl.yield_(phi)
+                pl.intrin.yield_(phi)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1526,38 +1675,43 @@ def test_if_else_continue_then_break_else():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                 if i < 3:
                     continue
                 elif i > 7:
                     break
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i__idx_v1: pl.Scalar[pl.INDEX] = 0
-            break__tmp_v0: pl.Scalar[pl.BOOL] = False
-            for (x_iter_1,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i__idx_v1 < 10 and not break__tmp_v0)
+            i__idx_v1: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter_1,) = pl.intrin.carry(x_0)
+            while i__idx_v1 < 10 and not break__tmp_v0:
                 y = pl.add(x_iter_1, x_iter_1)
                 if i__idx_v1 < 3:
-                    y__phi_v4 = pl.yield_(y)
+                    pl.intrin.yield_(y)
                 else:
                     if i__idx_v1 > 7:
-                        break__tmp_v0: pl.Scalar[pl.BOOL] = True
-                        x_iter__phi_v3 = pl.yield_(x_iter_1)
+                        break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                        pl.intrin.yield_(x_iter_1)
                     else:
-                        x_iter__phi_v3 = pl.yield_(x_iter_1)
-                    y__phi_v4 = pl.yield_(x_iter__phi_v3)
+                        pl.intrin.yield_(x_iter_1)
+                    (x_iter__phi_v3,) = pl.intrin.leak()
+                    pl.intrin.yield_(x_iter__phi_v3)
+                (y__phi_v4,) = pl.intrin.leak()
                 if not break__tmp_v0:
                     i__idx_v1 = i__idx_v1 + 1
-                x_iter = pl.yield_(y__phi_v4)
+                pl.intrin.yield_(y__phi_v4)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1569,32 +1723,37 @@ def test_normal_if_else_before_continue():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i < 5:
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
                 else:
                     y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_0)
                 if i < 2:
                     continue
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(10, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(10):
                 if i < 5:
                     _y = pl.add(x_iter, x_iter)
                 else:
                     _y = pl.add(x_iter, x_0)
                 if i < 2:
-                    phi = pl.yield_(x_iter)
+                    pl.intrin.yield_(x_iter)
                 else:
-                    phi = pl.yield_(x_iter)
-                x_iter = pl.yield_(phi)
+                    pl.intrin.yield_(x_iter)
+                (phi,) = pl.intrin.leak()
+                pl.intrin.yield_(phi)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1606,36 +1765,43 @@ def test_deeply_nested_if_with_continue():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i < 8:
                     if i < 5:
                         if i < 2:
                             continue
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter_1,) in pl.range(10, init_values=(x_0,)):
+            (x_iter_1,) = pl.intrin.carry(x_0)
+            for i in pl.range(10):
                 if i < 8:
                     if i < 5:
                         if i < 2:
-                            x_iter__phi_v0 = pl.yield_(x_iter_1)
+                            pl.intrin.yield_(x_iter_1)
                         else:
-                            x_iter__phi_v0 = pl.yield_(x_iter_1)
-                        x_iter__phi_v1 = pl.yield_(x_iter__phi_v0)
+                            pl.intrin.yield_(x_iter_1)
+                        (x_iter__phi_v0,) = pl.intrin.leak()
+                        pl.intrin.yield_(x_iter__phi_v0)
                     else:
-                        x_iter__phi_v1 = pl.yield_(x_iter_1)
-                    x_iter__phi_v2 = pl.yield_(x_iter__phi_v1)
+                        pl.intrin.yield_(x_iter_1)
+                    (x_iter__phi_v1,) = pl.intrin.leak()
+                    pl.intrin.yield_(x_iter__phi_v1)
                 else:
-                    x_iter__phi_v2 = pl.yield_(x_iter_1)
+                    pl.intrin.yield_(x_iter_1)
+                (x_iter__phi_v2,) = pl.intrin.leak()
                 y = pl.add(x_iter_1, x_iter_1)
-                x_iter = pl.yield_(x_iter__phi_v2)
+                pl.intrin.yield_(x_iter__phi_v2)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1647,46 +1813,53 @@ def test_deeply_nested_if_with_break():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i > 3:
                     if i > 5:
                         if i > 7:
                             break
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i__idx_v1: pl.Scalar[pl.INDEX] = 0
-            break__tmp_v0: pl.Scalar[pl.BOOL] = False
-            for (x_iter_1,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i__idx_v1 < 10 and not break__tmp_v0)
+            i__idx_v1: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter_1,) = pl.intrin.carry(x_0)
+            while i__idx_v1 < 10 and not break__tmp_v0:
                 if i__idx_v1 > 3:
                     if i__idx_v1 > 5:
                         if i__idx_v1 > 7:
-                            break__tmp_v0: pl.Scalar[pl.BOOL] = True
-                            x_iter__phi_v2 = pl.yield_(x_iter_1)
+                            break__tmp_v0: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                            pl.intrin.yield_(x_iter_1)
                         else:
-                            x_iter__phi_v2 = pl.yield_(x_iter_1)
-                        x_iter__phi_v3 = pl.yield_(x_iter__phi_v2)
+                            pl.intrin.yield_(x_iter_1)
+                        (x_iter__phi_v2,) = pl.intrin.leak()
+                        pl.intrin.yield_(x_iter__phi_v2)
                     else:
-                        x_iter__phi_v3 = pl.yield_(x_iter_1)
-                    x_iter__phi_v4 = pl.yield_(x_iter__phi_v3)
+                        pl.intrin.yield_(x_iter_1)
+                    (x_iter__phi_v3,) = pl.intrin.leak()
+                    pl.intrin.yield_(x_iter__phi_v3)
                 else:
-                    x_iter__phi_v4 = pl.yield_(x_iter_1)
+                    pl.intrin.yield_(x_iter_1)
+                (x_iter__phi_v4,) = pl.intrin.leak()
                 if not break__tmp_v0:
                     y = pl.add(x_iter_1, x_iter_1)
-                    x_iter__phi_v5 = pl.yield_(x_iter__phi_v4)
+                    pl.intrin.yield_(x_iter__phi_v4)
                 else:
-                    x_iter__phi_v5 = pl.yield_(x_iter__phi_v4)
+                    pl.intrin.yield_(x_iter__phi_v4)
+                (x_iter__phi_v5,) = pl.intrin.leak()
                 if not break__tmp_v0:
                     i__idx_v1 = i__idx_v1 + 1
-                x_iter = pl.yield_(x_iter__phi_v5)
+                pl.intrin.yield_(x_iter__phi_v5)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
     After = passes.ctrl_flow_transform()(Before)
@@ -1703,13 +1876,15 @@ def test_multi_function_program():
 
     @pl.program
     class Before:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def incore_kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(0, 10, 1, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(0, 10, 1):
                 if i > 5:
                     break
                 y: pl.Tensor[[64], pl.FP32] = pl.add(x_iter, x_iter)
-                x_iter = pl.yield_(y)
+                pl.intrin.yield_(y)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
         @pl.function(type=pl.FunctionType.Orchestration)
@@ -1719,21 +1894,23 @@ def test_multi_function_program():
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def incore_kernel(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            i_idx: pl.Scalar[pl.INDEX] = 0
-            brk: pl.Scalar[pl.BOOL] = False
-            for (x_iter,) in pl.while_(init_values=(x_0,)):
-                pl.cond(i_idx < 10 and not brk)
+            i_idx: pl.Scalar[pl.INDEX] = pl.const(0, pl.INDEX)
+            brk: pl.Scalar[pl.BOOL] = pl.const(False, pl.BOOL)
+            (x_iter,) = pl.intrin.carry(x_0)
+            while i_idx < 10 and not brk:
                 if i_idx > 5:
-                    brk: pl.Scalar[pl.BOOL] = True
-                    phi = pl.yield_(x_iter)
+                    brk: pl.Scalar[pl.BOOL] = pl.const(True, pl.BOOL)
+                    pl.intrin.yield_(x_iter)
                 else:
                     y = pl.add(x_iter, x_iter)
-                    phi = pl.yield_(y)
+                    pl.intrin.yield_(y)
+                (phi,) = pl.intrin.leak()
                 if not brk:
                     i_idx = i_idx + 1
-                x_iter = pl.yield_(phi)
+                pl.intrin.yield_(phi)
+            (x_iter,) = pl.intrin.leak()
             return x_iter
 
         @pl.function(type=pl.FunctionType.Orchestration)
@@ -1765,15 +1942,18 @@ def test_pipeline_integration():
 
     @pl.program
     class Expected:
-        @pl.function(type=pl.FunctionType.InCore, strict_ssa=True)
+        @pl.function(type=pl.FunctionType.InCore)
         def main_incore_0(self, x_0: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-            for i, (x_iter,) in pl.range(10, init_values=(x_0,)):
+            (x_iter,) = pl.intrin.carry(x_0)
+            for i in pl.range(10):
                 if i < 5:
-                    phi = pl.yield_(x_iter)
+                    pl.intrin.yield_(x_iter)
                 else:
                     x_new = pl.add(x_iter, x_iter)
-                    phi = pl.yield_(x_new)
-                x_rv = pl.yield_(phi)  # noqa: F841
+                    pl.intrin.yield_(x_new)
+                (phi,) = pl.intrin.leak()
+                pl.intrin.yield_(phi)
+            (x_rv,) = pl.intrin.leak()
             # ScopeOutliner canonicalizes the InCore return to the param Var the
             # result writes through (IRProperty::ReturnParamsExplicit, #1702).
             return x_0

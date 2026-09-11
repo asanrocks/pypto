@@ -109,11 +109,12 @@ def make_kernel_softmax_prepare(q_tile: int, block_size: int, n_unroll_q: int):
         Uses mi_out/li_out as GM scratch for cross-iteration state via store/load round-trips.
         """
         # Pass 1: find global row_max across all blocks
-        for i, (mi_out_iter,) in pl.range(n_blocks, init_values=(mi_out,)):
+        (mi_out_iter,) = pl.intrin.carry(mi_out)
+        for i in pl.range(n_blocks):
             if i == n_blocks - 1:
-                valid_len: pl.Scalar[pl.INDEX] = pl.yield_(last_valid_len)
+                valid_len: pl.Scalar[pl.INDEX] = last_valid_len
             else:
-                valid_len: pl.Scalar[pl.INDEX] = pl.yield_(block_size)
+                valid_len: pl.Scalar[pl.INDEX] = pl.const(block_size, pl.INDEX)
             s_tile = pl.load(
                 sij_buf,
                 [i * q_tile, 0],
@@ -143,10 +144,12 @@ def make_kernel_softmax_prepare(q_tile: int, block_size: int, n_unroll_q: int):
                 lm_nd = pl.reshape(local_max, [1, q_tile])
                 new_max = pl.reshape(pl.maximum(gm_nd, lm_nd), [q_tile, 1])
                 mi_out_updated = pl.store(new_max, [0, 0], mi_out_iter)
-            (mi_out_carry,) = pl.yield_(mi_out_updated)
+            pl.intrin.yield_(mi_out_updated)
+        (mi_out_carry,) = pl.intrin.leak()
 
         # Pass 2: exp(s - global_max), cast to bf16, row_sum accumulation
-        for i, (pij_buf_iter, li_out_iter) in pl.range(n_blocks, init_values=(pij_buf, li_out)):
+        (pij_buf_iter, li_out_iter) = pl.intrin.carry(pij_buf, li_out)
+        for i in pl.range(n_blocks):
             global_max = pl.load(
                 mi_out_carry,
                 [0, 0],
@@ -154,9 +157,9 @@ def make_kernel_softmax_prepare(q_tile: int, block_size: int, n_unroll_q: int):
                 target_memory=pl.MemorySpace.Vec,
             )
             if i == n_blocks - 1:
-                valid_len_p2: pl.Scalar[pl.INDEX] = pl.yield_(last_valid_len)
+                valid_len_p2: pl.Scalar[pl.INDEX] = last_valid_len
             else:
-                valid_len_p2: pl.Scalar[pl.INDEX] = pl.yield_(block_size)
+                valid_len_p2: pl.Scalar[pl.INDEX] = pl.const(block_size, pl.INDEX)
             s_tile_raw = pl.load(
                 sij_buf,
                 [i * q_tile, 0],
@@ -187,7 +190,8 @@ def make_kernel_softmax_prepare(q_tile: int, block_size: int, n_unroll_q: int):
                 li_acc_nd = pl.reshape(li_acc, [1, q_tile])
                 li_sum = pl.reshape(pl.add(li_acc_nd, li_local_nd), [q_tile, 1])
                 li_out_updated = pl.store(li_sum, [0, 0], li_out_iter)
-            pij_buf_carry, li_out_carry = pl.yield_(pij_buf_updated, li_out_updated)
+            pl.intrin.yield_(pij_buf_updated, li_out_updated)
+        (pij_buf_carry, li_out_carry) = pl.intrin.leak()
 
         return pij_buf_carry, mi_out_carry, li_out_carry
 
