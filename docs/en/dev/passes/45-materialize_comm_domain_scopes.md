@@ -76,7 +76,7 @@ For every host-orchestration function (`Function::level_ == Level::HOST` and
    store_to_host = false)`. The `Var::name_hint_` is inherited from
    `ptr_var->name_hint_`. (Host-staging flags are placeholders for N4+.)
 
-6. **Rewrite view types** *(host_orch only)*. For every view binding, mint a
+6. **Rewrite view types** *(host_orch only)*. For every view binding, create a
    fresh `Var` of the same `name_hint_` whose type is
    `DistributedTensorType(shape, dtype, memref, tensor_view, wb)` and run
    `Substitute` to swap every reference to the old view Var with the fresh

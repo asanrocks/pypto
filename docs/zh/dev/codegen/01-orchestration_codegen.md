@@ -589,7 +589,7 @@ call 上）。该 pass 从不分析用户写的 MANUAL scope——在 `pl.manual
 
 当 id 可能持有 `TaskId::invalid()` 哨兵时，dep 数组填充条目才会被
 `if (<task_id>.is_valid())` 包裹（首轮迭代的 iter_arg carry、未写入的数组槽、
-数组槽读取，或 `None` 种子）。而**新鲜的 `pl.submit` producer** TaskId 静态上
+数组槽读取，或 `None` 初始值）。而**新鲜的 `pl.submit` producer** TaskId 静态上
 恒为有效，因此 `EmitManualDeps` 对其插入不加守卫（issue #1966）；其余所有标量
 （string 形式）TaskId 仍保留守卫。array-carry iter_arg 则按元素逐槽生成带守卫的填充。
 

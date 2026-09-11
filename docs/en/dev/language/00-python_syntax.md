@@ -271,11 +271,13 @@ tensor_a                # Tensor variable
 42                      # Integer literal — INDEX-typed
 3.14                    # Float literal
 pl.const(42, pl.INT64)  # Typed integer literal (any non-INDEX dtype)
+pl.const(True, pl.BOOL)  # Typed boolean literal
 ```
 
 A bare integer literal is always `INDEX`-typed. To carry any other integer
-dtype (e.g. `INT64`), use `pl.const(value, dtype)` — this is also how the
-printer renders such constants so printed IR round-trips through the parser.
+dtype (e.g. `INT64`), use `pl.const(value, dtype)` — boolean values require
+`pl.BOOL`. This is also how the printer renders such constants so printed IR
+round-trips through the parser.
 Inside composite shape dimensions and pure-constant arithmetic (e.g.
 `pl.const(32, pl.INDEX) + pl.const(32, pl.INDEX)`), the printer emits typed
 leaves even for `INDEX` so the parser rebuilds the tree verbatim instead of
@@ -386,8 +388,8 @@ pl.system.bar_all()                      # Global barrier
 # Cross-core operations (TPUSH/TPOP protocol)
 pl.tpush_to_aic(tile0, split=0, id=0)        # Vector → Cube push on pipe 0
 pl.tpush_to_aic(tile1, split=0, id=1)        # Vector → Cube push on pipe 1
-tile0 = pl.tpop_from_aiv(split=0, id=0)      # Cube pops from Vector pipe 0
-tile1 = pl.tpop_from_aiv(split=0, id=1)      # Cube pops from Vector pipe 1
+tile0 = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0, id=0)  # Cube pops from Vector pipe 0
+tile1 = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0, id=1)  # Cube pops from Vector pipe 1
 pl.tfree_to_aiv(tile0, id=0)                 # Release slot to Vector pipe 0
 pl.tfree_to_aiv(tile1, id=1)                 # Release slot to Vector pipe 1
 

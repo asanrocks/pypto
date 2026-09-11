@@ -248,7 +248,7 @@ pl.const(42, pl.INT64)  # Typed integer literal (any non-INDEX dtype)
 ```
 
 裸整数字面量始终为 `INDEX` 类型。若需携带其他整数 dtype（如 `INT64`），
-请使用 `pl.const(value, dtype)`——打印器也以此形式渲染此类常量，
+请使用 `pl.const(value, dtype)`；布尔值必须使用 `pl.BOOL`。打印器也以此形式渲染此类常量，
 从而保证打印出的 IR 能通过解析器正确往返。
 在复合 shape 维度和纯常量算术中（如
 `pl.const(32, pl.INDEX) + pl.const(32, pl.INDEX)`），打印器对 `INDEX`
@@ -359,8 +359,8 @@ pl.system.bar_all()                      # Global barrier
 # Cross-core operations (TPUSH/TPOP protocol)
 pl.tpush_to_aic(tile0, split=0, id=0)        # Vector → Cube push on pipe 0
 pl.tpush_to_aic(tile1, split=0, id=1)        # Vector → Cube push on pipe 1
-tile0 = pl.tpop_from_aiv(split=0, id=0)      # Cube pops from Vector pipe 0
-tile1 = pl.tpop_from_aiv(split=0, id=1)      # Cube pops from Vector pipe 1
+tile0 = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0, id=0)  # Cube pops from Vector pipe 0
+tile1 = pl.tpop_from_aiv(shape=[16, 16], dtype=pl.FP16, split=0, id=1)  # Cube pops from Vector pipe 1
 pl.tfree_to_aiv(tile0, id=0)                 # Release slot to Vector pipe 0
 pl.tfree_to_aiv(tile1, id=1)                 # Release slot to Vector pipe 1
 

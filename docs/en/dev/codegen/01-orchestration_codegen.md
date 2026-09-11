@@ -172,7 +172,7 @@ float scale = scale_conv.val;
 
 A kernel/submit output is the in-place `Out`/`InOut` arg it writes — the *same
 physical tensor*. So when the result Var has a different name than that arg, the
-codegen does **not** mint a `const ChipTensor& result = ext_output;` rename; it
+codegen does **not** create a `const ChipTensor& result = ext_output;` rename; it
 remaps the result Var's emit name to the source, and every downstream reference
 resolves directly to the source name. (This is the same strategy
 `tensor.assemble` uses, applied uniformly.)
@@ -311,7 +311,7 @@ in a parameter's type produces none (external tensor shapes are never printed).
 
 Because the symbol **is** the extent, the parser folds `pl.tensor.dim(x, i)` in an
 Orchestration body onto the extent `x`'s type already names — one runtime extent,
-one IR name. Reading it back would mint a second scalar that no analyzer can prove
+one IR name. Reading it back would create a second scalar that no analyzer can prove
 equal to the symbol, and every shape built from that copy would then disagree
 structurally with shapes built from the symbol. The fold is **Orchestration-only**:
 an Inline/InCore callee may be reached with a differently-shaped actual, so there

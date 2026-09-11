@@ -68,7 +68,7 @@ alloc / view / dispatch 点在此时仍然可见。放在较晚阶段还能让�
    store_to_host = false)`；`Var::name_hint_` 自动继承自 `ptr_var->name_hint_`。
    （host-staging 标志位是 N4+ 的占位字段。）
 
-6. **改写 view 类型**（仅 host_orch）。对每个 view 绑定，mint 一个同
+6. **改写 view 类型**（仅 host_orch）。对每个 view 绑定，创建一个同
    `name_hint_` 的新 `Var`，类型为
    `DistributedTensorType(shape, dtype, memref, tensor_view, wb)`；用
    `Substitute` 把所有对旧 view Var 的引用替换为新 Var。同一 alloc 被 N 次
