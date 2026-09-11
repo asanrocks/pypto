@@ -29,7 +29,7 @@ from pypto.language.op import prefetch_ops as _dsl_prefetch
 from pypto.language.op import system_ops as _dsl_system
 from pypto.language.op import tensor_ops as _dsl_tensor
 from pypto.language.op import tile_ops as _dsl_tile
-from pypto.language.optimizations import SPLIT_SLOT_NUM_DEPRECATION
+from pypto.language.constructs.optimizations import SPLIT_SLOT_NUM_DEPRECATION
 from pypto.language.typing.dynamic import DynVar
 from pypto.pypto_core import DataType, ir
 from pypto.pypto_core import arith as _arith

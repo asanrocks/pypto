@@ -59,7 +59,8 @@ from pypto.pypto_core.ir import (
 )
 
 from . import arg_direction as adir
-from . import optimizations, parser
+from . import parser
+from .constructs import optimizations as optimizations
 from .dsl_api import (
     at,
     cluster,
@@ -249,7 +250,7 @@ from .op.unified_ops import (
     xor,
     xors,
 )
-from .optimizations import cross_core_slot, split
+from .constructs.optimizations import cross_core_slot, split
 from .parser.decorator import InlineFunction, function, inline, program
 from .parser.text_parser import loads, loads_program, parse, parse_program
 from .scope import ScopeMode, manual_scope, scope, spmd_submit, submit
