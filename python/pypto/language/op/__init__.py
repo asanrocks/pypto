@@ -62,6 +62,8 @@ from .tensor_ops import (
     paged_gather,
     random,
     scatter,
+    static_dim,
+    static_shape,
 )
 
 # Promoted tile-only ops (accessible as pl.load, etc.). ``abs`` and the
@@ -330,6 +332,8 @@ __all__ = [
     "arange",
     "create_tensor",
     "dim",
+    "static_dim",
+    "static_shape",
     "expand_clone",
     "full",
     "scatter",

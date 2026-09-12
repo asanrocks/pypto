@@ -26,6 +26,8 @@ __all__ = [
     "read",
     "write",
     "dim",
+    "static_dim",
+    "static_shape",
     "slice",
     "fillpad",
     "fillpad_expand",
@@ -550,6 +552,77 @@ def _make_dim_fold(tensor_expr: _ir_core.Expr, axis: int) -> Any:
         return None
 
     return _dim_bind
+
+
+def _shape_of(value: Tensor | Tile) -> tuple[Any, ...]:
+    """The raw shape extents of ``value`` (shared static-query core)."""
+    value_type = value.unwrap().type
+    if not isinstance(value_type, (_ir_core.TensorType, _ir_core.TileType)):
+        raise TypeError(f"static shape query requires a tensor or tile, got {value!r}")
+    return tuple(value_type.shape)
+
+
+def _static_extent(extent: Any, value: Tensor | Tile, where: str) -> int:
+    """One extent as a host int, loud when dynamic (shared core)."""
+    if isinstance(extent, int):
+        return extent
+    if isinstance(extent, _ir_core.ConstInt):  # static extent, IR-wrapped
+        return int(extent.value)
+    raise ValueError(
+        f"{where} of {value!r} is dynamic ({extent!r}); "
+        "a static shape query requires a static extent — use pl.tensor.dim "
+        "for a staged runtime extent"
+    )
+
+
+def static_shape(value: Tensor | Tile) -> tuple[int, ...]:
+    """Read the full static shape as a host ``int`` tuple, emitting no IR.
+
+    Whole-operand twin of :func:`static_dim`: unpack directly into locals
+    (``t, h, head_dim = pl.static_shape(q)``). Raises loudly when ANY
+    extent is dynamic — the spelling states "this operand is fully
+    static"; for mixed tensors use per-axis :func:`static_dim`.
+
+    Args:
+        value: staged tensor or tile
+
+    Returns:
+        The static shape as a tuple of Python ``int``
+    """
+    shape = _shape_of(value)
+    return tuple(_static_extent(e, value, f"dim {i}") for i, e in enumerate(shape))
+
+
+def static_dim(value: Tensor | Tile, axis: int) -> int:
+    """Read a static shape extent as a host ``int``, emitting no IR.
+
+    Host-side twin of :func:`dim`: it reads the extent off the facade's
+    own type — the shape fixed when the producing operator yielded the
+    value, never ambient builder state — and returns a plain Python
+    ``int`` for host arithmetic (tiling policy, dispatch, loop counts).
+    Raw shape peeking is a footgun: static extents are ``ConstInt`` IR
+    objects whose arithmetic silently builds IR expressions instead of
+    host values; this op closes that path by converting to ``int`` and
+    raising loudly when the extent is dynamic.
+
+    Args:
+        value: staged tensor or tile
+        axis: Dimension index (supports negative indexing)
+
+    Returns:
+        The static extent as a Python ``int``
+
+    Raises:
+        TypeError: ``value`` is neither a tensor nor a tile
+        ValueError: the extent is dynamic (an extent symbol or expression);
+            use :func:`dim` for a staged runtime extent instead
+        IndexError: ``axis`` is out of range
+    """
+    shape = _shape_of(value)
+    a = axis + len(shape) if axis < 0 else axis
+    if not 0 <= a < len(shape):
+        raise IndexError(f"axis {axis} out of range for shape rank {len(shape)}")
+    return _static_extent(shape[a], value, f"dim {axis}")
 
 
 def dim(tensor: Tensor, axis: int | _ir_core.ConstInt) -> Scalar:

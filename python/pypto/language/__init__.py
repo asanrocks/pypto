@@ -117,6 +117,8 @@ from .op.tensor_ops import (
     random,
     scatter,
     set_cache_policy,
+    static_dim,
+    static_shape,
 )
 from .op.tile_ops import (
     MemRefType,
@@ -591,6 +593,8 @@ __all__ = [
     # Promoted tensor-only
     "create_tensor",
     "dim",
+    "static_dim",
+    "static_shape",
     "full",
     "ScopeMode",
     "scope",
