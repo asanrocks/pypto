@@ -108,7 +108,21 @@ def to_expr(x: _UnwrapsToExpr | Expr | int | float) -> Expr:
     bare primitive returns as-is at runtime, which every ``Expr``-accepting
     IR op also accepts — the ``cast`` below is the explicit acknowledgment
     of that, not a type hole.
+
+    The exact-type guard is the hot-path fast lane: a runtime-checkable
+    Protocol ``isinstance`` costs ~3µs per element (no negative-result
+    caching), and the operand funnels call this per list element — a
+    traced ``pl.slice`` alone passes ~10. On the dsv4 corpus sweep the
+    guard is ~53× faster on literals (0.06µs vs 3.0µs over 231k int
+    calls, ~0.5s of a 23s sweep). ``cls is int`` is strictly narrower
+    than the fallback — ``bool`` and int-subclasses still take the
+    Protocol path — so semantics are identical.
     """
+    cls = x.__class__
+    if cls is int or cls is float:
+        # pyright does not narrow ``x`` through the ``cls`` alias; the cast
+        # mirrors the total-contract acknowledgment on the fallthrough below.
+        return cast("Expr", x)
     if isinstance(x, _UnwrapsToExpr):
         return x.unwrap()
     return cast("Expr", x)
