@@ -13,17 +13,25 @@ import inspect
 
 from pypto.pypto_core import ir as _ir
 
-from .utils import _normalize_expr
+from .utils import _normalize_expr, current_pinned_span
 
 
 def _capture_call_span() -> _ir.Span:
     """Capture span from the caller's location.
+
+    A pinned span (the DSL parser per DSL call, the trace interpreter per
+    instrumented row) wins: in traced execution the two-frame caller is the
+    instrumented body's shifted emitted text, so the walk would both cost a
+    frame inspection and attribute the op to the wrong line.
 
     Goes back through the call stack to find the actual user code that invoked the operator.
 
     Returns:
         Span: Source location of the caller
     """
+    pinned = current_pinned_span()
+    if pinned is not None:
+        return pinned
     # Go back through frames to find user code:
     # frame 0 = _capture_call_span
     # frame 1 = our wrapper (e.g., __add__)
