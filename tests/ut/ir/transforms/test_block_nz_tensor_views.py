@@ -563,7 +563,7 @@ def test_rejects_logical_rank_above_three():
     restriction instead of emitting a view the assembler refuses.
     """
 
-    @pl.jit
+    @pl.jit_specializer
     def _rank4_nz(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[2, 4, 256, 512], pl.INT8, pl.NZ],

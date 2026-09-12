@@ -609,14 +609,14 @@ class TestGlobalDependencies:
         rebinding one would silently hand back an artifact built from the old
         value — the failure mode the int/float/bool tracking already prevents.
         """
-        a = pl.jit(_with_globals(_global_cast, **{name: first}))
-        b = pl.jit(_with_globals(_global_cast, **{name: second}))
+        a = pl.jit_specializer(_with_globals(_global_cast, **{name: first}))
+        b = pl.jit_specializer(_with_globals(_global_cast, **{name: second}))
         assert a._get_source_hash() != b._get_source_hash()
 
     def test_unfoldable_constant_does_not_invalidate(self):
         """A value with no source form cannot change the generated source, so it cannot change the key."""
-        a = pl.jit(_with_globals(_global_opaque, _CACHE_OPAQUE=object()))
-        b = pl.jit(_with_globals(_global_opaque, _CACHE_OPAQUE=object()))
+        a = pl.jit_specializer(_with_globals(_global_opaque, _CACHE_OPAQUE=object()))
+        b = pl.jit_specializer(_with_globals(_global_opaque, _CACHE_OPAQUE=object()))
         assert a._get_source_hash() == b._get_source_hash()
 
     def test_closure_constant_uses_current_snapshot(self, compile_programs):

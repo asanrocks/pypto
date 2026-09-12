@@ -305,8 +305,13 @@ class TestGatherWrapperDelegation:
         options = {"cmp_mode": "gt", "out_cols": 8, "offset": 4, "count_dtype": DataType.UINT32}
         actual = pl.gather(pl.Tensor(expr=src), kvalue=threshold, **options)
         expected = tensor.gather(src, kvalue=kv, **options)
-        assert isinstance(actual, tuple) and len(actual) == 2
-        for i, value in enumerate(actual):
+        # The tracing dialect stages the multi-result op as a Tuple facade: one
+        # call, projections share the _tuple_tmp temp. A host (Tensor, Tensor)
+        # would re-insert the call at every element bind instead.
+        assert isinstance(actual, pl.Tuple)
+        values = list(actual)
+        assert len(values) == 2
+        for i, value in enumerate(values):
             ir.assert_structural_equal(value.unwrap(), ir.TupleGetItemExpr(expected, i, span))
 
     @pytest.mark.parametrize(

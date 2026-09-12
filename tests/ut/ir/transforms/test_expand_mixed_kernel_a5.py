@@ -4541,7 +4541,7 @@ class TestManualPipeVtoCFractalAdapt:
                         slayout=pl.TileLayout.row_major,
                         fractal=32,
                     ),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[32, 2], dtype=pl.FP8E8M0, split=0)
                 pl.tfree_to_aiv(scale_mat)
 
             @pl.function(type=pl.FunctionType.AIV)
@@ -4571,7 +4571,7 @@ class TestManualPipeVtoCFractalAdapt:
                         slayout=pl.TileLayout.col_major,
                         fractal=32,
                     ),
-                ] = pl.tpop_from_aiv(split=0)
+                ] = pl.tpop_from_aiv(shape=[32, 2], dtype=pl.FP8E8M0, split=0)
                 pl.tfree_to_aiv(scale_mat)
 
             @pl.function(type=pl.FunctionType.AIV)

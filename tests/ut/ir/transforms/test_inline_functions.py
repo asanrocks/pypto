@@ -327,11 +327,13 @@ class TestInlineFunctionsCallSiteForms:
         @pl.program
         class Before:
             @pl.function(type=pl.FunctionType.Inline)
-            def setup(self, ws: pl.Tensor[[256], pl.INT64]) -> pl.Tensor[[256], pl.INT64]:
-                # The DSL return annotation is parser metadata for the IR, while
-                # the Python surface types `set_ffts` as `-> Call`; the two never
-                # meet at runtime because the body is parsed, not executed.
-                return pl.system.set_ffts(ws)  # type: ignore[reportReturnType]
+            def setup(self, ws: pl.Tensor[[256], pl.INT64]):
+                # No `->`: the Python surface types ``set_ffts`` as returning a
+                # raw IR Call, which is not a facade value, so a declared
+                # return type could not be checked against the trace. The
+                # body is a bare eval statement — the inlined call is kept
+                # either way, which is what this test pins down.
+                pl.system.set_ffts(ws)
 
             @pl.function(type=pl.FunctionType.AIV)
             def main(

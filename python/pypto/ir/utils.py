@@ -260,9 +260,9 @@ def default_saturation_mode_for(target_dtype: DataType | int | None) -> int | No
     destination defaults to saturating.
 
     A float destination is a different question with an existing answer: IEEE says
-    an out-of-range narrowing yields an infinity, ``torch`` agrees, and
-    ``docs/en/user/precision/00-workflow.md`` asserts PyPTO matches them
-    bit-for-bit on ``INT32 -> FP16``. Defaulting those to saturating broke that
+    an out-of-range narrowing yields an infinity, ``torch`` agrees, and the
+    user-facing precision contract asserts PyPTO matches them bit-for-bit on
+    ``INT32 -> FP16``. Defaulting those to saturating broke that
     block on the a2a3 simulator (65520 clamped to 65504 instead of overflowing to
     inf), so float destinations keep the target's own behavior unless asked.
 

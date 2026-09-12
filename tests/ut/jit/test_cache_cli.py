@@ -20,7 +20,7 @@ from pypto.jit.__main__ import main, stat, warm
 
 @pytest.fixture
 def cli_kernel(monkeypatch):
-    @pl.jit
+    @pl.jit_specializer
     def kernel(x: pl.Tensor[[16, 16], pl.FP32], out: pl.Out[pl.Tensor[[16, 16], pl.FP32]]):
         with pl.at(level=pl.Level.CORE_GROUP):
             pl.store(pl.load(x, [0, 0], [16, 16]), [0, 0], out)

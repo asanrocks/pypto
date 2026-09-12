@@ -138,9 +138,12 @@ class TestFoldNoOpReshape:
         a real PTO operation into an alias of the wrong half of the buffer.
         """
 
-        @pl.program
+        # Parser-owned fixture: the declared windows live only in the
+        # ``pl.MemRef(...)`` annotations, and local annotations never flow
+        # into IR under the tracing frontend (see test_declared_memref.py).
+        @pl.program_parser
         class Before:
-            @pl.function(type=pl.FunctionType.InCore)
+            @pl.function_parser(type=pl.FunctionType.InCore)
             def main(
                 self,
                 input_a: pl.Tensor[[16, 64], pl.FP32],

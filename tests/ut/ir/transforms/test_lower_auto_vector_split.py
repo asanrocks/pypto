@@ -64,6 +64,8 @@ the vector sub-region that gets halved. In the lowered ``Expected`` that boundar
 becomes ``pl.tile.aiv_shard(cube_seed, split=<mode>)``.
 """
 
+import re
+
 import pypto.language as pl
 import pytest
 from pypto import DataType, InternalError, ir, passes
@@ -2003,9 +2005,10 @@ def test_tuple_result_op_halves_each_element_on_its_own_axis():
         "pl.Tuple[pl.Tile[[128, 16], pl.INT32, pl.Mem.Vec], pl.Tile[[1, 128], pl.INT32, pl.Mem.Vec]]"
         in printed
     )
-    # Each projection is retyped to its own element ...
-    assert "dst: pl.Tile[[128, 16], pl.INT32, pl.Mem.Vec] = _tuple_tmp[0]" in printed
-    assert "cdst: pl.Tile[[1, 128], pl.INT32, pl.Mem.Vec] = _tuple_tmp[1]" in printed
+    # Each projection is retyped to its own element ... (the tuple temp's name
+    # differs between the parser's and the tracer's staging, so match loosely).
+    assert re.search(r"dst: pl\.Tile\[\[128, 16\], pl\.INT32, pl\.Mem\.Vec\] = _tuple_tmp\S*\[0\]", printed)
+    assert re.search(r"cdst: pl\.Tile\[\[1, 128\], pl\.INT32, pl\.Mem\.Vec\] = _tuple_tmp\S*\[1\]", printed)
     # ... and each store offsets the axis THAT element was halved along.
     assert "pl.tile.store(dst, [0 + subblock_idx * 128, 0], out_0)" in printed
     assert "pl.tile.store(cdst, [0, 0 + subblock_idx * 128], out_1)" in printed
@@ -2380,9 +2383,11 @@ def test_loop_init_from_an_inline_projection_carries_the_split():
             seed = pl.tile.move(rhs, target_memory=pl.Mem.Mat)  # noqa: F841
             src = pl.tile.load(t, [0, 0], [256, 128], target_memory=pl.Mem.Vec)
             pair = pl.tile.gather_compare(src, pl.const(1.0, pl.FP32), tmp, cmp_mode="eq", out_cols=16)
-            for i, (acc,) in pl.range(2, init_values=(pair[1],)):  # noqa: B007
+            (acc,) = pl.intrin.carry(pair[1])
+            for i in pl.range(2):
                 doubled = pl.tile.add(acc, acc)
-                result = pl.yield_(doubled)
+                pl.intrin.yield_(doubled)
+            (result,) = pl.intrin.leak()
             return pl.tile.store(result, [0, 0], out_1)
 
     printed = _lower(Before).as_python()
@@ -2414,8 +2419,10 @@ def test_backedge_yielding_an_inline_projection_is_accepted():
             seed = pl.tile.move(rhs, target_memory=pl.Mem.Mat)  # noqa: F841
             src = pl.tile.load(t, [0, 0], [256, 128], target_memory=pl.Mem.Vec)
             pair = pl.tile.gather_compare(src, pl.const(1.0, pl.FP32), tmp, cmp_mode="eq", out_cols=16)
-            for i, (acc,) in pl.range(2, init_values=(pair[1],)):  # noqa: B007
-                result = pl.yield_(pair[1])
+            (acc,) = pl.intrin.carry(pair[1])
+            for i in pl.range(2):
+                pl.intrin.yield_(pair[1])
+            (result,) = pl.intrin.leak()
             return pl.tile.store(result, [0, 0], out_1)
 
     printed = _lower(Before).as_python()
@@ -2445,8 +2452,10 @@ def test_backedge_yielding_an_inline_projection_into_a_full_carry_is_rejected():
             seed = pl.tile.move(rhs, target_memory=pl.Mem.Mat)  # noqa: F841
             src = pl.tile.load(t, [0, 0], [256, 128], target_memory=pl.Mem.Vec)
             pair = pl.tile.gather_compare(src, pl.const(1.0, pl.FP32), tmp, cmp_mode="eq", out_cols=16)
-            for i, (acc,) in pl.range(2, init_values=(full_tile,)):  # noqa: B007
-                result = pl.yield_(pair[1])
+            (acc,) = pl.intrin.carry(full_tile)
+            for i in pl.range(2):
+                pl.intrin.yield_(pair[1])
+            (result,) = pl.intrin.leak()
             return pl.tile.store(result, [0, 0], out_1)
 
     with pytest.raises(ValueError, match="yields") as exc_info:
@@ -5108,8 +5117,10 @@ def test_loop_backedge_yielding_an_inline_expression_names_the_inline_expression
         ) -> pl.Tensor[[128, 128], pl.FP32]:
             seed_vec = pl.tile.move(cube_seed, target_memory=pl.Mem.Vec)  # noqa: F841
             accum = pl.tile.load(data, [0, 0], [128, 128], target_memory=pl.Mem.Vec)
-            for i, (acc_it,) in pl.range(2, init_values=(accum,)):  # noqa: B007
-                acc_loop = pl.yield_(pl.tile.add(acc_it, acc_it))
+            (acc_it,) = pl.intrin.carry(accum)
+            for i in pl.range(2):
+                pl.intrin.yield_(pl.tile.add(acc_it, acc_it))
+            (acc_loop,) = pl.intrin.leak()
             out_store = pl.tile.store(acc_loop, [0, 0], out_0)
             return out_store
 

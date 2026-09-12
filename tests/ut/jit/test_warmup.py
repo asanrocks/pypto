@@ -26,7 +26,7 @@ def kernel():
     # DSL scalar annotations describe IR values; defaults are Python literals.
     default_factor: Any = 2.0
 
-    @pl.jit
+    @pl.jit_specializer
     def scale(
         x: pl.Tensor[[16, 16], pl.FP32],
         out: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
@@ -98,7 +98,7 @@ def test_warmup_preserves_scalar_specialization_and_runtime_marker(kernel, assem
 def test_warmup_preserves_dynamic_extents(assembly):
     rows = pl.dynamic("rows")
 
-    @pl.jit
+    @pl.jit_specializer
     def copy(x: pl.Tensor[[rows, 16], pl.FP32], out: pl.Out[pl.Tensor[[rows, 16], pl.FP32]]):
         with pl.at(level=pl.Level.CORE_GROUP):
             pl.store(pl.load(x, [0, 0], [16, 16]), [0, 0], out)

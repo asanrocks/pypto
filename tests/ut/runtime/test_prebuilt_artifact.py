@@ -9,6 +9,9 @@
 
 """Artifact promotion and read-only reconstruction without device dependencies."""
 
+# Specializer-mechanics tests: the persistent artifact store serves the
+# quarantined AST-era runtime, so its kernels decorate with ``pl.jit_specializer``.
+
 import importlib
 import json
 import shutil
@@ -42,6 +45,29 @@ from pypto.runtime.distributed_runner import (
     _write_dispatch_name_map,
 )
 from pypto.runtime.runner import DfxOptions, _execute_compiled, _write_name_map
+
+
+@pytest.fixture(autouse=True)
+def pass_verification_context(monkeypatch):
+    """Keep the artifact cache reachable under the gate's env markers.
+
+    Overrides the conftest fixture of the same name for this module. The
+    persistent-store policy treats a *set* ``PYPTO_VERIFY_LEVEL`` as a
+    fresh-request marker (``_environment.json``: "C++ captures its default
+    once") — every compile then bypasses the cache, which is exactly the
+    behavior these specializer-mechanics tests count. Drop the marker and
+    install the gate's roundtrip instruments by hand so verification stays
+    identical; the C++ side falls back to its captured default.
+    """
+    from pypto.ir.instruments import make_roundtrip_instrument  # noqa: PLC0415
+
+    monkeypatch.delenv("PYPTO_VERIFY_LEVEL", raising=False)
+    instruments: list[passes.PassInstrument] = [
+        passes.VerificationInstrument(passes.VerificationMode.BEFORE_AND_AFTER),
+        make_roundtrip_instrument(),
+    ]
+    with passes.PassContext(instruments):
+        yield
 
 
 class Direction(Enum):
@@ -200,7 +226,7 @@ def test_jit_warmup_promotes_and_reuses_readonly_ready(tmp_path, fake_runtime, m
     store, generated = _publish(tmp_path, kind)
     compiled = restore_artifact(store, generated, tmp_path / "runs")
 
-    @pl.jit
+    @pl.jit_specializer
     def kernel():
         pass
 
@@ -717,7 +743,7 @@ def test_ready_spec_drops_declared_legacy_outputs_but_retains_sources(tmp_path, 
 
 @pytest.mark.parametrize("kind", list(BuildKind))
 def test_automatic_jit_publication_ready_restore_and_disabled_ir(tmp_path, fake_runtime, monkeypatch, kind):
-    factory = pl.jit.host if kind is BuildKind.DISTRIBUTED else pl.jit
+    factory = pl.jit_specializer.host if kind is BuildKind.DISTRIBUTED else pl.jit_specializer
 
     @factory
     def kernel():
@@ -779,7 +805,7 @@ def test_automatic_jit_publication_ready_restore_and_disabled_ir(tmp_path, fake_
 
 @pytest.fixture
 def automatic_jit_case(tmp_path, fake_runtime, monkeypatch):
-    @pl.jit
+    @pl.jit_specializer
     def kernel():
         pass
 

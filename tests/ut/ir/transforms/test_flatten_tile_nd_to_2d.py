@@ -1319,7 +1319,10 @@ class TestFlattenTileNdTo2DCollapsedStore:
                 x: pl.Tensor[[2, 3, 8], pl.FP32],
                 out_0: pl.Out[pl.Tensor[[2, 3, 8], pl.FP32]],
             ) -> pl.Tensor[[2, 3, 8], pl.FP32]:
-                x_tile: pl.Tile[[6, 8], pl.FP32] = pl.tile.load(x, [0, 0, 0], [2, 3, 8], [2, 3, 8])
+                x_tile = pl.intrin.transmute(
+                    pl.tile.load(x, [0, 0, 0], [2, 3, 8], [2, 3, 8]),
+                    pl.Tile[[6, 8], pl.FP32],
+                )
                 y_tile = pl.tile.exp(x_tile)
                 # Already 2D, so the pass inserts no flattening reshape of its own.
                 flat = pl.tile.reshape(y_tile, [6, 8])
