@@ -40,6 +40,7 @@ from typing import Any
 import pytest
 from pypto.ir.pass_manager import OptimizationStrategy
 from pypto.jit import JITFunction
+from pypto.language.tracer.decorators.jit import _JitSpecializer
 from pypto.pypto_core import ir as _ir
 from pypto.pypto_core.passes import MemoryPlanner
 from pypto.runtime.runner import RunResult
@@ -47,7 +48,7 @@ from pypto.runtime.tensor_spec import ScalarSpec
 
 from harness.core.case import Case, from_legacy
 from harness.core.harness import TensorSpec
-from harness.core.kernel_source import IRKernel, JitKernel, ProgramKernel
+from harness.core.kernel_source import EagerJitKernel, IRKernel, JitKernel, ProgramKernel, TracingJitKernel
 
 
 def case(  # noqa: PLR0913 — every knob mirrors one Case field; grouping them would only hide them
@@ -69,9 +70,11 @@ def case(  # noqa: PLR0913 — every knob mirrors one Case field; grouping them 
     """Build one :class:`~harness.core.case.Case`.
 
     The kernel source is chosen from what *kernel* is, so the test does not
-    name it: a ``@pl.jit`` function becomes a ``JitKernel``, an ``ir.Program``
-    an ``IRKernel``, anything else (a ``@pl.program`` class, or a factory
-    returning one) a ``ProgramKernel``.
+    name it: a tracing ``@pl.jit`` function becomes a ``TracingJitKernel`` (or
+    an ``EagerJitKernel`` when its fully-shaped annotations already traced it
+    at decoration), a quarantined ``pl.jit_specializer`` entry a ``JitKernel``,
+    an ``ir.Program`` an ``IRKernel``, anything else (a ``@pl.program`` class,
+    or a factory returning one) a ``ProgramKernel``.
 
     Args:
         kernel: The kernel under test.
@@ -113,8 +116,18 @@ def case(  # noqa: PLR0913 — every knob mirrors one Case field; grouping them 
     Returns:
         The case, ready to hand to :func:`cases`.
     """
-    if isinstance(kernel, JITFunction):
+    if isinstance(kernel, _JitSpecializer):
+        # The tracing jit's lazy lane: every modern @pl.jit entry with a bare
+        # or unannotated parameter.
+        source = TracingJitKernel(kernel, *sample_args, **(inputs or {}))
+    elif isinstance(kernel, JITFunction):
         source = JitKernel(kernel, *sample_args, **(inputs or {}))
+    elif isinstance(kernel, _ir.Function) and (sample_args or inputs):
+        # The tracing jit's eager lane: fully-shaped annotations traced the
+        # kernel at decoration, so the decoration already returned the
+        # ir.Function. Without sample arguments an ir.Function keeps the legacy
+        # ProgramKernel fall-through below.
+        source = EagerJitKernel(kernel, *sample_args, **(inputs or {}))
     elif isinstance(kernel, _ir.Program):
         if name is None:
             raise ValueError("st.case(ir.Program) needs an explicit name= — a Program carries none")

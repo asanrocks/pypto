@@ -43,7 +43,13 @@ from pypto.runtime.runner import RunConfig, validate_persisted_outputs
 from harness import st
 from harness.core.case import Case, from_legacy
 from harness.core.harness import DataType, PTOTestCase, TensorSpec
-from harness.core.kernel_source import JitKernel, ProgramKernel, datatype_from_torch
+from harness.core.kernel_source import (
+    EagerJitKernel,
+    JitKernel,
+    ProgramKernel,
+    TracingJitKernel,
+    datatype_from_torch,
+)
 from harness.core.test_runner import (
     _case_comparator,
     _compare_persisted_outputs,
@@ -133,6 +139,28 @@ def _jit_case(**kwargs: Any) -> Case:
     kwargs.setdefault("name", "abs_jit")
     kwargs.setdefault("golden", lambda t: torch.abs(t["a"]))
     return st.case(orchestrator, torch.randn(M, N), torch.zeros(M, N), **kwargs)
+
+
+# The tracing ``@pl.jit`` lanes. Before the harness learned them (S11), every
+# ``st.case`` over either one failed at collection with "sample arguments only
+# apply to a @pl.jit kernel" — which took down every st suite declaring one.
+
+
+@pl.jit
+def tracing_abs_entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
+    """Lazy lane: bare annotations defer the trace to the call."""
+    tile_a = pl.load(a, [0, 0], [M, N])
+    return pl.store(pl.tile.abs(tile_a), [0, 0], out)
+
+
+@pl.jit
+def tracing_abs_eager(
+    a: pl.Tensor[[M, N], pl.FP32],
+    out: pl.Out[pl.Tensor[[M, N], pl.FP32]],
+):
+    """Eager lane: fully-shaped annotations trace at decoration."""
+    tile_a = pl.load(a, [0, 0], [M, N])
+    return pl.store(pl.tile.abs(tile_a), [0, 0], out)
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +302,57 @@ class TestDerivedTensorSpecs:
         """A @pl.program cannot derive its tensors, and the error says so."""
         with pytest.raises(ValueError, match="pass tensors="):
             st.case(AbsProgram, name="no_tensors", golden=lambda t: t["a"])
+
+
+class TestTracingJitDeclaration:
+    """``st.case`` accepts both tracing ``@pl.jit`` lanes (device-free).
+
+    The lazy lane (``_JitSpecializer`` — a bare or unannotated parameter) and
+    the eager lane (fully-shaped annotations, so the decoration already
+    returned an ``ir.Function``) both declare through the same surface as the
+    quarantined specializer.
+    """
+
+    def test_lazy_lane_derives_its_specs(self):
+        case = st.case(tracing_abs_entry, torch.randn(M, N), torch.zeros(M, N), name="tracing_abs")
+        assert isinstance(case.kernel, TracingJitKernel)
+        assert [(s.name, s.is_output) for s in case.tensor_specs] == [("a", False), ("out", True)]
+
+    def test_lazy_lane_builds_its_program(self):
+        source = TracingJitKernel(tracing_abs_entry, torch.randn(M, N), torch.zeros(M, N))
+        assert [f.name for f in source.build_program().functions] == ["tracing_abs_entry"]
+
+    def test_lazy_lane_missing_sample_is_loud(self):
+        with pytest.raises(TypeError, match="no sample argument"):
+            TracingJitKernel(tracing_abs_entry, torch.randn(M, N))
+
+    def test_lazy_lane_cache_id_agrees_across_binding_styles(self):
+        a, out = torch.randn(M, N), torch.zeros(M, N)
+        assert TracingJitKernel(tracing_abs_entry, a, out).cache_id() == (
+            TracingJitKernel(tracing_abs_entry, a, out=out).cache_id()
+        )
+
+    def test_eager_lane_derives_its_specs(self):
+        case = st.case(tracing_abs_eager, torch.randn(M, N), torch.zeros(M, N), name="eager_abs")
+        assert isinstance(case.kernel, EagerJitKernel)
+        assert [(s.name, s.shape, s.is_output) for s in case.tensor_specs] == [
+            ("a", [M, N], False),
+            ("out", [M, N], True),
+        ]
+
+    def test_eager_lane_sample_mismatch_is_loud(self):
+        """The signature was baked at decoration; a buffer of the wrong shape
+        must fail at declaration, not on the device."""
+        source = EagerJitKernel(tracing_abs_eager, torch.randn(M + 1, N), torch.zeros(M, N))
+        with pytest.raises(TypeError, match="baked its signature at decoration"):
+            source.tensor_specs()
+
+    def test_eager_lane_builds_the_one_function_program(self):
+        source = EagerJitKernel(tracing_abs_eager, torch.randn(M, N), torch.zeros(M, N))
+        assert [f.name for f in source.build_program().functions] == ["tracing_abs_eager"]
+
+    def test_quarantined_lane_is_unchanged(self):
+        assert isinstance(_jit_case().kernel, JitKernel)
 
 
 class TestGoldenAdaptation:
