@@ -760,9 +760,11 @@ class OrchestrationStmtCodegen : public CodegenBase {
     }
     std::optional<DynamicTaskIdCollection> dynamic_compiler_dep_collection_info;
 
-    // Emit carry declarations for each iter_arg. Three lowering paths:
+    // Emit carry declarations for each iter_arg. Four lowering paths:
     //   - array_size > 0  -> TaskId array-carry (TaskId arr[N])
     //   - ArrayType carry  -> C-stack array with in-place-update semantics
+    //     (a fresh-array rebind carries via the body's Var→Var rebind alias —
+    //     HandleArrayRebindAssign — plus the yield's slot-by-slot copy)
     //   - is_rebind        -> scalar/Tensor mutable carry variable
     //   - else             -> trivial alias to init's emit name
     for (size_t i = 0; i < for_stmt->iter_args_.size(); ++i) {
@@ -1544,6 +1546,13 @@ class OrchestrationStmtCodegen : public CodegenBase {
       // No-op: tuple elements handled via tuple_var_to_elements_
     } else if (auto make_tuple = As<MakeTuple>(assign->value_)) {
       PropagateMakeTupleAssign(assign, make_tuple);
+    } else if (As<ArrayType>(assign->var_->GetType())) {
+      // ArrayType LHS: an SSA rename of one backing C-stack array — the
+      // derive-the-carry rebind `tids = tids_next` (a fresh array per
+      // iteration) or a plain `a = b` alias. A raw C array can be neither
+      // declared from its type nor assigned, so alias the LHS onto the RHS's
+      // emit name instead of emitting a declaration.
+      HandleArrayRebindAssign(assign);
     } else {
       std::string value_expr = GenerateExprString(assign->value_);
       // Drop a no-op `X = X;` that arises when VarLineageCollector has
@@ -1865,10 +1874,11 @@ class OrchestrationStmtCodegen : public CodegenBase {
     // single "type expression" that names a C array. No caller should ask for
     // one: an ArrayType Var is either declared by ``array.create``'s op codegen,
     // or is an alias of an existing backing array (an ``array.update_element``
-    // result, a ForStmt ArrayType carry, an IfStmt array phi) that needs no
-    // declaration at all. If this fires, some declaration path is missing its
-    // ArrayType case and would emit invalid C — surface it loudly, and name the
-    // *calling* path rather than guessing which one it was.
+    // result, a ForStmt ArrayType carry, an IfStmt array phi, a Var→Var rebind
+    // — see HandleArrayRebindAssign) that needs no declaration at all. If this
+    // fires, some declaration path is missing its ArrayType case and would emit
+    // invalid C — surface it loudly, and name the *calling* path rather than
+    // guessing which one it was.
     INTERNAL_CHECK(!As<ArrayType>(type))
         << "Internal error: GetCppType called for ArrayType — an array Var is declared by "
            "array.create's op codegen or aliased onto an existing backing array, never declared "
@@ -4297,6 +4307,36 @@ class OrchestrationStmtCodegen : public CodegenBase {
       if (tid_it != manual_task_id_map_.end()) {
         manual_task_id_map_[assign->var_.get()] = tid_it->second;
       }
+    }
+  }
+
+  /// Alias an ArrayType Var→Var AssignStmt LHS onto the RHS's backing array.
+  ///
+  /// The rebind `tids = tids_next` — what ConvertToSSA derives for a
+  /// fresh-array-per-iteration loop carry, and equally a plain `a = b`
+  /// rename — makes the LHS another name for the same logical array. An
+  /// ArrayType SSA value is a reference to one backing C-stack array (see
+  /// MarkArrayReturnVars), so the statement declares and copies nothing: it
+  /// only re-points the LHS's emit name. Mirrors
+  /// HandleArrayUpdateElementAssign's registration propagation so a
+  /// downstream yield, `deps=[lhs]`, or an enclosing carry seeded by the LHS
+  /// resolves to the same storage. Loop-carried state still propagates
+  /// through the yield's slot-by-slot copy into the carry (VisitStmt_
+  /// (YieldStmtPtr) array→array branch).
+  void HandleArrayRebindAssign(const AssignStmtPtr& assign) {
+    auto rhs_var = AsVarLike(assign->value_);
+    INTERNAL_CHECK_SPAN(rhs_var, assign->span_)
+        << "Internal error: ArrayType assign '" << assign->var_->name_hint_
+        << "' expects a Var value naming a backing array, got " << assign->value_->TypeName();
+    std::string array_name = GenerateExprString(assign->value_);
+    emit_name_map_[assign->var_.get()] = array_name;
+    auto carry_it = array_carry_vars_.find(rhs_var.get());
+    if (carry_it != array_carry_vars_.end()) {
+      array_carry_vars_[assign->var_.get()] = carry_it->second;
+    }
+    auto tid_it = manual_task_id_map_.find(rhs_var.get());
+    if (tid_it != manual_task_id_map_.end()) {
+      manual_task_id_map_[assign->var_.get()] = tid_it->second;
     }
   }
 

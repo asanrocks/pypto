@@ -28,7 +28,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from examples.utils.phase_fence_dep_compression import build_chained_snapshot_phase_fence  # noqa: E402
+from examples.utils.phase_fence_dep_compression import (  # noqa: E402
+    build_chained_snapshot_phase_fence,
+)
 
 
 def _generate_orch_code(program) -> str:
@@ -137,6 +139,94 @@ class TestPhaseFenceDepCompressionCodegen:
 
         code = _compile_program(Prog)
         _assert_single_barrier_shape(code, fanin=branches)
+
+    def test_derived_rebind_carry_phase_fence(self):
+        # Gap K1: the derive-the-carry route (``tids = tids_next`` rebinding a
+        # fresh array per iteration) must codegen like the channel spelling
+        # (``pl.intrin.carry``/``yield_``/``leak``) above — the SSA pass derives
+        # the same iter_args, and codegen aliases the rebind onto the fresh
+        # array's backing storage with the yield's slot-by-slot copy carrying
+        # state across iterations.
+        rows, cols = 128, 128
+        tile_r, tile_c = 32, 32
+        branches = 4
+
+        @pl.program
+        class ChannelProg:
+            @pl.function(type=pl.FunctionType.InCore)
+            def kern(
+                self,
+                x: pl.Tensor[[rows, cols], pl.FP32],
+                out: pl.Out[pl.Tensor[[rows, cols], pl.FP32]],
+                row: pl.Scalar[pl.INDEX],
+                col: pl.Scalar[pl.INDEX],
+            ) -> pl.Tensor[[rows, cols], pl.FP32]:
+                t: pl.Tile[[tile_r, tile_c], pl.FP32] = pl.load(x, [row, col], [tile_r, tile_c])
+                r: pl.Tile[[tile_r, tile_c], pl.FP32] = pl.add(t, t)
+                ret: pl.Tensor[[rows, cols], pl.FP32] = pl.store(r, [row, col], out)
+                return ret
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def main(
+                self,
+                x: pl.Tensor[[rows, cols], pl.FP32],
+                out: pl.Out[pl.Tensor[[rows, cols], pl.FP32]],
+            ) -> pl.Tensor[[rows, cols], pl.FP32]:
+                with pl.manual_scope():
+                    tids = pl.array.create(branches, pl.TASK_ID)
+                    (tids_iter,) = pl.intrin.carry(tids)
+                    for phase in pl.range(3):
+                        tids_next = pl.array.create(branches, pl.TASK_ID)
+                        row: pl.Scalar[pl.INDEX] = phase * tile_r
+                        for branch in pl.parallel(branches):
+                            col: pl.Scalar[pl.INDEX] = branch * tile_c
+                            out, tid = pl.submit(self.kern, x, out, row, col, deps=[tids_iter])
+                            tids_next[branch] = tid
+                        pl.intrin.yield_(tids_next)
+                    (tids,) = pl.intrin.leak()
+                return out
+
+        @pl.program
+        class RebindProg:
+            @pl.function(type=pl.FunctionType.InCore)
+            def kern(
+                self,
+                x: pl.Tensor[[rows, cols], pl.FP32],
+                out: pl.Out[pl.Tensor[[rows, cols], pl.FP32]],
+                row: pl.Scalar[pl.INDEX],
+                col: pl.Scalar[pl.INDEX],
+            ) -> pl.Tensor[[rows, cols], pl.FP32]:
+                t: pl.Tile[[tile_r, tile_c], pl.FP32] = pl.load(x, [row, col], [tile_r, tile_c])
+                r: pl.Tile[[tile_r, tile_c], pl.FP32] = pl.add(t, t)
+                ret: pl.Tensor[[rows, cols], pl.FP32] = pl.store(r, [row, col], out)
+                return ret
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def main(
+                self,
+                x: pl.Tensor[[rows, cols], pl.FP32],
+                out: pl.Out[pl.Tensor[[rows, cols], pl.FP32]],
+            ) -> pl.Tensor[[rows, cols], pl.FP32]:
+                with pl.manual_scope():
+                    tids = pl.array.create(branches, pl.TASK_ID)
+                    for phase in pl.range(3):
+                        tids_next = pl.array.create(branches, pl.TASK_ID)
+                        row: pl.Scalar[pl.INDEX] = phase * tile_r
+                        for branch in pl.parallel(branches):
+                            col: pl.Scalar[pl.INDEX] = branch * tile_c
+                            out, tid = pl.submit(self.kern, x, out, row, col, deps=[tids])
+                            tids_next[branch] = tid
+                        tids = tids_next
+                return out
+
+        rebind_code = _compile_program(RebindProg)
+        _assert_single_barrier_shape(rebind_code, fanin=branches)
+        # The emitted shape is pinned against the channel spelling's output:
+        # the same barrier fan-in, the same per-branch slot writes into the
+        # fresh array, and the same slot-by-slot copy back into the carried
+        # array at each iteration's yield.
+        channel_code = _compile_program(ChannelProg)
+        assert rebind_code == channel_code
 
     def test_standard_pl_at_phase_fence(self):
         rows, cols = 128, 128
