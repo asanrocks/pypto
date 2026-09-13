@@ -1,0 +1,9 @@
+# Comment-churn allowlist for scripts/review/check_comment_churn.py.
+#
+# One path prefix per line. An entry means: comments in this file legitimately
+# changed in the r10 changeset, and the reason is recorded in
+# docs/review-r10.md (R2 decisions table). Prefixes are matched with
+# str.startswith against the repo-relative path.
+#
+# Empty at seed time: R2 starts from the hardcoded intent that no code comment
+# needs to change for a dialect migration, and must justify every entry it adds.
