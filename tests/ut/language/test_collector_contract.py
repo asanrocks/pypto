@@ -193,7 +193,7 @@ def test_half_descriptors_rejected_at_construction():
             return []
 
     class HalfWithDescriptor:
-        def __trace_enter__(self, ctx, as_name=None, single_call_body=False):
+        def __trace_enter__(self, ctx, as_name=None, single_call_body=False, reads_block_idx=False):
             return self
 
     def for_kernel(x: pl.Tensor[[8], pl.FP32]) -> pl.Tensor[[8], pl.FP32]:
@@ -249,7 +249,7 @@ def test_bindings_without_bind_protocol_rejected_at_construction():
             return None
 
     class BareAsWithDescriptor:
-        def __trace_enter__(self, ctx, as_name=None, single_call_body=False):
+        def __trace_enter__(self, ctx, as_name=None, single_call_body=False, reads_block_idx=False):
             return object()  # no __trace_bind__
 
         def __trace_exit__(self, ctx):
@@ -1314,7 +1314,7 @@ def test_staged_with_not_finalized_during_unwind():
         def __trace_iter__(self, ctx):  # pragma: no cover - not a trace iterable
             raise AssertionError("not a for trace iterable")
 
-        def __trace_enter__(self, ctx, as_name=None, single_call_body=False):
+        def __trace_enter__(self, ctx, as_name=None, single_call_body=False, reads_block_idx=False):
             return self
 
         def __trace_exit__(self, ctx):

@@ -901,7 +901,11 @@ class Interpreter(Generic[V]):
         return not a
 
     def on_begin_with(
-        self, ctxobj: object, name: str | None = None, single_call_body: bool = False
+        self,
+        ctxobj: object,
+        name: str | None = None,
+        single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> _WithAdapter[V]:
         """Prepare a context manager for host or staged execution.
 
@@ -909,14 +913,17 @@ class Interpreter(Generic[V]):
         context manager: host execution wraps the user's context manager
         (preserving its protocol exactly), and staged execution follows the
         same public host contract through staged hooks. ``name`` identifies a
-        single ``as`` target. ``single_call_body`` is the rewriter's static
-        fact that the with-body is exactly one call-valued statement (the
-        parser's body-shape rule) — consumed by constructs whose IR shape
-        depends on it (``pl.spmd``'s direct-dispatch vs InCore-wrapped form).
+        single ``as`` target. ``single_call_body`` and ``reads_block_idx`` are
+        the rewriter's static facts about the with-suite (exactly one
+        call-valued statement; a ``get_block_idx()`` call anywhere in the
+        subtree) — consumed by constructs whose IR shape depends on the body
+        (``pl.spmd``'s direct-dispatch vs InCore-wrapped form).
         """
         self._reject_pending_result("on_begin_with")
         self._note_statement()
-        opened = self._frame().create_with_construct(self, ctxobj, name, single_call_body=single_call_body)
+        opened = self._frame().create_with_construct(
+            self, ctxobj, name, single_call_body=single_call_body, reads_block_idx=reads_block_idx
+        )
         if opened is not None:
             self._construct_stack.append(opened.construct)
             return _WithAdapter(self, opened.construct)

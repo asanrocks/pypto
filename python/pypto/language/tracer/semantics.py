@@ -244,10 +244,11 @@ class _DeferredScopeEntry(NamedTuple):
     """One pending declarable scope, in nesting (registration) order.
 
     ``construct`` is the with/for descriptor that deferred its scope begin
-    (see ``_DeferredDeclarableScope``). ``flush_on_emit`` is False only for a
-    plain ``with pl.spmd(...)`` carrier — its open decision belongs to the
-    per-block-index read (a dispatch body stays bare), so the first-emission
-    flush skips it."""
+    (see ``_DeferredDeclarableScope``). ``flush_on_emit`` is False only for an
+    unwrapped plain ``with pl.spmd(...)`` carrier — its open decision belongs to
+    the per-block-index read trigger (a dispatch body stays bare), the backstop
+    for a read the rewriter's ``reads_block_idx`` walk cannot see; the body-wide
+    static fact wraps before the first emission otherwise (F23)."""
 
     construct: _DeferredDeclarableScope
     flush_on_emit: bool
@@ -1046,17 +1047,21 @@ class PtoFrame:
         (``_spmd_body_reads_block_idx``): a body that reads the per-block index
         does its own per-block work, so its statements must land inside an
         ``InCoreScopeStmt`` for the outliner; a dispatch body stays bare. The
-        trigger fires only at the with-body's top level — a read nested in
-        staged control flow opened *inside* the body belongs to that region, a
-        read inside an explicit ``pl.at`` carrier (the printer's own wrapped
-        form) already has its InCore, and a read while an inner deferred scope
-        is pending belongs to that scope's body (the innermost pending entry
-        must be the carrier itself). A staged construct *outside* the
-        with-form (the ``pl.parallel`` loop a spmd scope is nested in, the
-        per-expert-tile pattern) does not block the open — the read still
-        sits at the with-body's own top level. Opening the carrier flushes
-        any outer deferred scopes first — ``begin_scope`` runs the pre-emit
-        hook — so the nesting lands outer-scope-first either way."""
+        static half of that classification rides the rewriter's
+        ``reads_block_idx`` fact and wraps before the body's first statement
+        (F23); this trigger is the backstop for a read the AST walk cannot see
+        (an aliased ``get_block_idx`` call), and fires only at the with-body's
+        top level — a read nested in staged control flow opened *inside* the
+        body belongs to that region, a read inside an explicit ``pl.at`` carrier
+        (the printer's own wrapped form) already has its InCore, and a read
+        while an inner deferred scope is pending belongs to that scope's body
+        (the innermost pending entry must be the carrier itself). A staged
+        construct *outside* the with-form (the ``pl.parallel`` loop a spmd scope
+        is nested in, the per-expert-tile pattern) does not block the open —
+        the read still sits at the with-body's own top level. Opening the
+        carrier flushes any outer deferred scopes first — ``begin_scope`` runs
+        the pre-emit hook — so the nesting lands outer-scope-first either
+        way."""
         if not self._deferred_scopes:
             return
         if self._rt is not None and self._rt.staged_control_flow_active():
@@ -1120,8 +1125,11 @@ class PtoFrame:
                 # bare nested ``pl.at``): the carrier is absorbed — the
                 # region nests directly in the Spmd scope, and opening the
                 # carrier would produce the nested-InCore shape the verifier
-                # rejects.
+                # rejects. The construct is told, so the carrier cannot open
+                # at the body's first statement *or* at its own close (the
+                # exit hook re-opens a still-pending flushable carrier).
                 del self._deferred_scopes[index]
+                entry.construct.cancel_pending_carrier()
                 continue
             del self._deferred_scopes[index]
             entry.construct.open_deferred_scope(self._sema._builder)
@@ -1587,13 +1595,17 @@ class PtoFrame:
         name: str | None = None,
         span: object | None = None,
         single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> WithOpen[Facade] | None:
         """Open a staged ``with`` from a trace context manager.
 
         The object opens itself through the tracing context and returns
         ``WithOpen(construct, binding)``; the Construct owns the object's active
-        lifecycle. ``name`` is the ``with ... as Y`` target. A host context
-        manager declines (``None`` and the interpreter wraps it).
+        lifecycle. ``name`` is the ``with ... as Y`` target. The two static
+        body facts (``single_call_body``, ``reads_block_idx``) are the
+        rewriter's mirrors of the parser's body-shape rule and are consumed by
+        the constructs whose IR depends on them. A host context manager
+        declines (``None`` and the interpreter wraps it).
         """
         del rt, span
         self._reject_pending_carry("a with")
@@ -1620,7 +1632,9 @@ class PtoFrame:
             self._sema._builder.push_pending_leading_comments(comments)
             comments_pending = True
         try:
-            binding = context.__trace_enter__(self._ctx, name, single_call_body)
+            binding = context.__trace_enter__(
+                self._ctx, name, single_call_body, reads_block_idx=reads_block_idx
+            )
             if name is not None and not isinstance(binding, SupportsTraceBind):
                 raise TypeError(
                     f"{type(context).__name__}.__trace_enter__ returned an "

@@ -77,7 +77,11 @@ class SupportsTraceEnter(Protocol):
     """A trace context manager (``__trace_enter__`` — create_with_construct)."""
 
     def __trace_enter__(
-        self, ctx: TraceContext, as_name: str | None = None, single_call_body: bool = False
+        self,
+        ctx: TraceContext,
+        as_name: str | None = None,
+        single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> typing.Any: ...
 
 
@@ -262,9 +266,16 @@ class _DeferredSpmdCarrier(Protocol):
     when the body proves itself inline (a per-block-index read); a dispatch
     body stays bare. The Frame drives the trigger through this surface and
     the enter-side ``_carrier_pending`` flag (a plain attribute, so it is a
-    getattr member-check rather than part of the runtime-checkable surface)."""
+    getattr member-check rather than part of the runtime-checkable surface).
+    The body can also supply the region itself (a nested
+    ``pl.at(level=pl.Level.CORE_GROUP, ...)`` carrier), which the Frame
+    reports through :meth:`cancel_pending_carrier`: the region already exists,
+    so the carrier must neither open at the body's first statement nor at the
+    construct's close."""
 
     def open_pending_carrier(self, builder: IRBuilder) -> None: ...
+
+    def cancel_pending_carrier(self) -> None: ...
 
 
 @runtime_checkable

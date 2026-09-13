@@ -1482,6 +1482,32 @@ def _single_call_stmts(stmts: Sequence[_AnyStmt]) -> bool:
     return isinstance(one, (ast.Assign, ast.AnnAssign, ast.Expr)) and isinstance(one.value, ast.Call)
 
 
+def _body_reads_block_idx(stmts: Sequence[_AnyStmt]) -> bool:
+    """The with-suite calls ``get_block_idx()`` anywhere in its subtree.
+
+    The rewriter's mirror of the parser's ``_spmd_body_reads_block_idx``: an
+    ``ast.walk`` over the whole suite, matched by call name alone
+    (``pl.get_block_idx()``, the qualified ``pl.tile.get_block_idx()`` /
+    ``tile.get_block_idx()``, and a bare imported ``get_block_idx()`` all
+    count) — a read nested in a ``pl.range`` loop, an argument expression, or
+    a nested ``with`` counts too. A read marks the body as *inline* (it does
+    its own per-block work), which decides an enclosing ``pl.spmd`` scope's
+    carrier; the classification must be static and body-wide on both lanes
+    (F23), so a body that reads anywhere is wrapped from its first statement.
+    Read on the user's original suite, like ``_single_call_stmts``.
+    """
+    for stmt in stmts:
+        for node in ast.walk(stmt):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if (isinstance(func, ast.Attribute) and func.attr == "get_block_idx") or (
+                isinstance(func, ast.Name) and func.id == "get_block_idx"
+            ):
+                return True
+    return False
+
+
 def _with_row(ctx: _Ctx, stmt: ast.With | ast.AsyncWith) -> list[_AnyStmt]:
     """Rewrite ``with`` through an exception-safe generated context manager.
 
@@ -1495,6 +1521,7 @@ def _with_row(ctx: _Ctx, stmt: ast.With | ast.AsyncWith) -> list[_AnyStmt]:
     """
     inner: list[_AnyStmt] = _rewrite_body(ctx, stmt.body, _header_end(ctx, stmt))
     single_call = _single_call_stmts(stmt.body)
+    reads_block_idx = _body_reads_block_idx(stmt.body)
     # The reference rebuilds ``with`` as a plain ``with`` — an ``async with``
     # is de-asynced by the rewrite (mirrored).
     for index, item in enumerate(reversed(stmt.items)):
@@ -1505,12 +1532,17 @@ def _with_row(ctx: _Ctx, stmt: ast.With | ast.AsyncWith) -> list[_AnyStmt]:
             # Pass a single-name target to the Sema; tuple targets are
             # synchronized element by element instead.
             keywords.append(_kw("name", ast.Constant(value=as_target.id)))
-        # The static single-call fact for the innermost item only (an outer
+        # The static body-shape facts for the innermost item only (an outer
         # item's effective body is the nested with, never a single call) —
         # the rewriter's mirror of the parser's body-shape rule, threaded to
         # the construct through the interpreter (``as_name`` rides the same
         # channel).
         keywords.append(_kw("single_call_body", ast.Constant(value=index == 0 and single_call)))
+        if index == 0 and reads_block_idx:
+            # Emitted only when true: the fact is read by the constructs whose
+            # body shape depends on it (``pl.spmd``'s inline-body carrier), and
+            # the no-read majority keeps its emitted source unchanged.
+            keywords.append(_kw("reads_block_idx", ast.Constant(value=True)))
         wrapped = _call(_rt_attr(ctx, "on_begin_with"), call_args, keywords)
         if as_target is not None:
             temp = ctx.fresh_temp("with")

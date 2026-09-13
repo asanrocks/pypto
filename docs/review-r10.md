@@ -263,6 +263,16 @@ the whole index-reading body). Owning files:
 `python/pypto/language/constructs/scopes.py`, `language/parser/ast_parser.py`.
 Red check: trace the fixture body without the explicit carrier and run
 `tests/ut/codegen/test_orchestration_returned_param_map.py`.
+**State: fixed** (fix-campaign task A2, as the construct-parity review's F23).
+The tracing lane's carrier decision is now the parser's static, body-wide fact:
+the rewriter's `reads_block_idx` (an `ast.walk` over the whole with-suite,
+threaded through `rt.on_begin_with` beside `single_call_body`) makes
+`pl.spmd.__trace_enter__` wrap the whole body at its first statement and
+reserve the split name hints, with `_maybe_open_spmd_carriers` reduced to the
+backstop for a read the AST walk cannot see. The four divergent spellings are
+anchors (`test_carrier_*_anchor` in `test_spmd_split_aiv.py`) with a print →
+reparse regression; the explicit-carrier spelling's residual outer-`name_hint`
+divergence is filed as the construct-parity record's F36.
 
 - **F2 — the changeset introduces 52 files whose license header violates the
 repo's own `check_headers` lint.** `python3 tests/lint/check_headers.py .`

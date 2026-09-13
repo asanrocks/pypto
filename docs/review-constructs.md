@@ -1037,7 +1037,242 @@ by C1 and F20 by C2 under the ratified R4 ruling, while findings 2 and 4
 
 F-ids continue from F17.
 
-## 16. Round ledger
+## 16. R11 verdicts — `pl.spmd` (with/for form, tid capture), `pl.split_aiv`, the CORE_GROUP carrier, the `at` family
+
+Both sides read before verdicting: the parser's `_emit_spmd_body`
+(`ast_parser.py:4755`), `_spmd_body_reads_block_idx` (`:4578`, an `ast.walk`
+over the whole suite), `_explicit_incore_carrier` (`:4613`),
+`_parse_spmd_for_loop` (`:5036`), `_parse_spmd_scope` (`:4812`),
+`_parse_spmd_scope_with_tid` (`:4893`), `_parse_spmd_kwargs` (`:4325`, the
+`_parse_and_validate_core_num` gate), `_parse_split_aiv_for_loop` (`:5145`)
+and the `pl.at` quartet `_parse_at_kwargs` / `_dispatch_at_keyword` /
+`_handle_at_optimizations_kw` / `_parse_optimizations_list` (`:3707`,
+`:3743`, `:3809`, `:3838`); the tracing lane's `spmd.__trace_enter__` /
+`begin` / `__trace_exit__` (`constructs/scopes.py:961`, `:1130`, `:1183`),
+`_submit_only_scope_attrs` (`:906`), `split_aiv.begin` (`:1335`),
+`at.__trace_enter__` / `_collect_scope_attrs` (`:1624`, `:1582`),
+`_maybe_open_spmd_carriers` (`tracer/semantics.py:1005`),
+`PtoForConstruct.activate_target` (`tracer/constructs.py:332`) and the
+rewriter's `single_call_body` channel (`interpreter.py:871` →
+`on_begin_with`).
+
+**Regime first.** A `pl.spmd` / `pl.split_aiv` / `pl.at` scope is a *scope*,
+not a `ForStmt`: there is no iter_arg/phi territory, so raw equality is the
+load-bearing half. Every anchor below is asserted **raw**, and **raw +
+post-`canonicalize()`** wherever the anchor carries staged control flow (a
+staged `if` inside the body, a `pl.range` around/inside the region, a
+`deps=`-threaded capture, a `pl.at` inside a loop) — the SSA pass has
+loop-carried values to derive there and both lanes must reach the same
+canonical shape. The one canonical pair that cannot go through the harness is
+a **printer** gap, not a frontend one (F26).
+
+| Variant | Regime | Verdict |
+| --- | --- | --- |
+| for-form bare (no hint) (`k_spmd_for`) | raw | equivalent |
+| for-form + `name_hint` + loop var used (`k_spmd_for_named`) | raw | equivalent |
+| for-form + `sync_start=True` (`k_spmd_for_sync`) | raw | equivalent |
+| for-form + `optimizations=[pl.split(MODE)]` (`k_spmd_for_split`) | raw | equivalent |
+| for-form + `optimizations=[pl.cross_core_slot(slot_num=N)]` (`k_spmd_for_slot`) | raw | equivalent |
+| for-form + both optimization entries (`k_spmd_for_split_slot`) | raw | equivalent |
+| for-form + `allow_early_resolve=True` (`k_spmd_for_aer`) | raw | equivalent (the for-form now shares `_submit_only_scope_attrs` with the with-form — the DSV4 `expert_shared` divergence is closed) |
+| for-form + `predicate=(...)` (`k_spmd_for_predicate`) | raw | equivalent |
+| for-form + staged `core_num` (`k_spmd_for_staged_core`) | raw | equivalent |
+| for-form body holding a staged `if` (`k_spmd_for_body_if`) | raw + canonical | equivalent |
+| for-form single-call dispatch body (program, `KForFormDispatch`) | raw + program-canonical | equivalent |
+| for-form inside a staged `for` (`k_spmd_for_in_staged_for`) | raw + canonical | equivalent |
+| with-form capture + `deps=` chain + `pl.at(deps=)` (`k_spmd_capture_deps`) | raw + canonical | equivalent |
+| capture stored into `pl.array.create(N, pl.TASK_ID)` (`k_spmd_capture_array`) | raw | equivalent |
+| capture + split + slot on the single-call body (program, `KCaptureSplitSlot`) | raw + program-canonical | equivalent |
+| with-form inside `pl.cluster()` (`k_spmd_in_cluster`) | raw + canonical | equivalent |
+| the with-form four-cell body matrix (program, `test_spmd_with_form.py`) | raw / program-canonical | equivalent (pre-existing anchors, unchanged) |
+| bare top-level `pl.split_aiv` (UP_DOWN / NONE / LEFT_RIGHT) | raw | equivalent |
+| `pl.split_aiv` inside `pl.at(CORE_GROUP)` (`k_saiv_in_at`) | raw | equivalent (flattened in place; no second InCore) |
+| statement after the bare region (`k_saiv_then_stmt`) | raw | equivalent |
+| region inside a staged `pl.range` (`k_saiv_in_staged_for`) | raw + canonical | equivalent |
+| region inside a staged loop inside `pl.at(CORE_GROUP)` (`k_saiv_in_at_staged_for`) | raw | equivalent; canonical **pinned — F26** |
+| region at the top of an InCore-typed function (program, `KSaivInInCoreFunction`) | raw | equivalent (arm 2: emitted bare, both lanes) |
+| `pl.at` `allow_early_resolve` / `windowize` / `cross_core_slot` | raw (+canonical) | equivalent |
+| `pl.at` `no_dep_args=` + `dumps=` (`k_at_no_dep_args_dumps`) | raw + canonical | equivalent |
+| `pl.at` `as tid` + `deps=` on a later scope (`k_at_capture_deps`) | raw + canonical | equivalent |
+| `pl.at` Hierarchy + `role=` + `name_hint` / positional `level` | raw | equivalent |
+| `pl.at(CORE_GROUP)` inside a Hierarchy `pl.at` (`k_at_in_hierarchy`) | raw | equivalent |
+| `pl.at` inside a staged `for` (`k_at_in_staged_for`) | raw + canonical | equivalent |
+| a statement before the block-index read (`k_carrier_pre_stmt`) | raw | equivalent — **F23**, fixed by A2 (the carrier boundary is the static, body-wide fact on both lanes) |
+| a body whose only read is a single `i = pl.tile.get_block_idx()` statement (`k_carrier_single_read`) | raw | equivalent — **F23**, fixed by A2 (the read fact wins over the direct-dispatch shape; the split hints are on the scopes) |
+| a read nested in staged control flow (`k_carrier_read_in_staged_for`) | raw + canonical | equivalent — **F23**, fixed by A2 |
+| read inside a `pl.split_aiv` region, statement between regions (`k_carrier_split_aiv_between`) | raw | equivalent — **F23**, fixed by A2 (one carrier; the region is emitted in place) — the F1 fixture shape |
+| read first (`k_carrier_read_first`) | raw + canonical | equivalent (the boundary's other half — both lanes wrap at the same point) |
+| a body that supplies its own CORE_GROUP carrier, a lone nested `pl.at(level=pl.Level.CORE_GROUP, ...)` (`k_carrier_explicit_at` / `k_carrier_explicit_at_read`) | n/a (no shared spelling: `raw` diverges on the outer `name_hint` alone) | **bug — F36** (filed by A2; parser keeps the hint unsplit, tracing splits it) |
+| `with pl.spmd(n, deps=...)` without `as tid`; same for the for-form | n/a (parser accepts, tracing rejects) | **intended divergence** — `docs/en/dev/language/02-manual_dependencies.md:36` (*'``deps=`` is accepted only on the `as tid` capture form'*) + `docs/migration-todo.md` (the docs corrected to that reading) |
+| with-form body neither reading the index nor dispatching (`k_spmd_bare_body`, `k_spmd_bare_body_single_call`) | n/a (parser rejects, tracing accepts) | **needs-decision** |
+| nested `pl.split_aiv` (`k_saiv_nested`) | n/a (parser rejects, tracing accepts) | **bug — F24** |
+| `pl.at(name_hint="has space")` (`k_at_bad_name_hint`) | n/a (parser rejects, tracing accepts) | **bug — F25** |
+| `pl.at(windowize=1)` / `allow_early_resolve=1`; a pre-built `optimizations=` list; `deps=None` | n/a (parser rejects, tracing accepts, same IR) | **needs-decision** (acceptance-only) |
+| `pl.split_aiv(4)` / missing `mode=`; a region under a function-level `pl.split(...)`; a cluster-nested `pl.spmd` with `allow_early_resolve`/`as tid`; `pl.spmd(0)` | n/a (both lanes reject) | out of scope — no accepted spelling; pinned |
+| core_num as `pl.const(4, pl.INDEX)`; `name_hint` ending in `_spmd` | raw | equivalent (check only) |
+
+**Anchors.** 33 anchor call sites in the new `test_spmd_split_aiv.py` (28
+function-level + 5 program-level, across 25 tests; the suite's remaining 14
+tests are the pins — 39 collected tests in all) + 13
+new `conformance(...)` call sites in `test_at_const.py` (10 → 23).
+Conformance-directory call sites 226 → 272 (bare 210 → 251, program 16 → 21);
+conformance-directory tests 355 → 407. All 272 anchors green; no red anchor is
+kept — every red finding is pinned with explicit shape assertions. The fix
+campaign's A2 promotes the four F23 pins to anchors (37 call sites / 29 anchor
+tests) and adds the parametrized print → reparse regression plus the two F36
+pins: 45 collected tests in the suite.
+
+### R11 findings (all frontends left alone)
+
+1. **F23 — the CORE_GROUP carrier boundary is dynamic on the tracing lane and
+   static on the parser's (confirms and pins the migration review's F1).** The
+   parser's `_spmd_body_reads_block_idx` (`ast_parser.py:4578`) walks the whole
+   suite and, on a hit, wraps *the entire body* in one `InCoreScopeStmt`;
+   `_maybe_open_spmd_carriers` (`tracer/semantics.py:1005`) instead opens the
+   carrier at the *first top-level* read. The two agree only when that read is
+   the body's first statement. Four spellings disagree (the table's four red
+   rows): a statement before the read stays directly in the `SpmdScopeStmt`;
+   a read nested in staged control flow opens no carrier at all; a read inside
+   a `pl.split_aiv` region leaves each region to synthesize its own wrapper
+   and the between-statements outside every carrier; and a single-statement
+   read-only body reserves the *unsplit* name hint for the outer scope
+   (`single_call_body`), so `SpmdScopeStmt.name_hint` becomes `"w"` where the
+   parser's is `"w_spmd"`. The printed text of the last three cannot be
+   re-parsed by the parser either, so the print → reparse fixpoint breaks.
+   `docs/design/04-migration-guide.md` §6.2 line 333 intends the opposite
+   (*'The with-form `pl.spmd` body — including multi-statement bodies reading
+   `get_block_idx()` — is wrapped correctly by the tracer'*), and F1
+   (`docs/review-r10.md` §4) is the prior record of the same divergence from
+   the codegen side. Red checks: the four pins in `test_spmd_split_aiv.py`
+   (`test_carrier_boundary_pre_read_statement`,
+   `test_carrier_boundary_single_read_name_hint`,
+   `test_carrier_boundary_read_inside_staged_flow`,
+   `test_carrier_boundary_split_aiv_regions`). Owner: the tracing lane — the
+   carrier decision must become a static, body-wide fact (or the parser's
+   rule must be restated and the implicit-carrier spelling documented as
+   tracing-rejected). Frontend-only either way.
+   **State: fixed** (fix-campaign task A2). The tracing lane's own static,
+   body-wide fact is the rewriter's `reads_block_idx` (`collector/rewriter.py`,
+   the mirror of `_spmd_body_reads_block_idx` — an `ast.walk` over the whole
+   suite, call-name matched), threaded to the with-construct through
+   `rt.on_begin_with` → `create_with_construct` → `__trace_enter__` beside
+   `single_call_body`. `spmd.__trace_enter__` wraps on it in the parser's
+   order (read → inline wrap with the split hints; else single call →
+   direct dispatch; else the deferred carrier), so the carrier opens at the
+   body's *first* statement; `_maybe_open_spmd_carriers` stays as the backstop
+   for a read the AST walk cannot see (an aliased `get_block_idx`). The four
+   pins are promoted to the anchors
+   `test_carrier_pre_read_statement_anchor`,
+   `test_carrier_single_read_name_hint_anchor`,
+   `test_carrier_read_inside_staged_flow_anchor`,
+   `test_carrier_split_aiv_between_anchor`, plus the parametrized print →
+   reparse regression `test_carrier_boundary_roundtrip`. The same commit
+   closes an adjacent hole the new fact exposed: a body that supplies its own
+   CORE_GROUP region now *cancels* the deferred carrier
+   (`_DeferredSpmdCarrier.cancel_pending_carrier`, called by
+   `_flush_deferred_scopes`' absorption branch) instead of leaving a spurious
+   empty `InCoreScopeStmt` behind at the scope's close. The explicit-carrier
+   spelling's residual outer-`name_hint` divergence is filed as **F36** below.
+2. **F24 — nested `pl.split_aiv` is accepted by tracing and rejected by the
+   parser.** `_parse_split_aiv_for_loop` rejects a region inside a region
+   (`ast_parser.py:5167`, keyed on `_split_aiv_mode_stack`);
+   `split_aiv.begin` (`constructs/scopes.py:1335`) has no nesting guard, so the
+   region nests, the printed text fails to re-parse, and the print → reparse
+   fixpoint breaks (F12's class). Red check:
+   `test_nested_split_aiv_is_tracing_accepted`. Owner: the tracing lane.
+3. **F25 — `pl.at(name_hint=...)` is not validated as an identifier.** The
+   parser runs `_parse_scope_name_hint` (`ast_parser.py:4039`);
+   `at.__trace_enter__` passes the string straight to `begin_scope`, so
+   `name_hint="has space"` reaches the IR and the printed text fails to
+   re-parse. This is F21's root cause (the R10 `graph`/`cluster` descriptors)
+   reaching the `at` descriptor in the same file. Red check:
+   `test_at_name_hint_validation_is_parser_only`. Frontend-only.
+4. **F26 — the printer drops the `var = pl.yield_(...)` assignment LHS when the
+   yield sits inside a `SplitAivScopeStmt` body.**
+   `IRPythonPrinter::VisitStmtBody` threads `return_vars` only for a direct
+   yield body or the last statement of a `SeqStmts`
+   (`src/ir/transforms/python_printer.cpp:2605` / `:2634`); F22 recorded the
+   `manual RuntimeScopeStmt` instance, this is the `SplitAivScopeStmt` one. A
+   loop-carried value updated inside a region that sits inside a `pl.range`
+   loop prints as a bare `pl.yield_(...)`, leaving the loop's return var
+   undefined; the roundtrip instrument rejects the text (so the canonical
+   half of `k_saiv_in_at_staged_for` cannot run through the harness). Both
+   lanes' post-SSA IR is structurally equal — the gap is printer-side.
+   Red check: `test_split_aiv_in_at_canonical_is_printer_gap`. Printer-side;
+   needs-decision on the layer. **State: fixed by A3**; the canonical anchor is
+   `test_split_aiv_in_at_staged_for_anchor` and the printer regression is
+   `test_split_aiv_in_at_canonical_roundtrip`.
+5. **F36 — a body that supplies its own CORE_GROUP carrier keeps the
+   `pl.spmd(name_hint=...)` unsplit on the parser lane only (filed by the
+   fix-campaign task A2).** `_emit_spmd_body`'s `_explicit_incore_carrier`
+   branch (`ast_parser.py:4613`) treats a lone nested
+   `pl.at(level=pl.Level.CORE_GROUP, ...)` as the carrier and passes
+   `name_hint` through unsplit; the tracing lane's split-hint rule
+   (`not single_call_body` in `spmd.__trace_enter__`) reserves the `_spmd`
+   suffix for the outer scope whatever the body. Both lanes accept the source
+   and the regions/bodies match — the raw comparison differs on
+   `SpmdScopeStmt.name_hint` alone (`"w_spmd"` vs `"w"`), for an
+   index-reading body and for a dispatch body alike; the printed text still
+   reparses, so nothing is lost at codegen scale. Fixed only by a *third*
+   static body fact from the rewriter (the parser's explicit-carrier check,
+   which needs the `pl.at` level resolved) or by restating the parser's hint
+   rule. Pin: `test_carrier_explicit_at_hint_divergence` (both spellings).
+   Frontend-only. **State: filed, not fixed** (out of A2's scope).
+
+### R11 no-anchor divergences (nothing edited)
+
+1. **The tracing lane accepts a with-form `pl.spmd` body that neither reads the
+   per-block index nor dispatches a `self.<kernel>(...)` call.** Both the dev
+   doc (`docs/en/dev/language/01-statements.md`, the `pl.spmd` section) and the
+   user doc (`docs/en/user/language/04-scopes.md:140`, *'rejected — every block
+   would be doing identical work'*) state the rejection; the parser enforces it
+   and the tracing lane emits the bare `Spmd` scope (printed text cannot be
+   re-parsed). The construct's own suite (`test_spmd_with_form.py`) records the
+   omission as deliberate — the property survives to the IR and its diagnostic
+   home should be a pass/verifier check, which does not exist today — but no
+   design doc or manifest sanctions it. **needs-decision**. Pins:
+   `test_spmd_bare_body_is_tracing_accepted`.
+2. **Four `pl.at` kwarg spellings the parser validates and the tracing
+   descriptor does not**, all with the same IR: `windowize=1` /
+   `allow_early_resolve=1` (parser: boolean literal; tracing: truthiness),
+   a pre-built `optimizations=` list (parser: list *literal* — it inspects the
+   AST; tracing: any sequence), `deps=None` (parser: list/tuple/comprehension;
+   tracing: falsy no-op). **needs-decision** (acceptance-only). Pins:
+   `test_at_bool_literal_kwargs_are_parser_only`,
+   `test_at_optimizations_list_literal_is_parser_only`,
+   `test_at_deps_none_is_parser_only`.
+
+### Discovered tasks
+
+- **F23 — the `pl.spmd` with-form CORE_GROUP carrier boundary diverges: the
+  parser wraps the whole body statically, the tracing lane opens at the first
+  top-level block-index read** (finding 1; the four red pins). Confirms F1.
+  Frontend-only. **State: fixed** (fix-campaign task A2): the rewriter's
+  `reads_block_idx` fact makes the boundary the parser's static, body-wide
+  classification; the four pins became anchors plus a print → reparse
+  regression, and the adjacent absorbed-carrier hole (a spurious empty
+  `InCoreScopeStmt`) is closed in the same change. The explicit-carrier
+  spelling's remaining outer-hint divergence is filed as F36.
+- **F24 — a nested `pl.split_aiv` region is accepted by tracing and rejected
+  by the parser** (finding 2). Red check and pin as above. Frontend-only.
+- **F25 — `pl.at(name_hint=...)` identifier validation is parser-only**
+  (finding 3). Red check and pin as above. Frontend-only.
+- **F26 — the printer loses the yield assignment LHS inside a
+  `SplitAivScopeStmt` body** (finding 4). Red check and pin as above.
+  Printer-side. **State: fixed by A3**.
+- **F36 — the explicit-CORE_GROUP-carrier spelling splits the outer
+  `pl.spmd` name hint on the tracing lane only** (finding 5; filed by the
+  fix-campaign task A2 while fixing F23). Red check and pin as above.
+  Frontend-only.
+
+F-ids continue from F22. `scripts/review/check_construct_parity.py`'s construct
+map now points `split_aiv` at the new suite and claims
+`_parse_and_validate_core_num` (spmd) and `_handle_at_optimizations_kw`
+(`at family`); `spmd` keeps `test_spmd_with_form.py` as its named suite (the
+map is one-suite-per-construct) and the new suite carries the for-form /
+capture / carrier anchors as well.
+
+## 17. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
@@ -1049,3 +1284,4 @@ F-ids continue from F17.
 | 1 | R8 binding & assignment | worker session | done | *(this commit)* | new suite `test_binding_assignment.py`: 22 anchors (conformance-directory call sites 147 → 169), all green — subscript write (tensor/tile/array, bare/partial/full-axis/in-loop), same-type staged rebind, type-changing rebind, param-name rebind, defs/store order, `pl.const` staged init, tuple unpack, the `pl.Scalar` param world. One red canonical regime filed as **F14** (a type-changing rebind inside a staged loop yields a free variable in the SSA loop init on *both* lanes — a shared §7 hole, not a parity divergence), pinned by an explicit `pytest.raises` test. Three no-shared-spelling/divergence pins: scalar-index rank-reducing write (**needs-decision**), the typed-staged-init guard (**intended divergence**, `docs/design/01-language.md` §4), `pl.runtime` (jit-entry-only, out of scope). |
 | 1 | R9 returns / exits | worker session | done | *(this commit)* | new suite `test_return_exit.py`: 19 anchors (12 kernels; conformance-directory call sites 169 → 188; conformance-dir tests 288 → 310), all green — the trailing single-return contract (multi-value, scalar, bare, void), returns inside `elif`/branch/loop/`pl.spmd`/`pl.at` (raw + canonical), plus the `@pl.expand` no-spelling witness and the declared-`->` intended divergence. Three red findings filed and pinned: **F15** (a statement after a function-level `return` is dropped by tracing, collected by the parser), **F16** (an inline callee's multi-value trailing return: pass splice multi-value vs parser `MakeTuple`), **F17** (the parser's inline expansion silently drops an early return under staged control flow that both tracing entrances reject loudly). Two needs-decision no-anchor divergences: host-valued return elements dropped by tracing; `return [a, b]` MakeTuple-vs-multi-value dialect collision. `scripts/review/check_construct_parity.py`'s construct map now points `returns / exits` at the new suite. |
 | 2 | R10 generic scopes (`scope` / `manual_scope` / `graph` / `cluster`) | worker session | done | *(this commit)* | new suite `test_generic_scopes.py`: 31 anchors (25 function-level + 6 program-level) + rejection/divergence pins (conformance-directory call sites 195 → 226; conformance-dir tests 310 → 355), all green — the four descriptors straight-line, inside/around staged control flow, the `auto_scope=False` AUTO spellings, scope leak/shadow/return/cond-bind semantics, cluster/graph nesting, placement rules, `as`-target rejection. Five findings filed and pinned: **F18** (a `pl.graph` region drops the forward-sticky `dump_vars` the parser attaches — the round's only red anchor), **F19** (`pl.scope(mode=<non-enum>)` silently selects AUTO), **F20** (no manual-scope nesting tracking on the tracing side), **F21** (graph/cluster name-hint identifier validation is parser-only), **F22** (the printer drops the yield LHS inside a manual runtime scope). Two needs-decision acceptance-only gaps (`pl.graph(name=...)` keyword, positional `pl.scope(MODE)`), one diagnostic-quality note (non-string `name_hint` fails in nanobind). `scripts/review/check_construct_parity.py`'s construct map now points `generic scopes` at the new suite (7 of 16 constructs now anchorless, down from 10). |
+| 2 | R11 `spmd` (with/for, tid capture) + `split_aiv` + the CORE_GROUP carrier + the `at` family | worker session | done | *(this commit)* | new suite `test_spmd_split_aiv.py`: 33 anchors (28 function-level + 5 program-level, across 25 tests) + 14 divergence/rejection pin tests (39 collected tests), plus 13 new `pl.at` anchors/pins in `test_at_const.py` (10 → 23) — conformance-directory call sites 226 → 272 (bare 210 → 251, program 16 → 21); conformance-dir tests 355 → 407; all 272 green. Covers the for-form (hint/sync/split/slot/both/aer/predicate/staged core_num/body-if/nesting/dispatch program), the with-form capture + `deps=` chain + TASK_ID-array store + cluster nesting + split+slot, `pl.split_aiv` (three modes, bare/in-place/in-loop/InCore-function arms, region-shape pins), the `pl.at` kwarg surface (`allow_early_resolve`, `windowize`, `cross_core_slot`, `no_dep_args`/`dumps`, capture+deps, Hierarchy/positional/in-`pl.at`/in-loop), and the CORE_GROUP carrier boundary. Four findings filed and pinned: **F23** (the carrier boundary — confirms and pins the migration review's F1: the parser wraps the whole body statically, tracing opens at the first top-level read; four red spellings), **F24** (nested `pl.split_aiv` accepted by tracing, rejected by the parser), **F25** (`pl.at(name_hint=...)` identifier validation is parser-only — F21's root cause on the `at` descriptor), **F26** (the printer drops the yield LHS inside a `SplitAivScopeStmt` — F22's sibling). One **intended divergence** (`pl.spmd(deps=)` without `as tid`, documented in `docs/en/dev/language/02-manual_dependencies.md:36`), two **needs-decision** no-anchor gaps (the bare non-differentiating spmd body; four `pl.at` kwarg-spelling checks). `scripts/review/check_construct_parity.py` now points `split_aiv` at the new suite and claims `_parse_and_validate_core_num` / `_handle_at_optimizations_kw` (6 constructs still anchorless, down from 7; 2 unclaimed structural parser handlers, down from 4). |

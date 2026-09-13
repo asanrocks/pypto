@@ -297,7 +297,11 @@ class scope:
         self._begun: bool = False  # whether open fired (never-begun no-op for auto-unwind)
 
     def __trace_enter__(
-        self, ctx: TraceContext, as_name: str | None = None, single_call_body: bool = False
+        self,
+        ctx: TraceContext,
+        as_name: str | None = None,
+        single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> None:
         """Enter the PTO runtime scope through the trace-enter hook.
 
@@ -425,7 +429,11 @@ class graph:
         self._begun: bool = False  # whether open fired (never-begun no-op for auto-unwind)
 
     def __trace_enter__(
-        self, ctx: TraceContext, as_name: str | None = None, single_call_body: bool = False
+        self,
+        ctx: TraceContext,
+        as_name: str | None = None,
+        single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> Any:
         """Enter the Graph scope through the trace-enter hook.
 
@@ -552,7 +560,11 @@ class manual_scope:
         self._begun: bool = False  # whether open fired (never-begun no-op for auto-unwind)
 
     def __trace_enter__(
-        self, ctx: TraceContext, as_name: str | None = None, single_call_body: bool = False
+        self,
+        ctx: TraceContext,
+        as_name: str | None = None,
+        single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> None:
         """Enter the MANUAL PTO runtime scope through the trace-enter hook.
 
@@ -628,7 +640,11 @@ class cluster:
         self._begun: bool = False  # whether open fired (never-begun no-op for auto-unwind)
 
     def __trace_enter__(
-        self, ctx: TraceContext, as_name: str | None = None, single_call_body: bool = False
+        self,
+        ctx: TraceContext,
+        as_name: str | None = None,
+        single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> Any:
         """Enter the Cluster scope through the trace-enter hook.
 
@@ -1032,19 +1048,25 @@ class spmd:
         )
 
     def __trace_enter__(
-        self, ctx: TraceContext, as_name: str | None = None, single_call_body: bool = False
+        self,
+        ctx: TraceContext,
+        as_name: str | None = None,
+        single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> Any:
         """Enter the SPMD scope through the trace-enter hook.
 
         The hook emits ``SpmdScopeStmt`` through write-only builder operations.
         ``as_name`` requests the TaskId-capture binding proxy (the
         ``task_id_var`` attr); capture is orthogonal to the body shape.
-        ``single_call_body`` — the rewriter's static mirror of the parser's
-        ``_emit_spmd_body`` rule — picks the body shape: a single call-valued
-        statement without a split hint is the direct-dispatch shape
-        (``SpmdScopeStmt(<the call stmt>)``, the user's unsplit hint); every
-        other body wraps in the nested InCore scope (split name hints) for
-        ``OutlineIncoreScopes`` to outline. Scope attributes are
+        ``single_call_body`` and ``reads_block_idx`` — the rewriter's static
+        mirrors of the parser's ``_emit_spmd_body`` rule — pick the body shape,
+        in the parser's order: a body that reads the per-block index anywhere
+        is *inline* and wraps the whole body in the nested InCore scope (split
+        name hints) for ``OutlineIncoreScopes`` to outline; else a single
+        call-valued statement without a split hint is the direct-dispatch shape
+        (``SpmdScopeStmt(<the call stmt>)``, the user's unsplit hint); else the
+        deferred carrier waits on the read trigger. Scope attributes are
         emitted in their canonical order: ``manual_dep_edges``,
         ``task_id_var``, ``allow_early_resolve``, and ``predicate``."""
         split_mode, split_slot_num = _parse_spmd_optimizations(self.optimizations)
@@ -1085,18 +1107,23 @@ class spmd:
         scope_attrs.extend(self._submit_only_scope_attrs())
         spmd_name_hint: str
         incore_name_hint: str
-        # The wrap decision mirrors the parser's ``_emit_spmd_body`` where it
-        # is static: a split hint, a cross-core slot count, or a *captured*
-        # body that is not one call-valued statement wraps the dispatch body
-        # in an InCore scope that opens at the body's first statement. The
-        # uncaptured form keeps the deferred carrier: it opens dynamically on
-        # the body's per-block-index read (a dispatch body whose callee reads
+        # The wrap decision mirrors the parser's ``_emit_spmd_body``, which is
+        # static and body-wide: a body that reads the per-block index anywhere
+        # (``reads_block_idx`` — the defect the review pinned as F23; the
+        # parser's trigger is ``_spmd_body_reads_block_idx``'s whole-suite walk,
+        # not the first top-level read), a split hint, a cross-core slot count,
+        # or a *captured* body that is not one call-valued statement wraps the
+        # body in an InCore scope that opens at the body's first statement. The
+        # remaining uncaptured form keeps the deferred carrier: it opens if the
+        # runtime read probe fires (a spelling the AST walk cannot see, e.g. an
+        # aliased ``get_block_idx``), while a dispatch body whose callee reads
         # the index internally, or a bare nested ``pl.at`` providing its own
         # region, never opens it — the statements land directly in the Spmd
-        # scope). TaskId capture on a single-call body only adds the
+        # scope. TaskId capture on a single-call body only adds the
         # ``task_id_var`` attr — orthogonal to the shape.
         self._incore_wrapped = (
-            split_mode is not None
+            reads_block_idx
+            or split_mode is not None
             or split_slot_num is not None
             or (as_name is not None and not single_call_body)
         )
@@ -1104,7 +1131,8 @@ class spmd:
         # carrier may still open on the block-index read, and the Spmd scope's
         # name is fixed at begin — a bare uncaptured body keeps the user's
         # unsplit hint only when it is one call-valued statement (the shape
-        # that can never open the carrier).
+        # that can never open the carrier). The read fact wins over that shape:
+        # the parser classifies such a body as inline and splits the hints.
         if self._incore_wrapped or not single_call_body:
             spmd_name_hint, incore_name_hint = _split_spmd_for_loop_name_hints(self.name_hint)
         else:
@@ -1128,9 +1156,9 @@ class spmd:
         )
         # Every form's carrier begin is deferred
         # (``open_deferred_scope``) so the body's leading cache-policy
-        # declarations can join its attrs; the plain form additionally opts
-        # out of the first-emission flush — its open decision belongs to the
-        # per-block-index read.
+        # declarations can join its attrs; the unwrapped plain form
+        # additionally opts out of the first-emission flush — its open decision
+        # then belongs to the per-block-index read trigger.
         self._carrier_pending = True
         self._carrier_name_hint = incore_name_hint
         self._carrier_attrs = incore_attrs
@@ -1190,6 +1218,25 @@ class spmd:
         (its ``_emit_spmd_body`` wraps on the same fact, read statically). A
         no-op once the carrier opened or the form never deferred one."""
         self.open_deferred_scope(builder)
+
+    def cancel_pending_carrier(self) -> None:
+        """Abandon the deferred InCore carrier — the body supplied its own.
+
+        Called by the Frame when the body opens a CORE_GROUP region of its own
+        (a bare nested ``pl.at(level=pl.Level.CORE_GROUP, ...)``, which *is* the
+        parser's carrier for that shape): the region nests directly in the Spmd
+        scope, so this construct's carrier must not open — neither at the body's
+        first statement nor at its own close (the close hook begins a
+        still-pending flushable carrier, which is what left a spurious empty
+        InCore behind). No-op once the carrier opened or the form never
+        deferred one. Buffered cache-policy declarations keep the old path: a
+        carrier with declarations still begins at the close so they have a
+        home (and the plain never-wrapped form keeps its loud rejection).
+        """
+        if not self._carrier_pending or self._cache_decls:
+            return
+        self._carrier_pending = False
+        self._incore_wrapped = False
 
     def __trace_iter__(self, ctx: TraceContext) -> Scalar:
         """Return a loop-target binding proxy through the trace-iter hook.
@@ -1695,7 +1742,11 @@ class at:
         return _fold_optimization_entries(opts, "pl.at", split_gate=is_core_group)
 
     def __trace_enter__(
-        self, ctx: TraceContext, as_name: str | None = None, single_call_body: bool = False
+        self,
+        ctx: TraceContext,
+        as_name: str | None = None,
+        single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> Any:
         """Enter the ``pl.at`` region through the trace-enter hook.
 

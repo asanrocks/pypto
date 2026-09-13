@@ -14,9 +14,34 @@ The collection path is type-complete: anchors across the op families (tile,
 tensor, unified/matmul, scalar, const) prove ``is_staged`` +
 ``bind``/``bare_stmt`` handle every facade kind uniformly — the ops are
 already shared, so per-op implementation is not the point.
+
+R11 adds the remaining ``pl.at`` **kwarg surface** (the anchors below):
+``allow_early_resolve``, ``windowize``, the ``cross_core_slot`` optimization
+entry, ``deps=``/``no_dep_args=``/``dumps=``, the ``as tid`` capture, the
+positional ``level`` form, ``pl.at`` nested in a non-CORE_GROUP ``pl.at``, and
+``pl.at`` inside staged control flow. All are asserted **raw**, plus
+post-``canonicalize()`` where a ``deps=`` chain or an enclosing staged loop
+gives the SSA pass loop-carried values to derive. The descriptor side is
+``at.__trace_enter__`` / ``_collect_scope_attrs``
+(``constructs/scopes.py:1624`` / ``:1582``) and the parser's
+``_parse_at_kwargs`` / ``_dispatch_at_keyword`` / ``_parse_at_meta``
+(``ast_parser.py:3707`` / ``:3743``); the attr order is shared, so a print →
+reparse cycle reproduces the list.
+
+Four ``pl.at`` kwarg spellings have no shared shape — the parser validates more
+than the tracing descriptor does, so each is pinned rather than anchored:
+``name_hint=`` is not checked as an identifier (**F25**, a bug: the traced text
+cannot be re-parsed; the R10 sibling of the ``graph`` / ``cluster`` gap filed as
+F21), and the bool-literal / list-literal / list-shape checks
+(``windowize=1``, ``allow_early_resolve=1``, a pre-built ``optimizations=``
+list, ``deps=None``) are parser-only acceptance gaps with **needs-decision** and
+no IR consequence.
 """
 
 import pypto.language as pl
+import pytest
+from pypto.language.diagnostics import ParserError, ParserSyntaxError
+from pypto.language.parser import function_parser
 from pypto.language.tracer.decorators.function import function_trace
 from pypto.language.tracer.semantics import PtoSema
 from pypto.pypto_core import ir
@@ -201,3 +226,228 @@ def test_at_deps_deferred():
     assert opened is not None  # the staged ``with`` construct opened (deps ignored)
     opened.construct.close()
     frame.finish()
+
+
+# —— R11: the remaining pl.at kwarg surface ——
+
+
+def k_at_allow_early_resolve(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.CORE_GROUP, allow_early_resolve=True):
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_windowize(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.CORE_GROUP, windowize=True):
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_cross_core_slot(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.cross_core_slot(slot_num=3)]):
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_capture_deps(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="producer") as tid:
+        t = pl.load(x, [0, 0], [64, 64])
+        y = pl.add(t, 1.0)
+    with pl.at(level=pl.Level.CORE_GROUP, deps=[tid]):
+        pl.store(pl.add(y, 2.0), [0, 0], x)
+    return x
+
+
+def k_at_no_dep_args_dumps(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.CORE_GROUP, no_dep_args=[x], dumps=[x]):
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_hierarchy_named(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.HOST, role=pl.Role.Orchestrator, name_hint="hier"):
+        y = pl.add(x, 1.0)
+    return y
+
+
+def k_at_positional_level(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(pl.Level.CORE_GROUP):
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_in_hierarchy(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.HOST, role=pl.Role.Orchestrator):
+        with pl.at(level=pl.Level.CORE_GROUP):
+            t = pl.load(x, [0, 0], [64, 64])
+            pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_in_staged_for(
+    x: pl.Tensor[[64, 64], pl.FP32], k: pl.Scalar[pl.INT32]
+) -> pl.Tensor[[64, 64], pl.FP32]:
+    for _i in pl.range(2):
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="t"):
+            t = pl.load(x, [k, 0], [64, 64])
+            pl.store(t, [k, 0], x)
+    return x
+
+
+def test_at_allow_early_resolve_anchor():
+    """The speculative early-dispatch hint: ``("allow_early_resolve", True)`` in
+    the parser's canonical attr position, no predicate needed to force it."""
+    conformance(k_at_allow_early_resolve, build)
+    conformance(k_at_allow_early_resolve, build, canonical=True)
+
+
+def test_at_windowize_anchor():
+    conformance(k_at_windowize, build)
+
+
+def test_at_cross_core_slot_anchor():
+    """``pl.cross_core_slot`` alone (no split entry): the ``slot_num`` attr
+    lands on the same InCore scope on both lanes (attr order pinned by
+    ``test_at_predicate_scope_attr_position``'s sibling in test_jit)."""
+    conformance(k_at_cross_core_slot, build)
+
+
+def test_at_capture_deps_anchor():
+    """``as tid`` + ``deps=`` on a later scope: the TaskId capture placeholder
+    and the ``manual_dep_edges`` threading agree (raw and canonical)."""
+    conformance(k_at_capture_deps, build)
+    conformance(k_at_capture_deps, build, canonical=True)
+
+
+def test_at_no_dep_args_dumps_anchor():
+    """``no_dep_args=`` → ``arg_direction_overrides_vars`` and ``dumps=`` →
+    ``dump_vars``, both as Var lists on the scope (raw and canonical)."""
+    conformance(k_at_no_dep_args_dumps, build)
+    conformance(k_at_no_dep_args_dumps, build, canonical=True)
+
+
+def test_at_hierarchy_named_anchor():
+    """A non-CORE_GROUP level with a role and a name hint — the
+    ``HierarchyScopeStmt`` shape."""
+    conformance(k_at_hierarchy_named, build)
+
+
+def test_at_positional_level_anchor():
+    """The positional ``pl.at(pl.Level.CORE_GROUP)`` spelling (the form the
+    printer emits; ``_parse_at_kwargs`` accepts both)."""
+    conformance(k_at_positional_level, build)
+
+
+def test_at_in_hierarchy_anchor():
+    """A CORE_GROUP ``pl.at`` inside a Hierarchy ``pl.at`` — nesting is legal
+    there (the predicate/``deps=`` placement gate rejects only Cluster / Spmd /
+    CORE_GROUP nesting)."""
+    conformance(k_at_in_hierarchy, build)
+
+
+def test_at_in_staged_for_anchor():
+    """A ``pl.at`` scope inside a staged loop (raw and canonical: the loop
+    carries a value through the scope)."""
+    conformance(k_at_in_staged_for, build)
+    conformance(k_at_in_staged_for, build, canonical=True)
+
+
+# —— the pl.at kwarg-spelling gaps (no shared shape: pins, not anchors) ——
+
+
+def k_at_bad_name_hint(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="has space"):
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_non_bool_windowize(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.CORE_GROUP, windowize=1):  # type: ignore[arg-type]
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_non_bool_aer(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.CORE_GROUP, allow_early_resolve=1):  # type: ignore[arg-type]
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_dynamic_optimizations(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    opts = [pl.split(pl.SplitMode.UP_DOWN)]
+    with pl.at(level=pl.Level.CORE_GROUP, optimizations=opts):
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def k_at_deps_none(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.at(level=pl.Level.CORE_GROUP, deps=None):
+        t = pl.load(x, [0, 0], [64, 64])
+        pl.store(t, [0, 0], x)
+    return x
+
+
+def test_at_name_hint_validation_is_parser_only():
+    """**F25 — a bug, pinned, not an anchor.**
+
+    ``pl.at(name_hint=...)`` reaches ``begin_scope`` unchecked on the tracing
+    lane, while the parser runs ``_parse_scope_name_hint``
+    (``ast_parser.py:4039``: a non-keyword identifier). The traced text names
+    the scope ``"has space"`` and cannot be re-parsed, so the print → reparse
+    fixpoint breaks. This is F21's root cause (the ``graph`` / ``cluster``
+    descriptors) reaching the ``at`` descriptor as well; the descriptor lives in
+    the same file. Delete the tracing-side assertions when F25 lands."""
+    traced = build(k_at_bad_name_hint)
+    assert "has space" in str(traced)
+    with pytest.raises(ParserSyntaxError, match="must be a valid non-keyword identifier"):
+        function_parser(k_at_bad_name_hint)
+    with pytest.raises(ParserSyntaxError, match="must be a valid non-keyword identifier"):
+        pl.parse(str(traced))
+
+
+def test_at_bool_literal_kwargs_are_parser_only():
+    """**needs-decision** (acceptance-only, no IR consequence).
+
+    ``windowize=1`` / ``allow_early_resolve=1``: the parser requires a boolean
+    literal (``_dispatch_at_keyword``), the tracing descriptor tests truthiness
+    and emits the same ``True`` attr. Both lanes produce the same IR, so no
+    anchor is possible and no design doc decides the spelling."""
+    for kernel in (k_at_non_bool_windowize, k_at_non_bool_aer):
+        assert build(kernel) is not None
+        with pytest.raises(ParserSyntaxError, match="must be a boolean literal"):
+            function_parser(kernel)
+
+
+def test_at_optimizations_list_literal_is_parser_only():
+    """**needs-decision** (acceptance-only, same IR).
+
+    The parser inspects the AST (``optimizations=`` must be a list *literal* —
+    the ``pl.split(...)`` marker resolves no other way), while
+    ``at.__trace_enter__`` accepts any list/tuple, so a pre-built list works
+    under tracing. The emitted scope is identical."""
+    traced = build(k_at_dynamic_optimizations)
+    assert "split" in str(traced)
+    with pytest.raises(ParserError, match="pl.split"):
+        function_parser(k_at_dynamic_optimizations)
+
+
+def test_at_deps_none_is_parser_only():
+    """**needs-decision** (acceptance-only, same IR).
+
+    ``deps=None`` is a falsy no-op on the tracing lane
+    (``_collect_scope_attrs`` skips it, no ``manual_dep_edges`` attr) while the
+    parser requires a list / tuple / comprehension. ``pl.at`` — unlike
+    ``pl.spmd`` — accepts ``deps=`` without ``as tid`` on both lanes, so only
+    the argument *type* differs."""
+    assert build(k_at_deps_none) is not None
+    with pytest.raises(ParserError, match="must be a list / tuple / comprehension"):
+        function_parser(k_at_deps_none)

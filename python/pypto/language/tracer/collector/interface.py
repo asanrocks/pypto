@@ -188,6 +188,7 @@ class Frame(Protocol[V]):
         name: str | None = None,
         span: object | None = None,
         single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> WithOpen[V] | None: ...
 
     def logical_and(self, a: object, b: object, span: object | None = None) -> V: ...
@@ -287,8 +288,9 @@ class NullFrame:
         name: str | None = None,
         span: object | None = None,
         single_call_body: bool = False,
+        reads_block_idx: bool = False,
     ) -> WithOpen[object] | None:
-        del interpreter, context, name, span, single_call_body
+        del interpreter, context, name, span, single_call_body, reads_block_idx
         return None
 
     def logical_and(self, a: object, b: object, span: object | None = None) -> object:

@@ -435,7 +435,9 @@ class _RecordingFrame(NullFrame):
         self.whiles.append(construct)
         return construct
 
-    def create_with_construct(self, interpreter, context, name=None, span=None, single_call_body=False):
+    def create_with_construct(
+        self, interpreter, context, name=None, span=None, single_call_body=False, reads_block_idx=False
+    ):
         if isinstance(context, _RecMarker):
             construct = _RecWithConstruct("as-target")
             self.withs.append((context, construct))
