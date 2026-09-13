@@ -1,0 +1,518 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# ci-repro — reproduce the GitHub Actions pipeline (.github/workflows/ci.yml)
+# locally, so a green run here predicts the PR's status checks.
+#
+# Stage names mirror CI job names 1:1; each stage runs the same command CI
+# runs, with these documented deviations:
+#
+#   - Device jobs: the batched stages pin to ONE device via
+#     --task-submit-device (CI's TEST MODE — same card-allocation semantics
+#     as CI today). The card comes from CI_REPRO_DEVICE_ID or a one-shot
+#     borrow probe, since a dev shell holds no runner-owned card. The
+#     direct-device / DFX / dist steps borrow per invocation via
+#     --device auto (any free card), which CI's eventual "PROD" flip would
+#     also do.
+#   - unit-tests: delegated to ./scripts/gate, which is a superset of CI's
+#     unit-tests job (it adds pyright, ruff, and the typing-debt ratchet on
+#     top of the same `pytest tests/ut` run).
+#
+# Not reproduced here (and why):
+#   - pypto-lib-model: needs the pypto-lib sibling checkout, not this one.
+#   - onboard-tests-a5 / system-tests-a5sim: no A5 silicon on this box, and
+#     the simulator leg runs in CI's GitHub-hosted container. `-p a5sim` runs
+#     locally only if the host ptoas carries the a5 profile.
+#   - serving-guard: downstream repo; fires in CI only when the pinned
+#     toolchain moves (toolchain/versions.env).
+#   - The GitHub-hosted unit-tests leg's prebuilt-wheel ABI path — a local
+#     in-place build cannot exercise a wheel built in CI's older container.
+#
+# Remaining fidelity caveats even on a green run (reported in the summary):
+#   - CI runs on the PR *merge commit* against main; run this on a rebased,
+#     fetched HEAD for exactness.
+#   - CI's clang-tidy configures compile_commands.json under the toolchain
+#     bundle's compilers; a local configure with different compilers can
+#     drift a few findings.
+#
+# Usage:
+#   ./scripts/ci-repro                 # CPU pipeline: pre-commit, clang-tidy,
+#                                      # unit-tests, codegen-tests,
+#                                      # examples-tests, docs-examples
+#   ./scripts/ci-repro --device        # + the three device jobs via
+#                                      # task-submit (system-tests,
+#                                      # system-tests-direct, dist-system-tests).
+#                                      # The batched stages pin to one device
+#                                      # (CI's TEST MODE); set
+#                                      # CI_REPRO_DEVICE_ID=N to choose it,
+#                                      # otherwise a card is borrowed to probe.
+#   ./scripts/ci-repro --skip a,b      # skip stages (comma-separated)
+#   ./scripts/ci-repro --list          # list stages and exit
+
+log_file="${CI_REPRO_LOG:-ci-repro.log}"
+: > "$log_file"
+
+jobs="${PYPTO_BUILD_JOBS:-$(nproc)}"
+workdir="$(pwd)"
+device_tier=0
+declare -a skip_stages=()
+
+stage_names=(
+    pre-commit
+    clang-tidy
+    unit-tests
+    codegen-tests
+    examples-tests
+    docs-examples
+    system-tests
+    system-tests-direct
+    dist-system-tests
+)
+
+usage() {
+    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+    echo
+    echo "stages: ${stage_names[*]}"
+    exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --device) device_tier=1 ;;
+        --skip) shift; IFS=, read -r -a skip_stages <<< "${1:-}" ;;
+        --list)
+            printf '%s\n' "${stage_names[@]}"
+            exit 0
+            ;;
+        -h|--help) usage ;;
+        *)
+            echo "ERROR: unknown argument: $1" >&2
+            usage 1 >&2
+            ;;
+    esac
+    shift
+done
+
+# Device stages are opt-in: they borrow cards from the shared task-submit
+# pool, so a plain run must not claim NPU time on its own.
+if [ "$device_tier" -ne 1 ]; then
+    skip_stages+=(system-tests system-tests-direct dist-system-tests)
+fi
+
+log_message() {
+    printf '%s\n' "$*" | tee -a "$log_file"
+}
+
+run_logged() {
+    "$@" 2>&1 | tee -a "$log_file"
+    local -a pipeline_status=("${PIPESTATUS[@]}")
+    return "${pipeline_status[0]}"
+}
+
+is_skipped() {
+    local s
+    for s in "${skip_stages[@]:-}"; do
+        [ "$s" = "$1" ] && return 0
+    done
+    return 1
+}
+
+declare -a stage_status=()
+declare -a stage_secs=()
+declare -a fidelity_notes=()
+
+record_stage() {  # name status seconds
+    stage_status+=("$2")
+    stage_secs+=("$3")
+    log_message "=== $1: $2 ($3s) ==="
+}
+
+run_stage() {  # name command...
+    local name="$1"; shift
+    if is_skipped "$name"; then
+        log_message "=== $name: SKIP (requested) ==="
+        stage_status+=("SKIP")
+        stage_secs+=("0")
+        return 0
+    fi
+    local start=$SECONDS
+    log_message ""
+    log_message ">>> stage: $name"
+    if run_logged "$@"; then
+        record_stage "$name" PASS $((SECONDS - start))
+    else
+        record_stage "$name" FAIL $((SECONDS - start))
+    fi
+}
+
+# One mechanism-B device step: wrap a single pytest invocation in one
+# task-submit card session (CI's `--run` is single-line; keep the same shape).
+# \$TASK_DEVICE is escaped on purpose — it must expand inside the child shell.
+ts_run() {  # max_time pytest-args...
+    local max_time="$1"; shift
+    task-submit --device auto --timeout 3600 --max-time "$max_time" \
+        --run "cd $workdir && .venv/bin/python -m pytest $*"
+}
+
+# Mechanism-A batched runs compile card-free on this host; each case's device
+# run borrows a card through the harness's task-submit integration (no
+# --task-submit-device pin — CI's documented prod shape).
+batched_flags="--precompile-workers=32 --strict-case-discovery \
+--execute-via-task-submit --execute-batch-size=64 \
+--task-queue-timeout=1800 --task-max-time=600"
+
+# ---------------------------------------------------------------------------
+# Preflight: fidelity checks. Warnings never fail a stage — they qualify the
+# confidence of a green result instead, and are repeated in the summary.
+# ---------------------------------------------------------------------------
+log_message "=== ci-repro (workdir: $workdir) ==="
+
+# Network access is not a given on a dev box (and a hung fetch must not hang
+# the whole run): 60s cap, failure degrades to a staleness warning.
+if ! timeout 60 git fetch origin main 2>>"$log_file"; then
+    fidelity_notes+=("git fetch failed/timed out — clang-tidy diff-base origin/main may be stale")
+fi
+
+py_ver="$(uv run python --version 2>/dev/null | awk '{print $2}')"
+if [ "${py_ver%.*}" != "3.10" ]; then
+    fidelity_notes+=("venv python is ${py_ver:-unknown}; CI runs 3.10")
+fi
+
+if [ -f toolchain/versions.env ]; then
+    # Shellcheck: deliberately unquoted single word from a repo-owned file.
+    # shellcheck disable=SC1091
+    . ./toolchain/versions.env
+    host_ptoas="$(ptoas --version 2>/dev/null | awk '{print $2}' | sed 's/^v//')"
+    if [ "$host_ptoas" != "${PTOAS_VERSION#v}" ]; then
+        fidelity_notes+=("host ptoas is ${host_ptoas:-missing}; CI pins $PTOAS_VERSION")
+    fi
+fi
+
+if [ -n "${PTO_ISA_ROOT:-}" ] && [ -d "$PTO_ISA_ROOT" ]; then
+    pinned_isa="$(tr -d '[:space:]' < runtime/pto_isa.pin 2>/dev/null)"
+    host_isa="$(git -C "$PTO_ISA_ROOT" rev-parse HEAD 2>/dev/null)"
+    if [ -n "$pinned_isa" ] && [ "$pinned_isa" != "$host_isa" ]; then
+        fidelity_notes+=("PTO_ISA_ROOT is at ${host_isa:-unknown}; runtime/pto_isa.pin wants $pinned_isa")
+    fi
+fi
+
+for note in "${fidelity_notes[@]:-}"; do
+    [ -n "$note" ] && log_message "fidelity: $note"
+done
+
+# ---------------------------------------------------------------------------
+# Stages, in CI order.
+# ---------------------------------------------------------------------------
+
+# pre-commit: CI runs the hooks via pre-commit/action on a GitHub-hosted
+# runner; the hooks manage their own environments, so `uvx` reproduces them
+# without polluting the project venv. First run downloads hook envs.
+#
+# The local hooks pin language_version: python3 / python3.10, and pre-commit
+# builds those envs with whatever the names resolve to on PATH. Some hosts
+# carry a /usr/local/bin/python3.10 built without _ssl (a static binary ahead
+# of /usr/bin), which makes pre-commit's `pip install .` bootstrap unable to
+# reach the package index. Probe both names and shim a healthy interpreter
+# onto PATH when one resolves to a broken python.
+shim_dir="$workdir/build/ci-repro-shims"
+mkdir -p "$shim_dir"
+shim_broken_python() {  # name
+    local name="$1" candidate
+    command -v "$name" >/dev/null 2>&1 || return 0
+    "$name" -c "import ssl" >/dev/null 2>&1 && return 0
+    # /usr/bin first: uv-managed interpreters can fail virtualenv's discovery
+    # probe when a stale user-site entry point breaks the bundled setuptools,
+    # which makes discovery fall through to the broken interpreter anyway.
+    for candidate in "/usr/bin/$name" \
+        "$(uv python find "${name#python}" 2>/dev/null || true)"; do
+        [ -x "$candidate" ] || continue
+        "$candidate" -c "import ssl" >/dev/null 2>&1 || continue
+        ln -sfn "$(readlink -f "$candidate")" "$shim_dir/$name"
+        PATH="$shim_dir:$PATH"
+        log_message "fidelity: shimmed $name -> $candidate (host $name lacks ssl)"
+        return 0
+    done
+    fidelity_notes+=("no ssl-capable $name on this host — pre-commit env builds may fail")
+}
+shim_broken_python python3
+shim_broken_python python3.10
+
+# Node-language hooks (markdownlint-cli2) are installed by pre-commit via
+# `npm install --allow-git root`; npm 11.12 rejects the root scope for -g
+# installs (EALLOWGIT) while accepting `all`. The rewrite is a superset of
+# what pre-commit asks for, so it is applied unconditionally for this stage.
+real_npm="$(command -v npm || true)"
+if [ -n "$real_npm" ]; then
+    cat > "$shim_dir/npm" <<'SHIM'
+#!/usr/bin/env bash
+# ci-repro shim: rewrite pre-commit's --allow-git root to all (host npm
+# rejects the root scope for -g installs; see scripts/ci-repro).
+declare -a args=()
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "--allow-git" ] && [ "$a" = "root" ]; then
+        a="all"
+    fi
+    args+=("$a")
+    prev="$a"
+done
+exec "$(dirname "$0")/npm.real" "${args[@]}"
+SHIM
+    ln -sfn "$(readlink -f "$real_npm")" "$shim_dir/npm.real"
+    chmod +x "$shim_dir/npm"
+    PATH="$shim_dir:$PATH"
+    log_message "fidelity: shimmed npm (rewrite --allow-git root -> all)"
+fi
+run_stage pre-commit uvx pre-commit run --all-files
+
+# clang-tidy: dedicated constrained venv, as in CI's clang-tidy job — the
+# project venv must not gain cmake/ninja/nanobind just to lint. Python 3.10
+# matches CI (uv fetches a standalone 3.10 if the host lacks one).
+if ! is_skipped clang-tidy; then
+    tidy_venv="build/ci-repro-tidy"
+    log_message ""
+    log_message ">>> stage: clang-tidy (preparing $tidy_venv)"
+    tidy_start=$SECONDS
+    if run_logged uv venv --python 3.10 --clear "$tidy_venv" \
+        && tidy_version="$(uv run python -c \
+            "import sys; sys.path.insert(0, 'tests/lint'); from clang_tidy import REQUIRED_VERSION; print(REQUIRED_VERSION)")" \
+        && run_logged uv pip install --python "$tidy_venv/bin/python" \
+            -c build-constraints.txt cmake ninja nanobind "clang-tidy==$tidy_version" \
+        && run_stage clang-tidy env PATH="$tidy_venv/bin:$PATH" \
+            "$tidy_venv/bin/python" tests/lint/clang_tidy.py \
+            --strict-version --jobs="$jobs" --diff-base=origin/main; then
+        :
+    else
+        record_stage clang-tidy FAIL $((SECONDS - tidy_start))
+    fi
+else
+    run_stage clang-tidy true  # records the SKIP
+fi
+
+# unit-tests: CI's job is `pytest tests/ut`; the gate is its superset.
+run_stage unit-tests env PYPTO_GATE_LOG="${log_file%.log}-gate.log" ./scripts/gate
+
+# codegen-tests: codegen-only needs no ptoas and no device (CI's
+# install-toolchain:false shape). Paged-attention moves to the device tier —
+# its numeric golden compare is unstable on a CPU torch/BLAS build.
+run_stage codegen-tests uv run python -m pytest tests/st/codegen -v --codegen-only \
+    --ignore=tests/st/codegen/torch/test_torch_codegen_paged_attention.py
+
+# examples-tests: the distributed ladder with every documented invocation,
+# plus the teaching ladders — all on the a2a3sim simulator, card-free.
+# (CI also re-runs the manual's code blocks inside this job; the identical
+# command runs once in docs-examples below instead.)
+if ! is_skipped examples-tests; then
+    ex_start=$SECONDS
+    ex_ok=0
+    ex_run() {  # file args...
+        local f="$1"; shift
+        log_message ""
+        log_message ">>> examples-tests: $f $*"
+        if run_logged uv run python "$f" "$@"; then
+            :
+        else
+            ex_ok=1
+        fi
+    }
+    for ex in examples/distributed/*.py; do
+        case "$ex" in */__init__.py) continue ;; esac
+        ex_run "$ex" -p a2a3sim -d 0,1
+    done
+    ex_run examples/distributed/04_barrier.py -p a2a3sim -d 0,1 --use-builtin
+    ex_run examples/distributed/05_remote_load_store.py -p a2a3sim -d 0,1 --mode store
+    ex_run examples/distributed/06_put_get.py -p a2a3sim -d 0,1 --mode get
+    ex_run examples/distributed/07_dynamic_rank_count.py -p a2a3sim -d 0,1,2
+    ex_run examples/distributed/07_dynamic_rank_count.py -p a2a3sim -d 0,1,2,3
+    ex_run examples/distributed/08_allreduce_mesh.py -p a2a3sim -d 0,1,2,3
+    ex_run examples/distributed/09_allreduce_two_phase.py -p a2a3sim -d 0,1,2,3
+    ex_run examples/distributed/10_allreduce_ring.py -p a2a3sim -d 0,1,2,3
+    ex_run examples/distributed/11_allreduce_reveal.py -p a2a3sim -d 0,1,2,3
+    ex_run examples/distributed/11_allreduce_reveal.py -p a2a3sim -d 0,1,2,3 --mode ring
+    ex_run examples/distributed/12_broadcast.py -p a2a3sim -d 0,1 --mode builtin
+    ex_run examples/distributed/12_broadcast.py -p a2a3sim -d 0,1,2,3
+    ex_run examples/distributed/12_broadcast.py -p a2a3sim -d 0,1,2,3 --mode builtin
+    ex_run examples/distributed/13_allgather.py -p a2a3sim -d 0,1 --mode builtin
+    ex_run examples/distributed/13_allgather.py -p a2a3sim -d 0,1,2,3
+    ex_run examples/distributed/13_allgather.py -p a2a3sim -d 0,1,2,3 --mode builtin
+    ex_run examples/distributed/14_reduce_scatter.py -p a2a3sim -d 0,1 --mode builtin
+    ex_run examples/distributed/14_reduce_scatter.py -p a2a3sim -d 0,1,2,3
+    ex_run examples/distributed/14_reduce_scatter.py -p a2a3sim -d 0,1,2,3 --mode builtin
+    ex_run examples/distributed/15_all_to_all.py -p a2a3sim -d 0,1 --mode builtin
+    ex_run examples/distributed/15_all_to_all.py -p a2a3sim -d 0,1,2,3
+    ex_run examples/distributed/15_all_to_all.py -p a2a3sim -d 0,1,2,3 --mode builtin
+    ex_run examples/distributed/16_putting_it_together.py -p a2a3sim -d 0,1,2,3
+    for ex in examples/beginner/*.py examples/intermediate/*.py \
+              examples/advanced/*.py examples/utils/*.py; do
+        case "$ex" in */__init__.py) continue ;; esac
+        ex_run "$ex"
+    done
+    if [ "$ex_ok" -eq 0 ]; then
+        record_stage examples-tests PASS $((SECONDS - ex_start))
+    else
+        record_stage examples-tests FAIL $((SECONDS - ex_start))
+    fi
+else
+    run_stage examples-tests true  # records the SKIP
+fi
+
+# docs-examples: the user manual's runnable code blocks (covers CI's
+# docs-examples job and the duplicate run inside examples-tests).
+run_stage docs-examples uv run python tests/docs/run_doc_examples.py \
+    --pages docs/en/user --check-parity -p a2a3sim
+
+# --- device tier (--device): borrows cards from the task-submit pool ---
+
+# system-tests: batched shard A (heavy dirs) + shard B (ops + cross_core) in
+# one pass — CI splits them only to balance two NPU runners. Every batch is
+# pinned to ONE device via --task-submit-device (CI's TEST MODE shape): the
+# harness's per-batch borrows via --device auto would place batches on both
+# dies of one physical chip concurrently, which the documented a2a3 AICPU
+# shared-SO fault (runtime/docs/troubleshooting/
+# a2a3-507899-aicpu-shared-so-fault.md) makes fail as a cascade. The device
+# comes from --device-id, or a one-shot borrow when unset (the shell itself
+# holds no card, so the harness's nested task-submit batches are legal).
+st_device="${CI_REPRO_DEVICE_ID:-}"
+if ! is_skipped system-tests && [ -z "$st_device" ]; then
+    st_device="$(task-submit --device auto --timeout 60 --max-time 30 \
+        --run 'echo BORROWED_DEVICE=$TASK_DEVICE' 2>/dev/null | \
+        sed -n 's/^BORROWED_DEVICE=//p')"
+    if [ -z "$st_device" ]; then
+        log_message "fidelity: could not borrow a device for the pinned batched stages"
+        run_stage system-tests false
+        st_device=""
+    else
+        log_message "fidelity: pinning batched device stages to device $st_device"
+    fi
+fi
+if ! is_skipped system-tests; then
+    sa_start=$SECONDS
+    sa_ok=0
+    log_message ""
+    log_message ">>> system-tests: batched shard A (heavy dirs, pinned to $st_device)"
+    run_logged uv run python -m pytest tests/st \
+        -v -m "device_batch and not swimlane and not multi_card" \
+        --ignore=tests/st/distributed \
+        --ignore=tests/st/codegen \
+        --ignore=tests/st/runtime/ops \
+        --ignore=tests/st/runtime/cross_core \
+        --ignore=tests/st/runtime/framework_and_models/test_dump_tag.py \
+        $batched_flags --task-submit-device="$st_device" || sa_ok=1
+    log_message ""
+    log_message ">>> system-tests: batched shard B (ops + cross_core, pinned to $st_device)"
+    run_logged uv run python -m pytest tests/st/runtime/ops tests/st/runtime/cross_core \
+        -v -m device_batch $batched_flags --task-submit-device="$st_device" || sa_ok=1
+    if [ "$sa_ok" -eq 0 ]; then
+        record_stage system-tests PASS $((SECONDS - sa_start))
+    else
+        record_stage system-tests FAIL $((SECONDS - sa_start))
+    fi
+else
+    run_stage system-tests true  # records the SKIP
+fi
+
+# system-tests-direct: direct-device mechanism B + the DFX tail, each step in
+# its own card session exactly as CI orders them (isolation there is load-
+# bearing: see the per-step comments in .github/workflows/ci.yml).
+if ! is_skipped system-tests-direct; then
+    dt_start=$SECONDS
+    dt_ok=0
+    dt_step() {  # name max_time pytest-args...
+        local name="$1" max_time="$2"; shift 2
+        log_message ""
+        log_message ">>> system-tests-direct: $name"
+        if run_logged ts_run "$max_time" "$@"; then
+            :
+        else
+            dt_ok=1
+        fi
+    }
+    dt_step direct-device 1800 tests/st -v -m "'not device_batch and not multi_card'" \
+        --ignore=tests/st/distributed \
+        --ignore=tests/st/codegen \
+        --ignore=tests/st/runtime/framework_and_models/test_perf_swimlane.py \
+        --ignore=tests/st/runtime/framework_and_models/test_graph_execution.py \
+        --deselect=tests/st/runtime/framework_and_models/test_jit.py::TestJITExecution::test_persistent_cache_across_processes \
+        '--device=$TASK_DEVICE' --platform=a2a3
+    dt_step persistent-cache 600 \
+        tests/st/runtime/framework_and_models/test_jit.py::TestJITExecution::test_persistent_cache_across_processes \
+        -v '--device=$TASK_DEVICE' --platform=a2a3
+    dt_step paged-attention 600 \
+        tests/st/codegen/torch/test_torch_codegen_paged_attention.py \
+        -v '--device=$TASK_DEVICE' --platform=a2a3
+    dt_step multi-orch-l2 600 tests/st/distributed/test_l2_multi_orch.py \
+        -v '--device=$TASK_DEVICE'
+    dt_step swimlane-output 600 \
+        tests/st/runtime/framework_and_models/test_perf_swimlane.py \
+        -v '--device=$TASK_DEVICE' --platform=a2a3 --enable-chip-swimlane --precompile-workers=8
+    # CI holds TWO cards for the scheduling-swimlane sweep (66s vs 122s on one).
+    log_message ""
+    log_message ">>> system-tests-direct: scheduling-swimlane (2 cards)"
+    # $TASK_DEVICE expands in the task-submit CHILD (escaped here); the
+    # comma-separated device list is safe unquoted in sh.
+    run_logged task-submit --device auto --device-num 2 --timeout 3600 --max-time 1200 \
+        --run "cd $workdir && .venv/bin/python -m pytest tests/st/runtime/scheduling -v -m swimlane --device=\$TASK_DEVICE --platform=a2a3 --enable-chip-swimlane --precompile-workers=8 --strict-case-discovery" \
+        || dt_ok=1
+    dt_step graph-replay 600 \
+        tests/st/runtime/framework_and_models/test_graph_execution.py \
+        -v '--device=$TASK_DEVICE' --platform=a2a3 --forked
+    dt_step dump-args 600 \
+        tests/st/runtime/framework_and_models/test_dump_tag.py \
+        -v '--device=$TASK_DEVICE' --platform=a2a3 --dump-args --forked
+    if [ "$dt_ok" -eq 0 ]; then
+        record_stage system-tests-direct PASS $((SECONDS - dt_start))
+    else
+        record_stage system-tests-direct FAIL $((SECONDS - dt_start))
+    fi
+else
+    run_stage system-tests-direct true  # records the SKIP
+fi
+
+# dist-system-tests: two-card mechanism-B sessions.
+if ! is_skipped dist-system-tests; then
+    ds_start=$SECONDS
+    ds_ok=0
+    log_message ""
+    log_message ">>> dist-system-tests: distributed"
+    run_logged task-submit --device auto --device-num 2 --timeout 3600 --max-time 1800 \
+        --run "cd $workdir && .venv/bin/python -m pytest tests/st/distributed -v --device=\$TASK_DEVICE --ignore=tests/st/distributed/test_l2_multi_orch.py" \
+        || ds_ok=1
+    log_message ""
+    log_message ">>> dist-system-tests: multi-card outside tests/st/distributed"
+    run_logged task-submit --device auto --device-num 2 --timeout 3600 --max-time 900 \
+        --run "cd $workdir && .venv/bin/python -m pytest tests/st -v -m multi_card --ignore=tests/st/distributed --device=\$TASK_DEVICE --platform=a2a3" \
+        || ds_ok=1
+    if [ "$ds_ok" -eq 0 ]; then
+        record_stage dist-system-tests PASS $((SECONDS - ds_start))
+    else
+        record_stage dist-system-tests FAIL $((SECONDS - ds_start))
+    fi
+else
+    run_stage dist-system-tests true  # records the SKIP
+fi
+
+# ---------------------------------------------------------------------------
+# Summary.
+# ---------------------------------------------------------------------------
+status=0
+log_message ""
+log_message "=== ci-repro summary ==="
+for i in "${!stage_names[@]}"; do
+    # The device stages' summary rows are only meaningful when run; skipped
+    # stages are listed for completeness with their requested SKIP.
+    printf '  %-22s %s\n' "${stage_names[$i]}" "${stage_status[$i]}" | tee -a "$log_file"
+    [ "${stage_status[$i]}" = "FAIL" ] && status=1
+done
+if [ "${#fidelity_notes[@]}" -gt 0 ]; then
+    log_message "fidelity caveats (green is weaker where these apply):"
+    for note in "${fidelity_notes[@]}"; do
+        log_message "  - $note"
+    done
+fi
+
+if [ "$status" -ne 0 ]; then
+    log_message "FAIL: complete output is in $log_file" >&2
+else
+    log_message "PASS: complete output is in $log_file"
+fi
+exit "$status"
