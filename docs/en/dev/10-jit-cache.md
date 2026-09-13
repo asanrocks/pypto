@@ -4,6 +4,19 @@ Persistent caching is opt-in. It reuses generated code and complete binaries
 across processes, while each JIT function also retains live compiled objects.
 Cached artifacts contain executable code: use a cache with trusted writers.
 
+> [!WARNING]
+> **Runtime ownership.** Everything on this page — `warmup()`, the
+> `python -m pypto.jit warm` CLI, and the `configure_cache()` /
+> `RunConfig.cache_config` integration — belongs to the quarantined
+> `pl.jit_specializer` runtime (`python/pypto/jit/`), kept for its own
+> mechanics tests: the surface exists only on that runtime's `JITFunction`
+> objects. The tracing `@pl.jit`
+> (`pypto/language/tracer/decorators/jit.py`) has no persistent cache — its
+> only caching is the in-process dispatch cache keyed on the bridged
+> signature plus the compile identity, its `compile()` always builds a
+> fresh artifact, and a `RunConfig.cache_config` handed to a tracing kernel
+> is ignored entirely (see [Functions](language/03-functions.md)).
+
 ```python
 from pathlib import Path
 

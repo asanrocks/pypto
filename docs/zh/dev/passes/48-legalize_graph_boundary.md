@@ -184,7 +184,7 @@ runtime 创建，没有可继承的调用方 root。
 
 ```python
 # 外提前
-@pl.jit.graph
+@pl.function(type=pl.FunctionType.Graph)
 def layer(a: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     tmp = pl.create_tensor([ROWS, COLS], pl.FP32)   # 每次提交都分配一次
     ...

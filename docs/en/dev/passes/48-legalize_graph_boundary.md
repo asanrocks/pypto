@@ -219,7 +219,7 @@ site**, where it becomes an `InOut` boundary tensor:
 
 ```python
 # Before
-@pl.jit.graph
+@pl.function(type=pl.FunctionType.Graph)
 def layer(a: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     tmp = pl.create_tensor([ROWS, COLS], pl.FP32)   # allocated per submission
     ...

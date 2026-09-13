@@ -7,7 +7,8 @@ Python-style syntax for PyPTO IR:
 - **Complete**: All information needed to reconstruct IR
 - **Parseable**: Can be parsed back into IR (see [IR Parser](../ir/07-parser.md))
 - **Pythonic**: Follows Python style, passes most linters
-- **SSA-style**: Uses SSA with `pl.yield_()` and `pl.range()`
+- **SSA-style**: Uses SSA with `pl.range()`; carried values derive from rebinding in
+  authored code, and lowered loops render them as `pl.yield_()` in printed round-trip text
 
 ## Module Structure
 
@@ -110,28 +111,47 @@ It is the same IR node as the three-argument form; the arity says whether you ar
 describing an existing allocation or declaring one. Declaring gives only a name: the
 size comes from the largest tile bound to it and the address from the allocator.
 
-Declare it once, then reference it by variable. An unnamed declaration takes the name
-of the variable it is bound to, so the name is written once:
+Declare it once, then reference it by variable. Under the tracing frontend the
+declaration is an ordinary Python value: the variable is how you reach it, and
+the variable's name never reaches the IR — an unnamed `pl.MemRef()` prints as
+`pl.MemRef("")` yet stays a distinct allocation from every other unnamed one.
+Name it explicitly — `pl.MemRef("ping")` — when you want the name in the IR
+(diagnostics, dumps):
 
 ```python
-ping = pl.MemRef()
-pong = pl.MemRef()
+ping = pl.MemRef("ping")
+pong = pl.MemRef("pong")
 
 # Two tiles explicitly share one allocation; a third is kept private.
-t0: pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec] = pl.load(a, [0, 0], [64, 64])
-t1: pl.Tile[[64, 64], pl.FP32, pong, pl.Mem.Vec] = pl.exp(t0)
-t2: pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec] = pl.exp(t1)
+t0 = pl.intrin.transmute(
+    pl.load(a, [0, 0], [64, 64], target_memory=pl.Mem.Vec),
+    pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec],
+)
+t1 = pl.intrin.transmute(pl.exp(t0), pl.Tile[[64, 64], pl.FP32, pong, pl.Mem.Vec])
+t2 = pl.intrin.transmute(pl.exp(t1), pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec])
 ```
 
-Prefer that form: a misspelled reference is a Python `NameError`, whereas a misspelled
-string in the inline `pl.MemRef("pign")` form silently declares a second allocation. The
-inline form stays valid — it is what the IR printer emits, so a dumped program reparses
-without a surrounding Python scope, and `pl.MemRef("other")` also names a declaration
-explicitly when the variable name is not the one you want in the IR.
+The binding is stated at the operation, in the tile type passed to
+`pl.intrin.transmute`. The annotated form —
+`t0: pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec] = pl.load(...)` — is the
+printed round-trip spelling: the IR printer emits it and the parser reads it
+back. Under tracing a local annotation never reaches the IR, so an
+annotation-bound allocation is silently dropped — the kernel traces without
+the separation it was written to declare.
 
-Since the variable supplies the name, variable and allocation must correspond one to one.
-Reaching one declaration through two names (`alias = ping`) and two declarations claiming
-one name are both **rejected** — either would silently merge or split an allocation.
+Prefer the variable form: a misspelled reference is a Python `NameError`, whereas a
+misspelled string in the inline `pl.MemRef("pign")` form silently declares a second
+allocation. The inline form stays valid — it is what the IR printer emits, so a dumped
+program reparses without a surrounding Python scope — but remember that **each evaluation
+of `pl.MemRef(...)` is its own declaration**: two inline occurrences, even with the same
+string, are two allocations that merely print alike.
+
+Sharing follows the declaration object, never the name. `alias = ping` is a plain
+Python rebind, so tiles bound through `alias` share `ping`'s allocation — which is
+what you wrote. The parser-era one-to-one rejection (one declaration reached through
+two names, two declarations claiming one name) was a name-invariant check over the
+AST; under tracing there is no name that can get out of sync, only the objects you
+reference.
 
 Whether a MemRef is a declaration is recorded explicitly on the IR node
 (`MemRef.is_pinned_`), not inferred from its size or from which pass is running.
@@ -148,21 +168,35 @@ packer cannot collapse:
 ```python
 l0c = pl.MemRef(slots=2)
 
-ping: pl.Tile[[M, N], pl.FP32, l0c[0], pl.Mem.Acc] = pl.tile.matmul(q, b0)
-pong: pl.Tile[[M, N], pl.FP32, l0c[1], pl.Mem.Acc] = pl.tile.matmul(q, b1)
+ping = pl.intrin.transmute(pl.tile.matmul(q, b0), pl.Tile[[M, N], pl.FP32, l0c[0], pl.Mem.Acc])
+pong = pl.intrin.transmute(pl.tile.matmul(q, b1), pl.Tile[[M, N], pl.FP32, l0c[1], pl.Mem.Acc])
 ```
+
+The slot is stated at the operation — the index subscripts the declaration
+inside the transmute tile type. The annotated form
+(`ping: pl.Tile[[M, N], pl.FP32, l0c[0], pl.Mem.Acc] = ...`) is the printed
+round-trip spelling; under tracing the annotation is dropped, as above.
 
 **The index may be a runtime value**, so a rotation needs no unrolling:
 
 ```python
-for i, (acc,) in pl.range(N, init_values=(out,)):
+for i in pl.range(N):
     a: pl.Tile[[M, N], pl.FP32, l0c[i % 2], pl.Mem.Acc] = pl.tile.matmul(q_l0, b_l0)
 ```
 
-Under `@pl.jit`, name the declaration inline — `pl.MemRef("l0c", slots=2)[i % 2]` — rather
-than binding it to a Python variable. `@pl.jit` re-parses a generated source in a fresh
-module namespace, so a declaration held in a variable is not in scope there. The named form
-is self-contained (and is what the IR printer emits), so it works in both.
+That annotated form is the printed round-trip spelling — the IR printer emits it and the
+parser reads it back. Under the tracing frontend a local annotation never reaches the IR,
+so the slot is stated at the operation instead:
+`pl.intrin.transmute(pl.tile.matmul(q_l0, b_l0), pl.Tile[[M, N], pl.FP32, l0c[i % 2],
+pl.Mem.Acc])`. The staged index may be any index expression — constant or runtime — and the
+subscript is validated where it is written: selecting a slot of a single-slot declaration,
+or a constant past the declared slot count, is an immediate error.
+
+Under `@pl.jit` nothing changes: the tracing jit executes the decorated callable as
+Python, so a declaration bound to a variable inside the body — or captured from the
+enclosing scope — is in scope like any other value. The AST-era jit re-parsed a
+generated source in a fresh module namespace, which is where the old "name it inline"
+rule came from; that lane survives only as the quarantined `pl.jit_specializer`.
 
 `InitMemRef` sizes one slot to the largest tile bound to *any* slot — the slots are
 uniform, so a per-slot size would make the stride inconsistent — and turns the index into
@@ -221,11 +255,19 @@ goes down the replication path (where the rejection above applies).
 l0b_ping, l0b_pong = pl.MemRef(), pl.MemRef()
 
 # Outer level compiler-managed, inner level author-managed ping-pong.
-for stack, (out_outer,) in pl.pipeline(STACKS, stage=2, init_values=(out,)):
-    b_l1: pl.Tile[[K, N], pl.BF16, pl.Mem.Mat] = pl.load(b, [stack * K, 0], [K, N])
-    for col, (out_inner,) in pl.range(0, N, 2 * STEP, init_values=[out_outer]):
-        ping: pl.Tile[[K, STEP], pl.BF16, l0b_ping, pl.Mem.Right] = ...
-        pong: pl.Tile[[K, STEP], pl.BF16, l0b_pong, pl.Mem.Right] = ...
+for stack in pl.pipeline(STACKS, stage=2):
+    b_l1 = pl.load(b, [stack * K, 0], [K, N], target_memory=pl.Mem.Mat)
+    for col in pl.range(0, N, 2 * STEP):
+        ping = pl.intrin.transmute(
+            pl.tile.extract(b_l1, 0, col, [K, STEP], target_memory=pl.Mem.Right),
+            pl.Tile[[K, STEP], pl.BF16, l0b_ping, pl.Mem.Right],
+        )
+        pong = pl.intrin.transmute(
+            pl.tile.extract(b_l1, 0, col + STEP, [K, STEP], target_memory=pl.Mem.Right),
+            pl.Tile[[K, STEP], pl.BF16, l0b_pong, pl.Mem.Right],
+        )
+        out = ...  # the rebind is the carry: the range loop derives it,
+                   # the pipeline loop carries it in turn
 ```
 
 See [InitMemRef](../passes/34-init_memref.md#declared-allocations) and

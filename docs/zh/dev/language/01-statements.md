@@ -1,20 +1,33 @@
 # 语句与控制流
 
-parser 接受的语句形式，以及 `pl.yield_` 背后的 SSA phi 节点语义。类型系统与表达式
-文法参见 [Python IR 语法规范](00-python_syntax.md)。
+tracing 前端收集的语句形式，以及 SSA pass 如何从 rebinding 推导 phi 节点。类型系统与表达式
+文法参见 [Python IR 语法规范](00-python_syntax.md)；每个 parser 时代的拼写及其替换形式参见
+[迁移指南](../../../design/04-migration-guide.md)。
+
+打印出的 round-trip 方言是另一套文本。IR printer 会把带 iter args 的 lowering 循环渲染为
+`init_values=` 加 assignment 形式的 `pl.yield_`，把 SSA 形式的 while 渲染为
+`pl.while_(init_values=...)` 加首条 `pl.cond(...)`。那是 parser 的文法（[IR
+Parser](../ir/07-parser.md)）——它出现的地方都是正确的，但绝不是 tracing 输入。不要把它抄回
+kernel。
 
 ## 语句 (Statement)
 
 ### 赋值
 
 ```python
-x: pl.INT64 = expr
+x = expr                             # 标注可选
 y: pl.Tensor[[4], pl.FP32] = tensor_op(a)
 ```
 
-不支持 `acc += ...` 和 `acc[...] += ...` 等增量赋值（augmented assignment）。
-解析器会标出原语句，并提示使用显式赋值。矩阵归约应使用带 `init_cond` 的
-`matmul_acc`：
+tracing 下局部标注永远不会流入 IR：值的类型来自产生它的算子。复述类型的标注是文档；与实际
+类型不符的标注则被静默忽略成死文本——迁移时请自行审计（指南 §4.4）。函数声明的 `->` 是例外：
+body 不满足的返回契约会在装饰期报错。
+
+增量赋值（augmented assignment）会经由操作数的二元算子 lowering 成一次 rebind，因此只要该
+算子存在就能用：staged `Scalar` 支持 `acc += 1`。Tile 与 Tensor 包装类不重载算术运算，所以
+对它们做 `acc += ...` / `acc[...] += ...` 会在 trace 期触发 Python 自身的
+`TypeError: unsupported operand type(s) for +=: 'Tile' and 'Tile'` ——请改写显式形式
+（`acc = pl.add(acc, ...)`）。矩阵归约应使用带 `init_cond` 的 `matmul_acc`：
 
 ```python
 acc[t0 : t0 + R, :] = pl.matmul_acc(
@@ -26,30 +39,35 @@ acc[t0 : t0 + R, :] = pl.matmul_acc(
 编译器可将局部累加器中大小一致的行窗口打包为连续的 L0C 窗口；参见
 [累加器逻辑行窗口](../passes/14-flatten_tile_nd_to_2d.md#累加器逻辑行窗口)。
 
-### If 语句 (SSA 风格)
+### If 语句 (staged)
+
+staged `if` 会 trace **两个**分支；各分支用普通赋值发布其值，SSA pass 合成 merge（phi 节点）：
 
 ```python
-# If with both branches
+# If with both branches — same names, plain assignments
 if condition:
-    y1 = pl.yield_(value1)
+    y1 = value1
 else:
-    y1 = pl.yield_(value2)
+    y1 = value2
 
-# Multiple return values (no inline type annotations)
+# Multiple values at once
 if condition:
-    y1, y2 = pl.yield_(value1, value2)
+    y1, y2 = value1, value2
 else:
-    y1, y2 = pl.yield_(value3, value4)
+    y1, y2 = value3, value4
 ```
 
 **要点:**
 
-- `pl.yield_()` 赋值给 SSA phi 节点
-- yield 中定义的变量在 if 之后可访问
-- 两个分支必须 yield 相同的变量
-- 元组解包时不能使用内联类型标注
+- 两个分支赋值相同的名字；收敛是 pass 的事。
+- staged 值就是普通赋值；跨越 join 的**宿主**值需要 `pl.const(value, dtype)`——一个名字在
+  一个分支是 staged、在另一个分支是宿主字面量，会被拒绝。
+- 读取只在部分分支绑定的名字是响亮报错（`UnboundLocalError` 纪律）：在 `if` 之前绑定，或在
+  每个分支都绑定。
+- 谓词必须是 BOOL 类型——对整型 `Scalar` 写 `if k:` 会被拒绝；写显式判断（`if k != 0:`）。
+  **宿主**谓词在 trace 期只走一条路径（这是真正的元编程，不是回退）。
 
-### For 循环 (带 iter_args 的 SSA 风格)
+### For 循环
 
 ```python
 # 简单循环 (1-3 个位置参数，类似 Python 的 range())
@@ -57,11 +75,11 @@ for i in pl.range(stop):                    # start=0, step=1
 for i in pl.range(start, stop):             # step=1
 for i in pl.range(start, stop, step):       # 完整形式
 
-# 带 iter_args 的循环 (循环携带值)
-sum_init: pl.INT64 = 0
-for i, (sum,) in pl.range(n, init_values=(sum_init,)):
-    sum = pl.yield_(sum + i)
-sum_final = sum
+# 循环携带值由 rebinding 推导——无需任何声明。
+s = pl.const(0, pl.INT64)                   # 类型化 staged 种子
+for i in pl.range(n):
+    s = s + i                               # rebind 本身就是 carry
+s_final = s                                 # 读取最后一次迭代的结果
 
 # 并行 for 循环 (同样支持 1-3 个参数)
 for i in pl.parallel(stop):
@@ -69,36 +87,33 @@ for i in pl.parallel(start, stop, step):
     body_statements
 ```
 
-**要点:** 循环携带值使用 `pl.range()` 或 `pl.parallel()` 的 `init_values`, 元组解包 `(sum,)` 声明 iter_args, `pl.yield_()` 为下一次迭代更新值, 循环结束后 iter_args 包含最终值。`pl.parallel()` 生成 `ForKind.Parallel` 循环, `pl.range()` 生成 `ForKind.Sequential` (默认)。
+**要点:** `pl.range()` 不再接受 `init_values=`（也不再有随之而来的 iter 元组解包）。循环的
+携带值就是 body 中自引用地 rebind 的那些名字；同一循环可以 rebind 多个名字，body 内的单分支
+定义也合法——缺失的分支读取上一次迭代的值，这是 pass 拥有的循环携带语义。种子必须是 staged
+的：宿主字面量种子（`s = 0`）会在 trace 期被拒绝（`typed staged initialization: ... bind a
+typed constant first: s = pl.const(..., dtype)`），因为它会在每次迭代内联该字面量而不是推导出
+carry。用算子结果或 `pl.const(value, dtype)` 做种子。`pl.parallel()` 生成 `ForKind.Parallel`
+循环, `pl.range()` 生成 `ForKind.Sequential` (默认)。
 
-### While 循环 (带 iter_args 的 SSA 风格)
+### While 循环
+
+staged while 循环是对 **staged** 谓词的裸 `while`；`pl.while_` 和 `pl.cond()` 作为输入拼写
+已不存在。body trace 一次代表性迭代，carry 的推导方式与 `pl.range` 完全一致：
 
 ```python
-# 自然 while：条件作为 while 头部表达式
-i: pl.Scalar[pl.INT64] = 0
-while i < n:
-    i = i + 1
-
-# 带 init_values 的 SSA 形式：头部元组 = iter_args，第一条语句是 pl.cond()。
-# yield-LHS 名字成为循环外的绑定名（与 pl.range 一致）。
-x_init: pl.Scalar[pl.INT64] = 0
-for (x,) in pl.while_(init_values=(x_init,)):
-    pl.cond(x < n)
-    x_next = pl.yield_(x + 1)
-# 此处 `x_next` 已由 yield-LHS 绑定；`x` 仅在循环 body 内可见。
-
-# Pre-SSA：body 中完全没有 pl.yield_，由 ConvertToSSA 后续补出。
-for (x,) in pl.while_(init_values=(x_init,)):
-    pl.cond(x < n)
-    x = x + 1
-
-# ❌ init_values 非空时不允许裸 pl.yield_(...)，parser 直接报错：
-#    for (x,) in pl.while_(init_values=(x_init,)):
-#        pl.cond(x < n)
-#        pl.yield_(x + 1)             # ParserSyntaxError: requires assignment-form pl.yield_
+# 自然 while：条件就是 while 头部表达式
+i = pl.const(0, pl.INT64)     # 类型化 staged 种子
+while i < n:                  # staged 谓词
+    i = i + 1                 # rebind 就是 carry
 ```
 
-**要点:** `pl.while_(init_values=(...,))` 复用 `for ... in` 头部，用于 SSA 风格循环；body 的第一条语句必须是 `pl.cond(<bool>)`。循环外的绑定名来自 **yield-LHS**（上面的 `x_next`），而不是头部元组——头部元组中的名字只在循环 body 内可见。这一约定与 `pl.range` **保持一致**：当 `init_values` 非空且 body 中确实出现 `pl.yield_(...)` 调用时，必须使用 assignment 形式。Pre-SSA 形式的循环（body 中完全没有 yield，如最后一种写法）仍然合法。
+种子必须是 staged 的：标注形式的种子（`i: pl.Scalar[pl.INT64] = 0`）在 tracing 下**不会**
+staged——局部标注永远不流入 IR——于是计数器保持宿主值，循环退化（谓词对字面量折叠，body 无
+任何贡献；宿主界的循环则在 trace 期执行，body 按宿主迭代次数逐次发射，完全没有 WhileStmt）。
+
+staged 还是宿主由*值*决定，而不是关键字：如果谓词及其读取的名字都是宿主值——普通 Python
+整数、张量形状、任何不是算子产生的东西——`while` 就在 trace 期运行。这是真正的元编程
+（形状驱动的展开），不是回退。
 
 ### 作用域上下文管理器 (Scope Context Managers)
 
@@ -144,11 +159,14 @@ for (x,) in pl.while_(init_values=(x_init,)):
 
 ### Yield 语句
 
-```python
-yield            # No values
-yield x          # Single value
-yield x, y       # Multiple values
-```
+裸 `yield` 在 tracing 下是 rewrite-unsafe 构造——前端执行 body，而生成器对 IR 的影响无法被
+观测——因此会在 rewrite 期被拒绝。发布值的途径是：
+
+- `return` —— 携带结果（可以是多个）离开函数；
+- `pl.intrin.yield_(...)` —— 在推导会遮蔽数据流处声明 staged 分支/循环值的汇编通道（迁移指南
+  附录 A）。`pl.yield_` 仍是它的已废弃别名；会发出警告；
+- 打印出的 IR 把 merge 与 carry 渲染为 assignment 形式的 `pl.yield_`——这是给 parser 的
+  round-trip 文本，不是输入。
 
 ### Break 和 Continue
 
@@ -157,11 +175,14 @@ break              # 退出最内层循环
 continue           # 跳到下一次迭代
 ```
 
-**限制:** 仅当**最内层**封闭循环为顺序循环 (`pl.range`) 或 `while` 时有效。当最内层循环为 `pl.parallel()` 或 `pl.unroll()` 时不支持。在外层 `pl.parallel` 循环内嵌套的内层 `pl.range` 循环中使用 `break` 是合法的。**注意:** 代码生成后端对 `break`/`continue` 的支持跟踪在 [#448](https://github.com/hw-native-sys/pypto/issues/448) 中。
+**限制:** 仅当**最内层**封闭循环为顺序循环 (`pl.range`) 或 `while` 时有效。当最内层循环为 `pl.parallel()` 或 `pl.unroll()` 时不支持——两者都会在 trace 期被拒绝（`'break' not supported in parallel loops` / `... in unrolled loops`）。在外层 `pl.parallel` 循环内嵌套的内层 `pl.range` 循环中使用 `break` 是合法的。**注意:** 代码生成后端对 `break`/`continue` 的支持跟踪在 [#448](https://github.com/hw-native-sys/pypto/issues/448) 中。
 
 ### 编译期调试 (Compile-Time Debugging)
 
-`pl.static_print()` 和 `pl.static_assert()` 是仅在解析期执行的构造，用于在解析过程中检查 IR 状态和断言条件。它们**不生成任何 IR**。
+`pl.static_print()` 和 `pl.static_assert()` 是 AST parser 的诊断构造：它们**不生成任何 IR**，
+只在 parser 拥有前端的地方运行（round-trip 文本、`@pl.function_parser` fixture）。在 tracing
+前端下它们是**静默 no-op**——body 照常执行，调用没有任何效果，失败的 `static_assert` 不会
+抛错。把断言移进一个会 raise 的宿主 `if`，或移进 verifier pass（指南 §8）。
 
 ```python
 @pl.function
@@ -173,20 +194,21 @@ def func(x: pl.Tensor[[128, 64], pl.FP16]) -> pl.Tensor[[128, 64], pl.FP16]:
     return x
 ```
 
+（上面的输出注释属于 parser 通道；tracing 下这四行都不产生任何输出。）
+
 | 函数 | 用途 | 失败时 |
 | ---- | ---- | ------ |
 | `pl.static_print(*args)` | 将变量类型/值打印到 stdout | 需要 ≥1 个参数 |
-| `pl.static_assert(cond, msg="")` | 断言编译期条件 | 抛出 `ParserError` |
-| `pl.dump_tag(tensor)` | 把某个张量标记为运行期选择性 dump 的目标 —— 声明式逐张量标记（在 Orchestration 作用域，或被 orch 内联的 Inline helper 中均可使用 —— 见 [运行期 DFX](../03-runtime-dfx.md#选择性张量-dump)） | 在非 Orchestration / Inline 函数中使用、或参数不是裸变量名时抛出 `ParserSyntaxError` |
+| `pl.static_assert(cond, msg="")` | 断言编译期条件 | 抛出 `ParserError`——仅 parser 通道；tracing 下静默 |
+| `pl.dump_tag(tensor)` | 把某个张量标记为运行期选择性 dump 的目标 —— 声明式逐张量标记（在 Orchestration 作用域，或被 orch 内联的 Inline helper 中均可使用 —— 见 [运行期 DFX](../03-runtime-dfx.md#选择性张量-dump)） | 在非 Orchestration / Inline 函数中使用、或参数不是裸变量名时抛出 `TypeError` |
 
 **要点：**
 
 - 三者均为语句级构造（不能用在表达式中）
 - `static_print` 接受变量、常量、字符串标签（原样打印）和 f-string 的简单 `{expr}` 占位符（格式化为 IR）。不支持转换标志（`!r`、`!s`、`!a`）和格式说明符（`:...`）。
-- `static_assert` 支持闭包变量表达式（如 `N > 32`）和 IR 常量
-- `static_assert` 的消息参数必须是字符串字面量
-- `dump_tag` 接受单个绑定在外层 Orchestration（或 Inline）作用域内的张量变量名，在解析期被消耗，并自始至终以 Var 身份（而非名字）跟踪到 codegen。在显式 `self.kernel(...)` 调用点，它把该张量记录到每个后续消费它的 Call 的 `dump_vars` 上；在 `@pl.jit` / `with pl.at(level=...)` 风格（派发由 outline pass 合成）下，它改为写入所在 scope 的 `dump_vars`，再由 outliner 映射到合成派发的实参上（见 [运行期 DFX](../03-runtime-dfx.md#选择性张量-dump)）。若需要在单次 task 启动处显式列出 dump 目标，请用 `pl.submit(...)` / `pl.at(...)` 上的 `dumps=[...]` kwarg（与 `deps=` 对称）
-- 即使后续解析失败，输出仍会显示——适用于调试解析错误
+- `static_assert` 支持闭包变量表达式（如 `N > 32`）和 IR 常量；消息参数必须是字符串字面量
+- `dump_tag` 接受单个绑定在外层 Orchestration（或 Inline）作用域内的张量变量名；tracing 前端会兑现它——标记在 trace 期被消耗，并自始至终以 Var 身份（而非名字）跟踪到 codegen。在显式 `self.kernel(...)` 调用点，它把该张量记录到每个后续消费它的 Call 的 `dump_vars` 上；在 `@pl.jit` / `with pl.at(level=...)` 风格（派发由 outline pass 合成）下，它改为写入所在 scope 的 `dump_vars`，再由 outliner 映射到合成派发的实参上（见 [运行期 DFX](../03-runtime-dfx.md#选择性张量-dump)）。若需要在单次 task 启动处显式列出 dump 目标，请用 `pl.submit(...)` / `pl.at(...)` 上的 `dumps=[...]` kwarg（与 `deps=` 对称）
+- parser 通道的输出即使后续解析失败也会显示——适用于调试解析错误
 
 ### 语句序列
 
@@ -196,27 +218,40 @@ stmt2
 stmt3
 ```
 
-## SSA 风格控制流
+## SSA 如何推导
 
-`pl.yield_()` 为 if/for 语句创建 SSA phi 节点:
+tracer 收集 body 实际执行的内容并自由重命名绑定，因此普通 Python 就是正常输入——
+[ConvertToSSA](../passes/04-convert_to_ssa.md) 在流水线早期运行，拥有全部图级数据流。源代码
+层面不为 merge 或 carry 做任何声明：
 
 ```python
-# If: phi node at merge point
+# If: merge 点的 phi 节点由两次赋值合成
 if condition:
-    y1 = pl.yield_(x + 1)
+    y1 = pl.add(x, 1.0)
 else:
-    y1 = pl.yield_(x + 2)
-# y1 = phi(x + 1, x + 2)
+    y1 = pl.add(x, 2.0)
+# y1 = phi(x + 1.0, x + 2.0) —— ConvertToSSA 之后
 
-# For: loop-carried values via iter_args
-sum_init: pl.INT64 = 0
-for i, (sum,) in pl.range(10, init_values=(sum_init,)):
-    sum = pl.yield_(sum + i)
-sum_final: pl.INT64 = sum  # captures final value
+# For: 循环携带值就是自引用的 rebind
+s = pl.const(0, pl.INT64)
+for i in pl.range(10):
+    s = s + i
+s_final = s  # 捕获最终值
 ```
+
+唯一仍然显式声明 carry 的地方是汇编通道（`pl.intrin.carry` / `yield_` / `leak`，迁移指南
+附录 A）——编译器 fixture，以及希望直接点名循环 iter args 的 kernel 代码在用（任务图依赖循环
+同样可以从 rebind 推导 carry；指南 §6.3）。
+
+printer 对同一控制流的 round-trip 渲染是显式方言：`for i, (s,) in pl.range(10,
+init_values=(...)):` 加 body 内 assignment 形式的 `pl.yield_`，SSA 形式的 while 则是
+`pl.while_(init_values=...)` 加首条 `pl.cond(...)`。那是 `pl.parse` 消费的文本（见
+[IR Parser](../ir/07-parser.md)）；tracing 输入从不那样拼写 carry。
 
 ## 参考资料
 
 - [Python IR 语法规范](00-python_syntax.md) —— 类型与表达式
 - [手工依赖原语](02-manual_dependencies.md) —— 退出自动依赖跟踪
 - [函数与程序结构](03-functions.md) —— 函数类型与参数方向
+- [控制流](../../user/language/02-control-flow.md) —— 同一组规则的用户侧讲述
+- [迁移指南](../../../design/04-migration-guide.md) —— 每个 parser 时代拼写及其 tracing 替换

@@ -13,10 +13,10 @@ PyPTO 的编译与执行入口比它拥有的概念要多，而且好几个名�
 ```text
   define              compile                 artifact                execute
   ────────────────────────────────────────────────────────────────────────────
-  @pl.program  ──┐                        CompiledProgram      ChipWorker.run()
-  @pl.function   ├─>  ir.compile()   ──>   Distributed-        DistributedWorker.run()
-  @pl.jit      ──┘    kernel.compile()     CompiledProgram     compiled(*args)
-                      kernel.lower()  ──>  ir.Program
+  @pl.program  ──┐                          CompiledProgram    ChipWorker.run()
+  @pl.function   ├─>  ir.compile()     ──>   Distributed-      DistributedWorker.run()
+  @pl.jit      ──┘    kernel.compile()       CompiledProgram   compiled(*args)
+                      kernel.compile_for_test()  ──>  ir.Program
 ```
 
 产物层之下还有一个**装配层（assembly layer）**——把 `.pto` 与 `.cpp` 变成可加载的
@@ -28,7 +28,7 @@ PyPTO 的编译与执行入口比它拥有的概念要多，而且好几个名�
 | -------- | ------ | -- |
 | 一个 `@pl.jit` 内核和 torch 张量 | 结果 | `kernel(*args, config=...)` |
 | 一个 `@pl.jit` 内核 | 产物，用于反复派发 | `kernel.compile(*args, config=...)` |
-| 一个 `@pl.jit` 内核 | IR，不做 codegen | `kernel.lower(*args)` |
+| 一个 `@pl.jit` 内核 | IR，不做 codegen | `kernel.compile_for_test(*args)` |
 | 一个 `@pl.program` 类 | 产物 | `ir.compile(program, ...)` |
 | 一个 `CompiledProgram` | 派发一次 | `compiled(*args, config=...)` |
 | 一个 `CompiledProgram` 和常驻设备的数据 | 派发多次 | `ChipWorker.run(compiled, *args)` |
@@ -41,8 +41,8 @@ PyPTO 的编译与执行入口比它拥有的概念要多，而且好几个名�
 | 入口 | 层 | 位置 |
 | ---- | -- | ---- |
 | `ir.compile` | 编译驱动 | [`ir/compile.py`](../../../python/pypto/ir/compile.py) |
-| `JITFunction.compile` | 特化 + 驱动 | [`jit/decorator.py`](../../../python/pypto/jit/decorator.py) |
-| `JITFunction.lower` | 只做特化，止于 `ir.Program` | 同上 |
+| jit `compile` | trace + 驱动 | [`language/tracer/decorators/jit.py`](../../../python/pypto/language/tracer/decorators/jit.py) |
+| jit `compile_for_test` | 只做 trace 与 pass，止于 `ir.Program` | 同上 |
 | `device_runner._compile_and_assemble` | 装配 | [`runtime/device_runner.py`](../../../python/pypto/runtime/device_runner.py) |
 | `device_runner._compile_single_kernel` / `_compile_single_orchestration` | 装配 | 同上 |
 | `KernelCompiler.compile_incore` | 调用 ptoas | [`runtime/kernel_compiler.py`](../../../python/pypto/runtime/kernel_compiler.py) |
@@ -190,8 +190,9 @@ compiled = ir.compile(program, **CompileOptions(platform="a2a3").as_compile_kwar
 
 `compile_kwargs()` 是通往 `ir.compile` 参数的唯一映射。`@pl.jit` 路径过去另有一份
 副本，省略 `platform` 与 `backend_type` 并单独转发 platform；现在它和其他调用方一样
-调用 `compile_kwargs()`，于是给一边加的开关不会在另一边悄悄缺席。`lower()` 仍有自己
-那份更窄的映射 —— 它止步于 codegen 之前，对准的是 pass 流水线而不是 `ir.compile`。
+调用 `compile_kwargs()`，于是给一边加的开关不会在另一边悄悄缺席。`compile_for_test()`
+完全在这份映射之外 —— 它只跑 pass 流水线，不接受 `config=`，也根本不会走到
+`ir.compile`。
 
 ## 层与层之间的箭头朝哪
 

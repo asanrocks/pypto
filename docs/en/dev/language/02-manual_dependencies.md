@@ -30,10 +30,10 @@ shape (single kernel call, outlined `pl.at` region, or dependency-only fan-in).
 
 | Surface | Producer shape | Notes |
 | ------- | -------------- | ----- |
-| `result, tid = pl.submit(kernel, *args, deps=[...], allow_early_resolve=False, timing_slot=<0..15>)` | single kernel call | The trailing `tid` is the producer `pl.Scalar[pl.TASK_ID]`. A parser construct (like `pl.range`), not a runtime function. `allow_early_resolve=True` opts this task in as a speculative early-dispatch producer (lets the scheduler pre-stage its consumers; lowers to `Arg::set_allow_early_resolve(true)`). `timing_slot=<0..15>` is an optional integer literal that tags this task for selective device timing; all tasks sharing a slot produce one span from their earliest dispatch to their latest completion. Also accepts `predicate=(t[i] > 0)` — a dispatch predicate the scheduler evaluates at the dispatch point (see [Dispatch predicate](#dispatch-predicate-predicate)). |
+| `result, tid = pl.submit(kernel, *args, deps=[...], allow_early_resolve=False, timing_slot=<0..15>)` | single kernel call | The trailing `tid` is the producer `pl.Scalar[pl.TASK_ID]`. A traced construct (like `pl.range`), not a runtime function. `allow_early_resolve=True` opts this task in as a speculative early-dispatch producer (lets the scheduler pre-stage its consumers; lowers to `Arg::set_allow_early_resolve(true)`). `timing_slot=<0..15>` is an optional integer literal that tags this task for selective device timing; all tasks sharing a slot produce one span from their earliest dispatch to their latest completion. Also accepts `predicate=(t[i] > 0)` — a dispatch predicate the scheduler evaluates at the dispatch point (see [Dispatch predicate](#dispatch-predicate-predicate)). |
 | `result, tid = pl.spmd_submit(kernel, *args, core_num=N, sync_start=False, deps=[...], timing_slot=<0..15>)` | single SPMD task launch | The SPMD sibling of `pl.submit`: dispatches the kernel across `N` blocks (one orchestration task → one `tid`). `core_num` is a required keyword (positive int expr); `sync_start=True` forces atomic launch of all blocks. Callee may be InCore / AIC / AIV / Group. Records the launch spec on `Submit.core_num` / `Submit.sync_start`. Also accepts `allow_early_resolve=True` (same early-dispatch opt-in as `pl.submit`), `timing_slot=<0..15>` (same literal selective device-timing tag as `pl.submit`), and `predicate=(t[i] > 0)` (see [Dispatch predicate](#dispatch-predicate-predicate)). |
 | `with pl.at(level=pl.Level.CORE_GROUP, deps=[...]) as tid:` | outlined `pl.at`-block | The whole block is outlined into an `InCore` kernel + `Submit`; `tid` captures the synthesized Submit's TaskId, usable as a dep for later `pl.submit` / `pl.at` sites. Without `as tid` the outliner synthesizes an unused TaskId Var — deps always travel on `Submit::deps_`. Also accepts `allow_early_resolve=True` (same early-dispatch opt-in as `pl.submit`); it forces the `Submit` shape even without `as tid` and lowers to `Arg::set_allow_early_resolve(true)`. Also accepts `predicate=(t[i] > 0)` (see [Dispatch predicate](#dispatch-predicate-predicate); `level=pl.Level.CORE_GROUP` only, and also forces the `Submit` shape). Cannot nest inside `pl.cluster()` / `pl.spmd()` / another CORE_GROUP `pl.at`, and the enclosing function must be one `OutlineIncoreScopes` rewrites (not `Group` / `Spmd` / an InCore-family kernel). |
-| `with pl.spmd(N, deps=[...]) as tid:` | outlined SPMD dispatch | The SPMD sibling of the `pl.at ... as tid` form. The inline body is auto-outlined into an `InCore` kernel and dispatched across `N` blocks; `tid` captures the grid-wide producer TaskId. `deps=` is accepted on all three spmd forms; without `as tid` the outliner synthesizes an unused TaskId Var, exactly as on `pl.at`. `core_num` / `sync_start` ride on the lowered `Submit`'s own `core_num` / `sync_start` fields (the launch spec belongs to the launch site, not the outlined callee); codegen reads them from there. Also accepts `allow_early_resolve=True` (same early-dispatch opt-in as `pl.submit` / `pl.at`; valid on all three `pl.spmd` forms, forcing the `Submit` shape even without `as tid`) and `predicate=(t[i] > 0)` (see [Dispatch predicate](#dispatch-predicate-predicate); also valid on all three forms and also forces the `Submit` shape). Cannot nest inside `pl.cluster()`. |
+| `with pl.spmd(N, deps=[...]) as tid:` | outlined SPMD dispatch | The SPMD sibling of the `pl.at ... as tid` form. The inline body is auto-outlined into an `InCore` kernel and dispatched across `N` blocks; `tid` captures the grid-wide producer TaskId. `deps=` is accepted **only on the `as tid` capture form** — the plain `with` and the `for i in pl.spmd(...)` form both reject it with a loud `TypeError` naming the two supported spellings (the edges have no TaskId var to hang on); `pl.at` is the scope form that accepts `deps=` without `as tid`. `core_num` / `sync_start` ride on the lowered `Submit`'s own `core_num` / `sync_start` fields (the launch spec belongs to the launch site, not the outlined callee); codegen reads them from there. Also accepts `allow_early_resolve=True` (same early-dispatch opt-in as `pl.submit` / `pl.at`; valid on all three `pl.spmd` forms, forcing the `Submit` shape even without `as tid`) and `predicate=(t[i] > 0)` (see [Dispatch predicate](#dispatch-predicate-predicate); also valid on all three forms and also forces the `Submit` shape). Cannot nest inside `pl.cluster()`. |
 | `barrier = pl.system.task_dummy(deps=[...])` | dependency-only barrier | Submits no kernel. The returned TaskId is a compact fan-in point for later `deps=[barrier]`. |
 | `None` (Python literal) | seed / dep entry | The "no producer yet" sentinel. `prev_tid = None` seeds a TaskId loop iter_arg; `None` in `deps=[None]` is dropped (contributes no edge). Lowers to `system.task_invalid` → `TaskId::invalid()`. |
 
@@ -55,8 +55,9 @@ output tensors. Explicit edges add to the automatic per-rank comm ordering
 chain the distributed codegen maintains.
 
 Plain `out = self.kernel(...)` is **fire-and-forget**: it returns no task
-id, and `deps=` is rejected on it (the parser raises, hinting "use
-`pl.submit`"). Each `deps=[...]` entry must be a TaskId value: a `tid`
+id, and `deps=` is rejected on it — a plain sub-kernel call takes no
+keyword arguments at all (the trace-time `TypeError` names the offending
+kwarg; use `pl.submit` to declare edges). Each `deps=[...]` entry must be a TaskId value: a `tid`
 bound by a prior `pl.submit(...)` / `pl.at(..., deps=) as tid`, the result of
 `pl.system.task_dummy(deps=[...])`, a TaskId loop iter_arg carry, a
 `Scalar[TASK_ID]` read from a TaskId array slot (`prev = tids[k]`), an
@@ -65,41 +66,66 @@ bound by a prior `pl.submit(...)` / `pl.at(..., deps=) as tid`, the result of
 
 ```python
 # Example 1 — both mechanisms together: scope-wide opt-out + explicit edge.
-@pl.function(type=pl.FunctionType.Orchestration)
-def main(self, x: pl.Tensor[[64], pl.FP32],
-         scratch: pl.Out[pl.Tensor[[64], pl.FP32]],
-         out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
-    with pl.manual_scope():                                           # Mechanism A: scope-wide
-        scratch, stage1_tid = pl.submit(self.stage1, x, scratch)
-        out, _ = pl.submit(self.stage2, scratch, out, deps=[stage1_tid])  # Mechanism B
-    return out
+@pl.program
+class Chain:
+    @pl.function(type=pl.FunctionType.InCore)
+    def stage1(self, x: pl.Tensor[[64], pl.FP32],
+               scratch: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        return pl.store(pl.load(x, [0], [64]), [0], scratch)
+
+    @pl.function(type=pl.FunctionType.InCore)
+    def stage2(self, x: pl.Tensor[[64], pl.FP32],
+               out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        return pl.store(pl.load(x, [0], [64]), [0], out)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[64], pl.FP32],
+             scratch: pl.Out[pl.Tensor[[64], pl.FP32]],
+             out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        with pl.manual_scope():                                           # Mechanism A: scope-wide
+            scratch, stage1_tid = pl.submit(self.stage1, x, scratch)
+            out, _ = pl.submit(self.stage2, scratch, out, deps=[stage1_tid])  # Mechanism B
+        return out
 ```
 
 ```python
 # Example 2 — Mechanism B alone, NO manual_scope. Auto-tracking stays on
 # for everything else; the explicit edge is *added on top* of whatever
 # auto-tracking decided. Note the absence of `with pl.manual_scope():`.
-@pl.function(type=pl.FunctionType.Orchestration)
-def main(self, x: pl.Tensor[[64], pl.FP32],
-         out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
-    tmp, prep_tid = pl.submit(self.preprocess, x)
-    out, _ = pl.submit(self.consume, tmp, out, deps=[prep_tid])
-    return out
+@pl.program
+class Pipeline:
+    @pl.function(type=pl.FunctionType.InCore)
+    def preprocess(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+        return pl.store(pl.load(x, [0], [64]), [0], x)
+
+    @pl.function(type=pl.FunctionType.InCore)
+    def consume(self, x: pl.Tensor[[64], pl.FP32],
+                out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        return pl.store(pl.load(x, [0], [64]), [0], out)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[64], pl.FP32],
+             out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        tmp, prep_tid = pl.submit(self.preprocess, x)
+        out, _ = pl.submit(self.consume, tmp, out, deps=[prep_tid])
+        return out
 ```
 
 ```python
 # Example 3 — pl.at-block as the producer, with deps= on a downstream block.
 # `as tid` captures the synthesized outlined-Call's TaskId.
-@pl.function(type=pl.FunctionType.Orchestration)
-def main(self, x: pl.Tensor[[64], pl.FP32],
-         out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
-    with pl.at(level=pl.Level.CORE_GROUP) as tid_a:
-        # body becomes an outlined InCore kernel
-        ...
-    with pl.at(level=pl.Level.CORE_GROUP, deps=[tid_a]) as tid_b:
-        # explicit edge — runs strictly after the `tid_a` block
-        ...
-    return out
+@pl.program
+class AtChain:
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[64], pl.FP32],
+             out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        with pl.at(level=pl.Level.CORE_GROUP) as tid_a:
+            # body becomes an outlined InCore kernel
+            out = pl.store(pl.load(x, [0], [64]), [0], out)
+        with pl.at(level=pl.Level.CORE_GROUP, deps=[tid_a]) as tid_b:
+            # explicit edge — runs strictly after the `tid_a` block
+            out = pl.store(pl.load(out, [0], [64]), [0], out)
+        return out
 ```
 
 ```python
@@ -114,7 +140,7 @@ out, _ = pl.submit(self.consume, scratch, out, deps=[prod_tid])
 `pl.submit` desugars to a single `ir.Submit` whose return type is the flat
 augmented `TupleType([*<kernel return types>, ScalarType(TASK_ID)])` —
 elements `0..N-1` are the kernel results, element `N` is the producer
-TaskId. The parser writes each `deps=[...]` list directly into the typed
+TaskId. The construct lowers each `deps=[...]` list directly into the typed
 `Submit::deps_` field (no plain `Call` ever carries `manual_dep_edges` —
 the ManualDepsOnSubmitOnly invariant). `pl.at(..., deps=)` follows the same
 path: the outliner reads `attrs["task_id_var"]` and `attrs["manual_dep_edges"]`
@@ -125,10 +151,10 @@ exact dep count and emits one `params.set_dependencies(arr, count);`
 call per task. The runtime's `Arg::set_dependencies(ptr, count)` accepts a
 caller-owned array of arbitrary size, so there is no per-call edge cap.
 For explicit fan-in, write `barrier = pl.system.task_dummy(deps=[tids])` and
-then `pl.submit(..., deps=[barrier])`; it uses the same dependency parser,
-lowers to `rt_submit_dummy_task(...)`, returns invalid without submitting when
-all deps are invalid, and coexists with automatic `ExpandManualPhaseFence`
-barriers for profitable full-array phase fences.
+then `pl.submit(..., deps=[barrier])`; it uses the same dependency
+lowering, lowers to `rt_submit_dummy_task(...)`, returns invalid without
+submitting when all deps are invalid, and coexists with automatic
+`ExpandManualPhaseFence` barriers for profitable full-array phase fences.
 
 `pl.no_dep(arg)` is an auto-scope primitive; inside `pl.manual_scope` it
 has no effect (the whole region already skips auto-tracking).
@@ -149,14 +175,17 @@ each carrying `predicate=(row_count[e] > 0)` and depending on the gather
 producer — the scheduler dispatches only the non-empty experts, without stalling
 orchestration to read the per-expert count.
 
-> **The comparison is parsed as an ordinary expression, but never evaluated.**
-> `rc[0, 0]` is the usual sugar for `pl.read`, so the kwarg lowers to plain IR —
-> `Gt(Cast(tensor.read(rc, [0, 0])), 0)` — reusing the IR's existing comparison
-> nodes rather than any bespoke encoding. It is stored on `Submit.predicate`,
-> never in a statement position, so the `tensor.read` is **not** executed in
-> orchestration: doing so would stall on `wait_for_tensor_ready`, exactly what
-> the predicate exists to avoid. Orchestration codegen decomposes the Expr into
-> the runtime's `operand OP target` triple, so only the shape below is accepted.
+> **The comparison is evaluated at trace time into a staged expression, but
+> never executed.** `rc[0, 0]` is the usual sugar for `pl.read`, so the
+> kwarg lowers to plain IR — `Gt(Cast(tensor.read(rc, [0, 0])), 0)` —
+> reusing the IR's existing comparison nodes rather than any bespoke
+> encoding. It is stored on `Submit.predicate`, never in a statement
+> position, so the `tensor.read` is **not** executed in orchestration: doing
+> so would stall on `wait_for_tensor_ready`, exactly what the predicate
+> exists to avoid. Orchestration codegen decomposes the Expr into the
+> runtime's `operand OP target` triple, so only the shape below is
+> accepted — and codegen is where that shape is **enforced** (see
+> Expressiveness below).
 
 | Part | Meaning | Constraint |
 | ---- | ------- | ---------- |
@@ -179,30 +208,31 @@ submit's `deps=`, so the dispatch-point read observes the current value. Omittin
 it lets the scheduler evaluate the predicate before the producer has written the
 tensor, deciding from stale data.
 
-The parser makes a **best-effort spot check**, not a guarantee: it tracks the
-result variables a `pl.submit(...)` binds via tuple unpacking, and rejects a
-predicate whose operand is one of them when the producing TaskId is absent from
-`deps=`. Treat a clean parse as "no obvious mistake found", not as proof.
-
-It does **not** see through, and therefore silently accepts:
-
-| Not covered | Why |
-| ----------- | --- |
-| `rc2 = rc` then `rc2[0, 0]` | the alias is a fresh variable with no recorded producer |
-| a tensor passed as an `pl.Out` argument and rebound under a new name | only the returned binding is tracked, not the argument alias |
-| `rc3 = self.helper(rc)` | any intervening call launders the association |
-| `res = pl.spmd_submit(...)` (single-target form) | the single-target path records nothing |
-| any `deps=` list containing an `Array[N, TASK_ID]` entry — including the common `deps=[tids[i]]` | array entries do not name their producers individually, so the whole check is skipped for that submit |
-| a producer written **later** in the source, e.g. a loop-carried `rc` written by the previous iteration | the lookup happens while parsing the predicate, so producers that follow it are not yet recorded |
-
-Getting `deps=` right therefore remains the author's responsibility.
+**Nothing checks this contract under tracing.** The parser-era frontend ran a
+best-effort spot check (it tracked the result variables a `pl.submit(...)`
+binds via tuple unpacking and rejected a predicate whose operand was one of
+them when the producing TaskId was absent from `deps=`); the tracing frontend
+has no equivalent — a predicate whose producer is outside `deps=` traces and
+runs with **no diagnostic at any stage** (neither at trace time nor in the
+passes). Getting `deps=` right is entirely the author's responsibility.
 
 **Expressiveness** is fixed to `tensor[indices] OP const` — one comparison,
-matching the runtime's single-comparison `DispatchPredicate`. Chained
-comparisons (`0 < t[i] < 8`), arithmetic (`t[i] % 8 == 0`), boolean combination
-(`a[0] > 0 and b[0] > 0`), and a non-literal right-hand side (`t[i] > u[i]`) are
-all rejected at parse time; reduce anything richer to a single gate value in a
-prior kernel and predicate on that.
+matching the runtime's single-comparison `DispatchPredicate`. Where each
+violation is rejected under tracing:
+
+- chained comparisons (`0 < t[i] < 8`) — at **trace time**: the chain
+  coerces the staged comparison to bool (`Cannot convert Scalar to bool.
+  Scalar wraps an IR expression and has no host truth value.`);
+- arithmetic (`t[i] % 8 == 0`), boolean combination
+  (`a[0] > 0 and b[0] > 0`), and a non-literal right-hand side
+  (`t[i] > u[i]`) — these all **trace**, but **orchestration codegen**
+  rejects them (`Submit dispatch predicate must be a single comparison
+  (==, !=, >, <, >=, <=) between a tensor element and an integer literal`
+  / `... must compare a tensor element (a tensor.read, e.g. t[i]) against
+  an integer literal`).
+
+Reduce anything richer to a single gate value in a prior kernel and
+predicate on that.
 
 ```python
 with pl.manual_scope():
@@ -215,16 +245,18 @@ with pl.manual_scope():
 ```
 
 **Scope:** `predicate=` is accepted on `pl.submit` / `pl.spmd_submit` (the
-direct-`Submit` forms), on the `with pl.spmd(...)` scope form — all three spmd
-spellings (plain `with`, `with ... as tid`, and `for i in pl.spmd(...)`) — and
-on `with pl.at(level=pl.Level.CORE_GROUP, ...)`.
+direct-`Submit` forms), on the `with pl.spmd(...)` scope form — all three
+spmd spellings (plain `with`, `with ... as tid`, and `for i in pl.spmd(...)`)
+— and on `with pl.at(level=pl.Level.CORE_GROUP, ...)` (see
+[the `pl.at` scope form](#plat-scope-form) below for its placement rules).
 
 ### Scope forms
 
-A scope form takes the same expression and the same validation; it differs only
-in how the predicate reaches the IR. It rides on the scope's `attrs` until the
-scope is outlined, at which point it moves onto `Submit.predicate` — so the
-lowering, the codegen output, and the contract are identical.
+A scope form takes the same expression; it differs only in how the predicate
+reaches the IR. It rides on the scope's `attrs` until the scope is outlined,
+at which point it moves onto `Submit.predicate` — so the lowering, the codegen
+output, and the contract are identical. (The shape itself is enforced by
+orchestration codegen, exactly as on the call forms.)
 
 #### `pl.spmd` scope form
 
@@ -238,24 +270,29 @@ with pl.spmd(4, deps=[g_tid], predicate=(rc[0, 0] > 0)) as tid:  # producer is a
 
 Two things follow from that route:
 
-- **`deps=` needs no `as tid`.** Like `allow_early_resolve=True` and
-  `predicate=`, `deps=` is accepted on all three spmd forms and forces the scope
-  to lower to a `Submit`; when the scope has no `as tid` the outliner synthesises
-  an unused TaskId Var. Capturing the TaskId is only needed when a *later* task
-  must wait on this one.
-- **The contract still binds the predicate.** A predicate over a tensor produced
-  elsewhere in the same function needs that producer in `deps=` — which every
-  form can now express.
+- **`deps=` needs the `as tid` form.** Unlike `allow_early_resolve=True` and
+  `predicate=`, `deps=` is accepted only on the capture form — the plain
+  `with` and the `for i in pl.spmd(...)` form both reject it at trace time
+  with a `TypeError` naming the two supported spellings (the edges have no
+  TaskId var to hang on). `pl.at` is the scope form that accepts `deps=`
+  without `as tid` (the outliner synthesises an unused TaskId Var). Capturing
+  the TaskId is only needed when a *later* task must wait on this one — but
+  with `deps=` you capture it anyway.
+- **The contract still binds the predicate.** A predicate over a tensor
+  produced elsewhere in the same function needs that producer in `deps=` —
+  expressible on the `as tid` form. As on the call forms, nothing checks it
+  under tracing (the parser-era spot check — which also recorded tensors
+  assigned inside a scope body as produced by that scope — does not exist
+  here; a scope-produced operand missing from `deps=` traces with no
+  diagnostic).
 
 A cluster-nested `pl.spmd` is unwrapped into the Group function and never
 produces a `Submit`, so `predicate=` (like `allow_early_resolve=`) is rejected
-there at parse time rather than silently dropped.
-
-The contract check covers scope producers too: a tensor assigned inside a
-`with pl.spmd(...) as tid:` / `with pl.at(...) as tid:` body is recorded as
-produced by that scope, so omitting it from a later `deps=` is rejected. The
-same best-effort limits in the table above still apply (aliases, intervening
-calls, `Array[N, TASK_ID]` deps).
+there at trace time with a loud `TypeError` rather than silently dropped.
+As on the call forms, nothing checks the producer-in-`deps=` contract for a
+scope-produced operand either — a predicate over a tensor assigned inside a
+`with pl.spmd(...) as tid:` body, predicated without that dep, traces with no
+diagnostic.
 
 #### `pl.at` scope form
 
@@ -268,19 +305,23 @@ with pl.at(level=pl.Level.CORE_GROUP,                            # producer is a
     out = pl.store(pl.load(x, [0, 0], [128, 128]), [0, 0], out)
 ```
 
-Two `pl.at`-specific rules, both because a predicate only has a runtime carrier
-where the scope becomes an independently submitted task:
+The lowering is identical to the `pl.spmd` scope form above: the predicate
+rides on the scope's `attrs` until `OutlineIncoreScopes` moves it onto the
+synthesised `Submit.predicate`, so the codegen output and the contract are
+the same. Two `pl.at`-specific placement rules apply, both because a
+predicate only has a runtime carrier where the scope becomes an independently
+submitted task — each is rejected at trace time with a loud `TypeError`:
 
 - **`level=pl.Level.CORE_GROUP` only.** Any other level builds a Hierarchy
-  scope, which is never outlined into a task dispatch, so the predicate would be
-  silently dropped. Rejected at parse time.
+  scope, which is never outlined into a task dispatch, so the predicate would
+  be silently dropped.
 - **The scope must be the thing that gets dispatched.** Nesting inside
   `pl.cluster()` / `pl.spmd()` / another CORE_GROUP `pl.at` folds the inner
-  dispatch into the enclosing Group / Spmd wrapper (or into the enclosing kernel
-  body), and codegen emits `set_predicate` from the *outer* call only. Writing it
-  directly in a `Group` / `Spmd` / InCore-family function body is worse still:
-  `OutlineIncoreScopes` skips those bodies, so no `Submit` is built at all. Both
-  are rejected at parse time.
+  dispatch into the enclosing Group / Spmd wrapper (or into the enclosing
+  kernel body), and codegen emits `set_predicate` from the *outer* call only.
+  Writing it directly in a `Group` / `Spmd` / InCore-family function body is
+  worse still: `OutlineIncoreScopes` skips those bodies, so no `Submit` is
+  built at all.
 
   Nesting inside a *non*-CORE_GROUP `pl.at` is fine — a Hierarchy scope is not a
   task wrapper, so the inner scope is still outlined into its own `Submit` and
@@ -288,7 +329,9 @@ where the scope becomes an independently submitted task:
 
 As on `pl.spmd`, `deps=` is accepted on every `pl.at` form, so a predicate over
 a locally produced tensor needs `as tid` only on the *producing* scope, to name
-it in `deps=`.
+it in `deps=`. And as everywhere else under tracing, the producer-in-`deps=`
+contract is not checked — getting `deps=` right remains the author's
+responsibility.
 
 ## `pl.parallel` under manual scope: array-carry fence
 
@@ -312,7 +355,7 @@ with pl.manual_scope():
     for phase in pl.range(N_PHASES):
         for branch in pl.parallel(N_BRANCHES):           # const trip count
             row = (phase * N_BRANCHES + branch) * TILE_M
-            out, prev_tid = pl.submit(self.kernel_stripe, data, row, 1.0, out, deps=[prev_tid])
+            out, prev_tid = pl.submit(self.kernel_stripe, data, row, out, deps=[prev_tid])
 ```
 
 `prev_tid` is rebound inside `pl.parallel`, so codegen lowers the carry as

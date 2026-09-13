@@ -1,15 +1,15 @@
 # OutlineGraphScopes Pass
 
-将 `pl.graph` 区域提取为 `FunctionType::Graph` 函数，使作用域形式与
-`@pl.jit.graph` 汇聚为同一种表示。
+将 `pl.graph` 区域提取为 `FunctionType::Graph` 函数，使作用域形式与独立的
+`@pl.function(type=pl.FunctionType.Graph)` 函数汇聚为同一种表示。
 
 ## 概述
 
 该 Pass 将 `GraphScopeStmt` 节点（由 `with pl.graph("name"):` 生成）变换为
 `Function(Graph)` 定义，并将原作用域替换为对提取函数的调用。
 
-它存在的全部意义就是**汇聚 (convergence)**。该 Pass 之后，用户就地标记的区域与用户用
-`@pl.jit.graph` 装饰的函数具有相同的形态 —— 一个带编排元数据的 `Function(Graph)` 加一个
+它存在的全部意义就是**汇聚 (convergence)**。该 Pass 之后，用户就地标记的区域与用户手写
+的独立 Graph 函数具有相同的形态 —— 一个带编排元数据的 `Function(Graph)` 加一个
 `Call` —— 因此 `LegalizeGraphBoundary`、Graph 验证器与编排代码生成都无需知道用户写的是
 哪一种形式。两种形式并存是出于书写习惯而非语义差异：装饰器适合本身已是独立函数的
 layer；作用域适合用户不愿拆分出去的、较大编排函数体中的一段。
@@ -32,7 +32,7 @@ layer；作用域适合用户不愿拆分出去的、较大编排函数体中的
 
 **为什么是这个位置**。被标记区域内部的 InCore 作用域必须在该区域*成为函数之后*
 才被提取，这样 `OutlineIncoreScopes` 看到的输入与它处理手写
-`@pl.jit.graph` 函数时看到的输入完全一致 —— 一个携带 `pl.at` 作用域的编排函数体
+Graph 函数时看到的输入完全一致 —— 一个携带 `pl.at` 作用域的编排函数体
 —— 从而产生一致的输出。反过来做、或者放到流水线更靠后的位置，都会让
 `GraphScopeStmt` 存活穿过数十个 Pass，而每个 Pass 都要学会处理它；RFC (#2399)
 明确指出这正是作用域形态载体的主要代价，而提前提取正是规避该代价的手段。
@@ -87,8 +87,8 @@ program_outlined = outline_pass(program)
    使用的值成为返回值，作用域本身被替换为一个 Call。
 
 提取出的函数不需要额外补 level/role：`Function` 的构造函数会为任何编排类类型推导出
-`Level::CHIP` + `Role::Orchestrator`，因此这里产生的 Graph 天然带着与解析器给
-`@pl.jit.graph` 函数相同的元数据。
+`Level::CHIP` + `Role::Orchestrator`，因此这里产生的 Graph 天然带着独立 Graph 函数
+声明时所带的相同元数据。
 
 ## 命名与 graph key
 

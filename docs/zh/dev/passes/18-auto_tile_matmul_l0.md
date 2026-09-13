@@ -150,7 +150,9 @@ class Before:
         ...
 ```
 
-**After**（chooser 选定 `m = 128, n = 128, k = 64`）：
+**After**（chooser 选定 `m = 128, n = 128, k = 64`）。本页的 `After` 代码块展示的是
+pass 生成的 IR，采用打印机的往返写法（`init_values=` / `pl.yield_`）；用户从不书写这种
+形式——输入始终保持 `Before` 的形态：
 
 ```python
 @pl.program

@@ -373,7 +373,7 @@ runtime = ir.RuntimeScopeStmt(manual=True, name_hint="", body=body, span=span)
     and standalone `SpmdScopeStmt` into `Function(Spmd)`
   - `OutlineHierarchyScopes` extracts `HierarchyScopeStmt`
   - `OutlineGraphScopes` extracts `GraphScopeStmt` into `Function(Graph)`, so the
-    scope form and `@pl.jit.graph` converge before any later pass sees them
+    scope form and a `@pl.jit.graph` function converge before any later pass sees them
   - `SplitAivScopeStmt` is **non-outlined**: it is transparent to SSA and to the
     outliners (it survives inside an outlined `Function(InCore)` body), then is
     lowered in place by `LowerAutoVectorSplit` (pass 23), which retains the

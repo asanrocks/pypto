@@ -455,6 +455,15 @@ body never rebinds — aliases both names straight to that expression instead. T
 one path that still requires the init to *name* something is the `ArrayType`
 carry copy-in, which indexes it slot-by-slot.
 
+An `ArrayType` carry whose body rebinds a fresh array per iteration
+(`tids = tids_next`) reaches codegen as a body-level Var→Var `AssignStmt`. A raw
+C array can be neither declared from its type nor assigned, so that statement
+aliases the LHS's emit name onto the RHS's backing array (the same reference
+semantics as `array.update_element` and the array phis below); loop-carried
+state propagates through the `YieldStmt`'s slot-by-slot copy into the carry.
+The emitted C++ is identical to the explicit channel spelling
+(`pl.intrin.carry` / `yield_` / `leak`) of the same loop.
+
 ### IfStmt
 
 ```python

@@ -40,19 +40,24 @@ program_opt = opt_pass(program)
 **优化前**：
 
 ```python
-for i in pl.range(N, init_values=[init_buf]):
-    out: pl.Tensor = pl.tensor.create(shape, dtype=pl.FP32)  # 冗余分配
-    result: pl.Tensor = self.incore_fn(iter_arg, out)          # In + Out 参数
-    pl.yield_(result)
+(iter_arg,) = pl.intrin.carry(init_buf)
+for i in pl.range(N):
+    out = pl.create_tensor(shape, dtype=pl.FP32)  # 冗余分配
+    result = self.incore_fn(iter_arg, out)        # In + Out 参数
+    pl.intrin.yield_(result)
 ```
 
 **优化后**：
 
 ```python
-for i in pl.range(N, init_values=[init_buf]):
-    result: pl.Tensor = self.incore_fn(iter_arg)  # InOut 参数（复用 iter-arg 缓冲区）
-    pl.yield_(result)
+(iter_arg,) = pl.intrin.carry(init_buf)
+for i in pl.range(N):
+    result = self.incore_fn(iter_arg)  # InOut 参数（复用 iter-arg 缓冲区）
+    pl.intrin.yield_(result)
 ```
+
+`pl.intrin.carry`/`yield_` 通道写法（汇编方言，迁移指南附录 A）显式声明 iter-arg 反馈；
+打印机会把同一个循环渲染成 `init_values=`/`pl.yield_` 的往返文本。
 
 ### 模式 2：Assemble 父张量步长（AssembleParentStridesOptimizer）
 
@@ -209,10 +214,12 @@ class Before:
 
     @pl.function(type=pl.FunctionType.Orchestration)
     def main(self, buf: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-        for i in pl.range(10, init_values=[buf]):
-            out_0 = pl.tensor.create((64,), dtype=pl.FP32)
+        (iter_arg,) = pl.intrin.carry(buf)
+        for i in pl.range(10):
+            out_0 = pl.create_tensor([64], dtype=pl.FP32)
             result = self.compute(iter_arg, out_0)
-            pl.yield_(result)
+            pl.intrin.yield_(result)
+        (loop_result,) = pl.intrin.leak()
         return loop_result
 ```
 
@@ -230,9 +237,11 @@ class After:
 
     @pl.function(type=pl.FunctionType.Orchestration)
     def main(self, buf: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-        for i in pl.range(10, init_values=[buf]):
+        (iter_arg,) = pl.intrin.carry(buf)
+        for i in pl.range(10):
             result = self.compute(iter_arg)
-            pl.yield_(result)
+            pl.intrin.yield_(result)
+        (loop_result,) = pl.intrin.leak()
         return loop_result
 ```
 

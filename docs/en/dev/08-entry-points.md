@@ -16,10 +16,10 @@ a name does not say which:
 ```text
   define              compile                 artifact                execute
   ────────────────────────────────────────────────────────────────────────────
-  @pl.program  ──┐                        CompiledProgram      ChipWorker.run()
-  @pl.function   ├─>  ir.compile()   ──>   Distributed-        DistributedWorker.run()
-  @pl.jit      ──┘    kernel.compile()     CompiledProgram     compiled(*args)
-                      kernel.lower()  ──>  ir.Program
+  @pl.program  ──┐                          CompiledProgram    ChipWorker.run()
+  @pl.function   ├─>  ir.compile()     ──>   Distributed-      DistributedWorker.run()
+  @pl.jit      ──┘    kernel.compile()       CompiledProgram   compiled(*args)
+                      kernel.compile_for_test()  ──>  ir.Program
 ```
 
 Below the artifact layer sits an **assembly layer** — turning `.pto` and `.cpp`
@@ -31,7 +31,7 @@ into loadable binaries. It is internal and has no supported entry point.
 | -------- | -------- | --- |
 | A `@pl.jit` kernel and torch tensors | The result | `kernel(*args, config=...)` |
 | A `@pl.jit` kernel | The artifact, to dispatch repeatedly | `kernel.compile(*args, config=...)` |
-| A `@pl.jit` kernel | The IR, without codegen | `kernel.lower(*args)` |
+| A `@pl.jit` kernel | The IR, without codegen | `kernel.compile_for_test(*args)` |
 | A `@pl.program` class | The artifact | `ir.compile(program, ...)` |
 | A `CompiledProgram` | One dispatch | `compiled(*args, config=...)` |
 | A `CompiledProgram` and device-resident data | Many dispatches | `ChipWorker.run(compiled, *args)` |
@@ -44,8 +44,8 @@ into loadable binaries. It is internal and has no supported entry point.
 | Entry | Layer | Location |
 | ----- | ----- | -------- |
 | `ir.compile` | compile driver | [`ir/compile.py`](../../../python/pypto/ir/compile.py) |
-| `JITFunction.compile` | specialize + driver | [`jit/decorator.py`](../../../python/pypto/jit/decorator.py) |
-| `JITFunction.lower` | specialize only, stops at `ir.Program` | same |
+| jit `compile` | trace + driver | [`language/tracer/decorators/jit.py`](../../../python/pypto/language/tracer/decorators/jit.py) |
+| jit `compile_for_test` | trace + passes only, stops at `ir.Program` | same |
 | `device_runner._compile_and_assemble` | assembly | [`runtime/device_runner.py`](../../../python/pypto/runtime/device_runner.py) |
 | `device_runner._compile_single_kernel` / `_compile_single_orchestration` | assembly | same |
 | `KernelCompiler.compile_incore` | ptoas invocation | [`runtime/kernel_compiler.py`](../../../python/pypto/runtime/kernel_compiler.py) |
@@ -215,8 +215,8 @@ Moving those five out to the harness is the step this does not take: they reach
 `@pl.jit` path used to carry a second copy that omitted `platform` and
 `backend_type` and forwarded the platform separately; it now calls
 `compile_kwargs()` like every other caller, so a knob added to one is not
-silently missing from the other. `lower()` still has its own narrower mapping —
-it stops before codegen and targets the pass pipeline, not `ir.compile`.
+silently missing from the other. `compile_for_test()` is outside the mapping entirely —
+it runs the pass pipeline only, takes no `config=`, and never reaches `ir.compile`.
 
 ## Which way the layers point
 

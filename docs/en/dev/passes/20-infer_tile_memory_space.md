@@ -114,6 +114,12 @@ The pass *never* overrides a present `target_memory` kwarg in Phase 1. If a user
 
 Walks the function body again. For every `Call` whose op has `input_constraints`, it checks each constrained input variable's resolved `var_memory_` against the allowed list. Any mismatch is recorded as a `MoveKey = (producer_var, target_space)` in `needed_moves_`, where `target_space` is the first allowed space for that input slot. Phase 3 will materialize at most one `tile.move` per unique key per enclosing `SeqStmts` scope (i.e. per insertion-site cache scope), so the same `(producer_var, target_space)` may still appear in sibling scopes such as `then` / `else` branches.
 
+#### Matches-arg constraints (`tile.assemble`)
+
+Some ops cannot name an input's legal spaces at registration time because they depend on another operand's placement. `tile.assemble(target, source, offset)` is the motivating case: its same-config lowering (`pto.subview` + `pto.tmov`) requires the source to already live in the target's space, while the op itself implements the converting Acc → Mat writeback (FIXPIPE / `pto.tinsert`). It therefore registers `set_input_memory_matches_arg(1, 0, allow_acc_when_mat=true)`: argument 1 (the source) must share argument 0's (the target's) *resolved* space, with `Acc` additionally legal against a `Mat` target.
+
+Phase 0 records no demand for a matches-arg constraint — the target's space is unknown until Phase 1 resolves it. Phases 2 and 3 evaluate the constraint through `RequiredSpaceForArg` against `var_memory_` (falling back to the requirement operand's own `TileType` annotation), and the `TileMemoryInferred` verifier re-checks it annotation-only after the pass. A cube-produced (`Acc`) source against a `Vec` target therefore gets an explicit `Acc → Vec` bridging `tile.move` queued ahead of the assemble — the boundary `ExpandMixedKernel` then folds into a `tpush` / `tpop` pair (the online-softmax accumulator update of `examples/models/03_flash_attention.py`). When the requirement itself resolved to a space no target can copy into (`Acc`), the mismatch is a user error and is rejected here with the pattern named, instead of surfacing later as a backend layout error.
+
 ### Phase 3 — Mutation (`TileMemorySpaceMutator`)
 
 A full `IRMutator` rewrite that produces the new function body:
@@ -153,15 +159,17 @@ The initial legality rules are intentionally strict:
 For a tensor program whose root orchestration function creates fresh LHS storage before calling the InCore kernel, the stationary LHS bridge moves before the user loop, while the N-dependent RHS remains streamed:
 
 ```python
-# Tensor source
-for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+# Tensor source (assembly channel spelling states the carry explicitly)
+(acc,) = pl.intrin.carry(out)
+for n in pl.range(0, 256, 128):
     rhs_n = pl.slice(rhs, [128, 128], [0, n])
     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
-    result = pl.yield_(pl.assemble(acc, c_n, [0, n]))
+    acc_next = pl.assemble(acc, c_n, [0, n])
+    pl.intrin.yield_(acc_next)
 ```
 
 ```python
-# After conversion, L0 auto-tiling, and InferTileMemorySpace
+# After conversion, L0 auto-tiling, and InferTileMemorySpace (printed round-trip)
 lhs_mat = pl.tile.load(lhs, [0, 0], [16, 128], target_memory=pl.Mem.Mat)
 lhs_left = pl.tile.move(lhs_mat, target_memory=pl.Mem.Left)
 for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):

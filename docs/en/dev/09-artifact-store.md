@@ -4,9 +4,13 @@ The internal `pypto.jit.artifact_cache` module implements the storage milestone
 of [RFC #2653](https://github.com/hw-native-sys/pypto/issues/2653). It provides
 validated manifests, per-key locking, immutable publication, and private-build
 fallback. The [opt-in JIT integration](10-jit-cache.md) connects it to ordinary
-compilation, execution and warmup. The runtime adapter below owns device-stage
-promotion and read-only loading. [Artifact identities](08-artifact-identity.md)
-cover dependency contents rather than compiler version strings.
+compilation, execution and warmup — a surface of the quarantined
+`pl.jit_specializer` runtime (`python/pypto/jit/`), not of the tracing `@pl.jit`,
+which keeps only an in-process dispatch cache and a cache-less `compile()` and
+never reads or publishes through the store. The runtime adapter below owns
+device-stage promotion and read-only loading. [Artifact
+identities](08-artifact-identity.md) cover dependency contents rather than
+compiler version strings.
 
 ## Adapter contract
 

@@ -3,7 +3,10 @@
 内部模块 `pypto.jit.artifact_cache` 实现了
 [RFC #2653](https://github.com/hw-native-sys/pypto/issues/2653) 的存储阶段，提供
 manifest 校验、按 key 加锁、不可变发布和私有构建回退。
-[显式启用的 JIT 集成](10-jit-cache.md) 将其接入普通编译、执行和预热。
+[显式启用的 JIT 集成](10-jit-cache.md) 将其接入普通编译、执行和预热——那是已
+隔离的 `pl.jit_specializer` 运行时（`python/pypto/jit/`）的接口，而非追踪
+`@pl.jit`：后者只有进程内 dispatch 缓存和不落盘的 `compile()`，从不读取或
+通过存储层发布产物。
 下文运行时适配器负责设备阶段晋级和只读加载。
 [产物身份](08-artifact-identity.md) 覆盖依赖内容，而非编译器版本字符串。
 

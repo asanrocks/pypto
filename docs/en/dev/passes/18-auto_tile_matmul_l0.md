@@ -162,7 +162,10 @@ class Before:
         ...
 ```
 
-**After** (chooser picks `m = 128, n = 128, k = 64`):
+**After** (chooser picks `m = 128, n = 128, k = 64`). The `After` blocks on this
+page show the pass-generated IR in the printer's round-trip spelling
+(`init_values=` / `pl.yield_`); users never write this form — the input stays the
+`Before` shape:
 
 ```python
 @pl.program

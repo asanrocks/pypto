@@ -438,6 +438,12 @@ for (int64_t i = 0; i < 4; i += 1) {
 直接别名到该表达式。唯一仍要求初始值必须*命名*某个对象的路径是 `ArrayType` 携带值的拷入，
 它需要逐槽位索引该初始值。
 
+循环体每迭代重新绑定一个新数组的 `ArrayType` 携带值（`tids = tids_next`）会以循环体内的
+Var→Var `AssignStmt` 形式到达 codegen。裸 C 数组既不能从其类型声明、也不能整体赋值，因此该
+语句把 LHS 的发射名别名到 RHS 的底层数组上（与 `array.update_element` 及下文的数组 phi
+同为引用语义）；跨迭代的状态由 `YieldStmt` 的逐槽位拷贝写回携带数组来传播。生成的 C++ 与
+同一循环的显式通道拼写（`pl.intrin.carry` / `yield_` / `leak`）完全一致。
+
 ### IfStmt
 
 ```python

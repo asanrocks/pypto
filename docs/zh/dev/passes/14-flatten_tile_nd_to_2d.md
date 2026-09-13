@@ -303,12 +303,13 @@ error: 'pto.partition_view' op size at dim 1 (6) exceeds static source dim (3)
 
 ```python
 # 用户自己写：对动态 S 维分块，在 valid_shape 里夹住尾块。
-for c, (o,) in pl.range(0, s_dim, CHUNK, init_values=(out,)):
+# 每趟的 store 重新绑定 `out`，循环携带值由该重绑定本身推导而来——
+# 不需要 init_values/yield_ 管道。
+for c in pl.range(0, s_dim, CHUNK):
     valid = pl.min(CHUNK, s_dim - c)
     t = pl.load(x, [b, c, 0], [1, CHUNK, 512], valid_shape=[1, valid, 512])
     t = pl.cast(t, target_type=pl.FP32)
-    o = pl.store(t, [b, c, 0], o)        # 物理静态 [1, CHUNK, 512]，valid 动态
-    pl.yield_(o)
+    out = pl.store(t, [b, c, 0], out)   # 物理静态 [1, CHUNK, 512]，valid 动态
 ```
 
 每趟的 tile 物理上是 `[1, CHUNK, 512]`（静态），`valid_shape` 是 `[1, min(CHUNK, s - c), 512]`（动态）。

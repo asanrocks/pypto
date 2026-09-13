@@ -3,150 +3,141 @@
 Function declaration forms, parameter directions, cross-module reuse, and how to
 print IR back to Python syntax.
 
-## JIT constants and compilation reuse
+## Constants and compilation reuse
 
-A `@pl.jit` body is parsed into `@pl.program` source and re-parsed in a namespace
-holding only `pl` and `pld`, so any name it inherits from its own module or an
-enclosing function must be replaced, at its use site, by source text that
-evaluates back to the same value. That covers literals (`int`, `float`, `bool`,
-`str`, `None`), the `pl` dtype and enum constants (`pl.INT8`, `pl.Mem.Vec`,
-`pl.PadValue.zero`, `pl.NZ`), and lists/tuples nested from those — a shape or a
-rounding mode held in a constant, for instance. A value with no source form is
-left alone, so the name survives and the parser reports it.
+`@pl.jit` traces the callable: the body runs as ordinary Python while the trace
+is taken, so a name it inherits from its own module or an enclosing function is
+read from that namespace at trace time — the value itself is used, never a
+source form of it. Literals (`int`, `float`, `bool`, `str`, `None`), the `pl`
+dtype and enum constants (`pl.INT8`, `pl.Mem.Vec`, `pl.PadValue.zero`, `pl.NZ`),
+and lists/tuples nested from those all work, because they are just Python values
+the trace observes. (The old rule that a constant "must have a source form"
+belonged to the AST-era runtime — quarantined as `pl.jit_specializer` — which
+generated `@pl.program` source and re-parsed it in a namespace holding only
+`pl` and `pld`.)
 
-Every name that folds is also in the compilation key, including constants used by
-transitive JIT helpers and source annotations. The key hashes the *emitted text*
-for each name, straight from the function the specializer folds with, so the two
-cannot drift: a constant that changes the generated source changes the key by
-construction, and one that does not fold contributes nothing. Rebinding a
-referenced constant causes a new specialization; changing an unrelated global or a
-name shadowed by a body-local variable does not invalidate the body dependency
-key.
+When the read happens depends on the lane. The **eager lane** — every parameter
+facade-annotated — traces at decoration and returns a bare `ir.Function`, so
+every inherited name is baked into that function at decoration time; rebinding
+it afterwards does not change the artifact (compile it with the
+one-function-program route described in
+[Functions](../../user/language/01-functions.md)). The **lazy lane** — a bare
+`pl.Tensor` parameter, or anything call-time dependent — defers the trace to
+each call or `compile()`, so a rebind is observed by the next trace:
 
 ```python
 BLOCK = 32
 
 @pl.jit
-def slice_kernel(x: pl.Tensor[[128, 128], pl.FP32]) -> pl.Tensor[[BLOCK, 128], pl.FP32]:
+def slice_kernel(x: pl.Tensor) -> pl.Tensor:
     with pl.at(level=pl.Level.CORE_GROUP):
         result = pl.slice(x, [BLOCK, 128], [0, 0])
     return result
 
-first = slice_kernel.compile()
+first = slice_kernel.compile(x)    # traced with BLOCK = 32
 BLOCK = 64
-second = slice_kernel.compile()  # A distinct specialization with 64 rows.
+second = slice_kernel.compile(x)   # re-traced with 64 rows
 ```
 
-Name resolution, key construction, and specialization share a per-call namespace
-snapshot. Constants rebound after capture affect the next call, not the artifact
-being compiled. Each helper retains its own namespace, even when constants have
-the same name. Rebinding a referenced JIT helper also refreshes the dependency
-graph. Each concurrent call retains its captured graph throughout key construction
-and specialization. The hash also includes each helper's function type, level, and
-`auto_scope` setting, so rebinding an identically sourced function with different
-compilation attributes cannot reuse the old artifact.
+Host knobs and the cache key:
 
-Each module's globals are copied once per request; helpers use closure overlays
-on that shared snapshot. An empty closure cell still shadows a same-named global.
-Validated graphs retain their Python source hashes, and declared layouts are
-reused while their annotation bindings stay unchanged. External source files are
-still checked on each request. Referenced closure constants are covered by the
-source dependency hash without a separate closure-key component.
+- A parameter with a plain Python annotation (or none) is a **host knob**: a
+  Python scalar argument is baked into the trace as a `Const`, and its *value*
+  is part of the dispatch cache key — two calls with different values never
+  share an artifact.
+- `pl.runtime(value, dtype)` is the **runtime scalar** spelling for a
+  `pl.Scalar[...]` parameter: the key carries the dtype only, never the value.
+- Dispatch (`kernel(*args, config=...)`) caches on the bridged signature — each
+  tensor's shape, dtype, and layout, each host scalar's value, each runtime
+  scalar's dtype — plus the compile identity described below. Names the body
+  inherits from its module are *not* tracked: once an entry is warm it keeps
+  serving the artifact traced under the old value, so rebind a referenced
+  constant before its first dispatch, or use `compile()` for a fresh trace.
+- `kernel.compile(*args, config=...)` never reads or writes that cache — each
+  call builds a fresh artifact; explicit compile-then-call freezes one
+  materialization (03-entrance.md §5.5).
 
-The snapshot copies bindings only: mutating arbitrary configuration objects
-or editing compiler/source files during compilation is not supported by this
-constant-tracking mechanism. Persistent reuse additionally requires the full
-[artifact identity and cache policy](../10-jit-cache.md).
+Each trace observes the enclosing namespaces as they are while it runs;
+mutating a captured object during a trace is not tracked by any key.
 
 ### Compile options and diagnostic requests
 
-JIT calls and `kernel.compile()` resolve compile options before looking up an
-in-process artifact. Omitting `config` uses the same defaults as `RunConfig()`:
-`a2a3sim`, the default optimization strategy, and pass dumps disabled. Semantic
-options (including the effective planner, runtime ABI, and source-location
-emission controlled by `PYPTO_EMIT_PTO_LOC`) participate in the key. Runtime
-controls such as `device_id`, `codegen_only`, and `save_kernels` alone do not.
+Both dispatch and `kernel.compile(*args, config=...)` resolve `config` the same
+way: the compile-side fields of `RunConfig` (strategy, dumps, diagnostics)
+forward to `ir.compile`, while runtime-side controls such as `device_id` and
+`codegen_only` apply at dispatch. Omitting `config` uses the same defaults as
+`RunConfig()`: the `a2a3sim` platform, the default optimization strategy, and
+pass dumps disabled.
 
-The following requests compile afresh on every call, without reading or adding
-an entry in the artifact cache:
+The two surfaces differ in caching. The dispatch cache keys on the bridged
+signature *plus the compile identity* — platform, optimization strategy,
+distributed config, `analyze_auto_scopes_for_deps`, the effective memory
+planner, and the L0C double-buffer flag, each resolved from the `RunConfig` and
+any active `PassContext` — so two compile configurations never share one
+artifact. `kernel.compile()` has no cache at all: every call builds a fresh
+artifact.
 
-- `dump_passes=True` or a dump level other than `PassDumpLevel.NONE`, and
-  `dump_ptoas_passes=True`.
-- `compile_profiling=True`, an active `CompileProfiler`, or profiling enabled
-  through `PYPTO_COMPILE_PROFILING`.
-- An explicit `save_kernels_dir`, or a nonempty `PYPTO_PROG_BUILD_DIR`.
-- Explicit diagnostic settings, or an active `PassContext` with instruments
-  or verification/diagnostic settings different from the pipeline defaults.
-
-This ensures a warm kernel still emits requested dumps and reports. Repeating
-a request regenerates the output; a failed diagnostic compile leaves ordinary
-cached entries intact. Automatically allocated JIT output directories are unique
-per compilation, so fresh diagnostics cannot overwrite a cached artifact.
-Explicit output directories are used as requested. Diagnostic controls do not
-split compilation keys.
-Conflicting explicit settings and an active `PassContext` raise the same error
-on cache hits as on fresh compilation. A plain planner/runtime context can
-still reuse a matching cached artifact.
+Diagnostic requests therefore route through `compile()`. `dump_passes=True` (or
+a dump level other than `PassDumpLevel.NONE`), `dump_ptoas_passes=True`, and an
+explicit `save_kernels_dir` are all honored there by construction, and repeating
+a request regenerates the output. The dispatch cache deliberately does not key
+on these knobs — they do not change the artifact — so a warm entry is reused
+and the requested dumps are *not* emitted; ask for diagnostics through
+`compile()` when you need the output. Diagnostic controls never split the
+dispatch cache.
 
 ```python
 from pypto.runtime import RunConfig
 
-cached = slice_kernel.compile()
-slice_kernel.compile(config=RunConfig(dump_passes=True, save_kernels_dir="debug_kernel"))
-assert slice_kernel.compile() is cached
+first = slice_kernel.compile(x)
+second = slice_kernel.compile(x)  # a fresh build — compile() has no cache
+dumped = slice_kernel.compile(
+    x, config=RunConfig(dump_passes=True, save_kernels_dir="debug_kernel")
+)
 ```
 
 ### Prepare binaries without executing
 
-`kernel.warmup()` uses the same specialization, configuration, and in-process
-object cache as `kernel.compile()`, and also prepares every kernel and
-orchestration binary before returning. It initializes no NPU and creates no
-runtime worker. The build host still needs the target compiler, SDK, and runtime
-Python/native dependencies.
+`kernel.compile(*args, config=...)` is the prepare-without-execute surface: it
+traces, runs the pass pipeline, and builds every kernel and orchestration
+binary, then returns the `CompiledProgram` without dispatching it. No NPU is
+initialized and no runtime worker is created; the build host still needs the
+target compiler, SDK, and runtime Python/native dependencies.
 
 ```python
 import pypto.language as pl
 from pypto.runtime import RunConfig
 
 @pl.jit
-def add_three(
-    x: pl.Tensor[[16, 16], pl.FP32],
-    out: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
-):
+def add_three(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile = pl.load(x, [0, 0], [16, 16])
         pl.store(pl.add(tile, 3.0), [0, 0], out)
     return out
 
+
+import torch
+
+x = torch.randn(16, 16, dtype=torch.float32)
+out = torch.empty(16, 16, dtype=torch.float32)
 config = RunConfig(platform="a2a3")
-prepared = add_three.warmup(config=config)  # No sample tensor allocation.
+prepared = add_three.compile(x, out, config=config)  # shapes and dtypes only
 # Later, on a host with an available NPU:
 # prepared(x, out, config=config)
 ```
 
-You can supply sample tensors as with `compile()`; warmup reads their metadata,
-not their contents. With complete tensor annotations, omit the tensors and use
-scalar defaults or keyword values. `pl.RUNTIME` keeps a scalar unspecialized in
-annotation-driven mode, and dynamic extents retain the existing compile rules.
-When calling the returned compiled object, supply its full parameter list,
-including scalar arguments; JIT defaults are resolved during compilation.
-Execution-only settings such as `codegen_only` do not suppress binary preparation.
+Sample tensors are bridged by metadata — shape and dtype — never their
+contents. Scalar arguments follow the parameter worlds above: a plain-annotated
+parameter is a host knob whose value is baked at trace time, and a
+`pl.Scalar[...]` parameter takes `pl.runtime(value, dtype)` to stay a runtime
+argument. Calling the returned object dispatches with the full argument list.
+Compilation errors propagate to the caller; a failed build can be retried by
+calling `compile()` again.
 
-The result is the same compiled object selected by `compile()`, with live IR
-retained for fresh compilation. Warmup prepares every chip-level child of a
-`DistributedCompiledProgram` and every orchestration sub-build of a
-multi-orchestration `CompiledProgram`. It does not call the distributed object's
-`prepare()`: that method creates a live worker for execution. Compilation errors
-propagate to the caller; a failed binary build can be retried by calling warmup
-again. Diagnostic/output requests still compile afresh as described above.
-
-With [persistent caching](../10-jit-cache.md) enabled, warmup automatically
-publishes or reuses READY artifacts through the [runtime protocol](../09-artifact-store.md).
-Persistence is disabled by default. Read-only misses, unsupported inputs and
-storage failures can prepare private results. A restored result has
-`.program is None`; disable persistence or use `specialize()`/`lower()` to require IR.
-The public cache policy, statistics and metadata-only warmup CLI are documented
-in [Persistent JIT Cache](../10-jit-cache.md).
+The persistent artifact store, the `warmup()` method, and the metadata-only
+warmup CLI documented in [Persistent JIT Cache](../10-jit-cache.md) belong to
+the quarantined `pl.jit_specializer` runtime (`python/pypto/jit/`); the tracing
+jit has only the in-process dispatch cache described above.
 
 ## Functions
 
@@ -275,14 +266,14 @@ a sub-window. at repro.py:12:9
 ```
 
 The check is data-flow based, not syntactic. A value can reach the parameter
-without naming it — through a loop carry, for instance — and that is a genuine
-write-through, so it stays silent:
+through a loop carry — `pl.store` writes through the parameter, and the carried
+binding keeps that alias — and that is a genuine write-through, so it stays
+silent:
 
 ```python
-for col, (d,) in pl.range(0, n, chunk, init_values=(data,)):
-    d = pl.store(local, [0, col], d)
-    staged = pl.yield_(d)
-data = pld.tensor.allreduce(staged, signal, ...)   # `staged` *is* `data`; no warning
+for col in pl.range(0, n, chunk):
+    data = pl.store(local, [0, col], data)   # the rebind is the loop's derived carry
+data = pld.tensor.allreduce(data, signal, ...)   # the carried `data` *is* the parameter; no warning
 ```
 
 The check is deliberately conservative: a value that merely *reads* the
@@ -301,21 +292,20 @@ disabled.insert(passes.DiagnosticCheck.OutParamWriteDropped)
 ir.compile(program, disabled_diagnostics=disabled)
 ```
 
-## How a `@pl.program` Class Is Located
+## `@pl.program` Classes Defined in Branches
 
-`@pl.program` parses the class *body from source*, so it first has to find the
-`class` statement that produced the decorated object. The class name alone does
-not identify it: one function may define the same name in several branches, and
-every one of them carries the same `__qualname__`.
-
-The decorator resolves this from the line numbers of the methods in the class
-body, so each branch is parsed from its own source:
+Under tracing, `@pl.program` executes the class body as Python at decoration —
+the decorator receives the class object the `class` statement just built, so
+there is nothing to locate and no ambiguity to resolve. One function may define
+the same class name in several branches (every one of them carries the same
+`__qualname__`); each definition is its own decoration and produces its own
+`Program`:
 
 ```python
 def make(case):
     if case == "add":
         @pl.program
-        class Prog:                                # parsed from *this* body
+        class Prog:                                # traced from *this* body
             @pl.function
             def main(self, x: pl.Tensor[[8], pl.FP32]) -> pl.Tensor[[8], pl.FP32]:
                 return pl.add(x, 1.0)
@@ -329,10 +319,8 @@ def make(case):
     return Prog
 ```
 
-When the definitions genuinely cannot be told apart, the decorator raises a
-`ParserSyntaxError` naming every candidate line rather than picking one — a
-wrong pick would compile a body you never wrote. Give the classes distinct
-names, or define the class once and vary it through a closure variable:
+A closure variable parameterizes one definition the same way — `scale` below is
+read from the enclosing scope while the trace runs:
 
 ```python
 def make(scale):
@@ -343,6 +331,12 @@ def make(scale):
             return pl.mul(x, scale)
     return Prog
 ```
+
+The source-location machinery this section used to describe — finding the
+`class` statement from the line numbers of its methods, and rejecting genuinely
+ambiguous definitions with a `ParserSyntaxError` — is real only for the
+parser-owned `@pl.program_parser` entrypoint (round-trip fixtures), which still
+collects the class body from source. Tracing never reads source.
 
 ## Cross-Module Function Reuse
 
@@ -399,18 +393,24 @@ class MyModel:
 
 ## Complete Example
 
-### Tensor Operations (Loop with iter_args)
+### Tensor Operations (Loop with a derived carry)
 
 ```python
-# pypto.program: my_program
 import pypto.language as pl
 
-def loop_sum(n: pl.INT64) -> pl.INT64:
-    sum_init: pl.INT64 = 0
-    for i, (sum,) in pl.range(n, init_values=(sum_init,)):
-        sum = pl.yield_(sum + i)
-    return sum
+@pl.function
+def loop_sum(n: pl.Scalar[pl.INT64]) -> pl.Scalar[pl.INT64]:
+    total = pl.const(0, pl.INT64)
+    for i in pl.range(n):
+        total = total + i
+    return total
 ```
+
+The accumulator is a typed staged constant — a bare `0` would inline the literal
+every iteration — and the rebind `total = total + i` is itself the loop's carry;
+nothing is declared. Printing this function after the SSA pass yields round-trip
+text that renders the carry as `init_values=`/`pl.yield_()`; that text is the
+printer's dialect, parsed back by `pl.parse` — never tracing input.
 
 ### Tile Operations (Tile-based computation)
 

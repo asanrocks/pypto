@@ -7,7 +7,8 @@ PyPTO IR 的 Python 风格语法:
 - **完整**: 包含重构 IR 所需的全部信息
 - **可解析 (Parser)**: 可解析回 IR (参见 [IR 解析器](../ir/07-parser.md))
 - **Pythonic**: 遵循 Python 风格, 通过大部分代码检查工具
-- **静态单赋值 (SSA) 风格**: 使用 SSA, 配合 `pl.yield_()` 和 `pl.range()`
+- **静态单赋值 (SSA) 风格**: 使用 SSA, 配合 `pl.range()`;编写的代码里携带值由重新绑定
+  推导，Lowering 后的循环在打印往返文本中把它们渲染为 `pl.yield_()`
 
 ## 模块结构
 
@@ -106,25 +107,39 @@ tile: pl.Tile[[16, 16], pl.FP16, pl.MemRef(addr_expr, 512, 0), pl.Mem.Left]
 它与三参数形式是同一个 IR 节点；参数个数区分"描述一块已有分配"还是"声明一块新的"。声明时只
 给名字：大小取自绑定到它的最大 tile，地址由分配器决定。
 
-先声明一次，再用变量引用。不带名字的声明会取所绑定变量的名字，这样名字只写一遍：
+先声明一次，再用变量引用。在 tracing 前端下，声明就是一个普通的 Python 值：变量是你
+访问它的方式，而变量的名字不会进入 IR——未命名的 `pl.MemRef()` 打印成 `pl.MemRef("")`，
+但与其他任何未命名声明仍是两块不同的分配。想让名字出现在 IR 里（诊断、dump）时，
+请显式命名——`pl.MemRef("ping")`：
 
 ```python
-ping = pl.MemRef()
-pong = pl.MemRef()
+ping = pl.MemRef("ping")
+pong = pl.MemRef("pong")
 
 # 两个 tile 显式共用一块分配；第三个保持独占。
-t0: pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec] = pl.load(a, [0, 0], [64, 64])
-t1: pl.Tile[[64, 64], pl.FP32, pong, pl.Mem.Vec] = pl.exp(t0)
-t2: pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec] = pl.exp(t1)
+t0 = pl.intrin.transmute(
+    pl.load(a, [0, 0], [64, 64], target_memory=pl.Mem.Vec),
+    pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec],
+)
+t1 = pl.intrin.transmute(pl.exp(t0), pl.Tile[[64, 64], pl.FP32, pong, pl.Mem.Vec])
+t2 = pl.intrin.transmute(pl.exp(t1), pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec])
 ```
 
-推荐这种写法：引用拼错会直接得到 Python 的 `NameError`，而内联的 `pl.MemRef("pign")` 形式
-里字符串拼错只会静默地多声明一块分配。内联形式仍然有效——IR 打印器输出的就是它，这样 dump
-出来的程序不依赖外层 Python 作用域即可重新解析；`pl.MemRef("other")` 也可用于显式命名，适用
-于变量名不是你想写进 IR 的那个名字时。
+绑定在操作处声明，写在传给 `pl.intrin.transmute` 的 tile 类型里。带注解的形式——
+`t0: pl.Tile[[64, 64], pl.FP32, ping, pl.Mem.Vec] = pl.load(...)`——是打印出来的
+往返拼写：IR printer 输出它，parser 读回它。在 tracing 下局部注解不会进入 IR，
+因此绑在注解上的分配会被静默丢弃——kernel 照常 trace，却失去了它特意声明的隔离。
 
-既然名字由变量提供，变量与分配就必须一一对应。用两个名字引用同一个声明（`alias = ping`）、
-以及两个声明抢占同一个名字，都会被**拒绝**——两者都会静默地合并或拆分分配。
+推荐变量形式：引用拼错会直接得到 Python 的 `NameError`，而内联的 `pl.MemRef("pign")`
+形式里字符串拼错只会静默地多声明一块分配。内联形式仍然有效——IR 打印器输出的
+就是它，这样 dump 出来的程序不依赖外层 Python 作用域即可重新解析——但请记住
+**每一次对 `pl.MemRef(...)` 的求值都是一块独立的声明**：两处内联写法即使字符串
+相同，也只是两块打印起来一样的分配。
+
+共享由声明对象决定，与名字无关。`alias = ping` 只是普通的 Python 重绑定，因此
+通过 `alias` 绑定的 tile 与 `ping` 共用同一块分配——你写的正是这个意思。
+parser 时代的一一对应拒绝（一个声明两个名字、一个名字两个声明）是对 AST 做
+名字不变量检查；在 tracing 下没有可能失步的名字，只有你引用的对象。
 
 一个 MemRef 是否为声明式分配，由 IR 节点上的显式字段（`MemRef.is_pinned_`）记录，既不靠大小
 推断，也不靠"当前跑到哪个 pass"。`InitMemRef` 会消费掉这个声明：此后分配点带上 `pinned=True`，
@@ -138,20 +153,31 @@ MemRef 变回普通 MemRef，所以重新解析一份分配后的 dump 不会把
 ```python
 l0c = pl.MemRef(slots=2)
 
-ping: pl.Tile[[M, N], pl.FP32, l0c[0], pl.Mem.Acc] = pl.tile.matmul(q, b0)
-pong: pl.Tile[[M, N], pl.FP32, l0c[1], pl.Mem.Acc] = pl.tile.matmul(q, b1)
+ping = pl.intrin.transmute(pl.tile.matmul(q, b0), pl.Tile[[M, N], pl.FP32, l0c[0], pl.Mem.Acc])
+pong = pl.intrin.transmute(pl.tile.matmul(q, b1), pl.Tile[[M, N], pl.FP32, l0c[1], pl.Mem.Acc])
 ```
+
+槽位在操作处声明——下标写在 transmute tile 类型里对声明取下标。带注解的形式
+（`ping: pl.Tile[[M, N], pl.FP32, l0c[0], pl.Mem.Acc] = ...`）是打印出来的往返拼写；
+在 tracing 下该注解会被丢弃，同上。
 
 **下标可以是运行期的值**,所以轮转不需要展开循环:
 
 ```python
-for i, (acc,) in pl.range(N, init_values=(out,)):
+for i in pl.range(N):
     a: pl.Tile[[M, N], pl.FP32, l0c[i % 2], pl.Mem.Acc] = pl.tile.matmul(q_l0, b_l0)
 ```
 
-在 `@pl.jit` 下请用内联命名形式 `pl.MemRef("l0c", slots=2)[i % 2]`,而不是把声明绑到一个
-Python 变量上。`@pl.jit` 会在一个新的模块命名空间里重新解析生成的源码,变量里持有的声明在
-那里不可见;命名形式是自包含的(也正是 IR printer 输出的形式),两种场景都可用。
+带注解的这个形式是打印往返拼写——IR printer 输出它，parser 读回它。在 tracing 前端下，
+局部注解不会进入 IR，槽位因此改在操作处声明：
+`pl.intrin.transmute(pl.tile.matmul(q_l0, b_l0), pl.Tile[[M, N], pl.FP32, l0c[i % 2],
+pl.Mem.Acc])`。staged 下标可以是任意索引表达式——常量或运行期均可——并且下标在书写处
+即被校验：对单槽位声明取下标、或常量下标超出声明的槽数，都会立刻报错。
+
+在 `@pl.jit` 下没有变化：tracing jit 把被装饰的函数当 Python 执行，因此绑定在
+函数体内变量上——或从外层作用域捕获——的声明和其他值一样在作用域内。
+AST 时代的 jit 会在一个新的模块命名空间里重新解析生成的源码，旧的“内联命名”
+规则就来自那里；那条路径如今只存在于隔离的 `pl.jit_specializer` 中。
 
 `InitMemRef` 按绑定到**任意**槽位的最大 tile 确定单个槽位的大小——槽位是等大的,按槽位分别
 定尺寸会让步长不一致——并把下标折算成字节偏移 `index * slot_size`。常量下标在这里就折成常量,
@@ -197,11 +223,19 @@ Python 变量上。`@pl.jit` 会在一个新的模块命名空间里重新解析
 l0b_ping, l0b_pong = pl.MemRef(), pl.MemRef()
 
 # 外层交给编译器，内层由作者自己做 ping-pong。
-for stack, (out_outer,) in pl.pipeline(STACKS, stage=2, init_values=(out,)):
-    b_l1: pl.Tile[[K, N], pl.BF16, pl.Mem.Mat] = pl.load(b, [stack * K, 0], [K, N])
-    for col, (out_inner,) in pl.range(0, N, 2 * STEP, init_values=[out_outer]):
-        ping: pl.Tile[[K, STEP], pl.BF16, l0b_ping, pl.Mem.Right] = ...
-        pong: pl.Tile[[K, STEP], pl.BF16, l0b_pong, pl.Mem.Right] = ...
+for stack in pl.pipeline(STACKS, stage=2):
+    b_l1 = pl.load(b, [stack * K, 0], [K, N], target_memory=pl.Mem.Mat)
+    for col in pl.range(0, N, 2 * STEP):
+        ping = pl.intrin.transmute(
+            pl.tile.extract(b_l1, 0, col, [K, STEP], target_memory=pl.Mem.Right),
+            pl.Tile[[K, STEP], pl.BF16, l0b_ping, pl.Mem.Right],
+        )
+        pong = pl.intrin.transmute(
+            pl.tile.extract(b_l1, 0, col + STEP, [K, STEP], target_memory=pl.Mem.Right),
+            pl.Tile[[K, STEP], pl.BF16, l0b_pong, pl.Mem.Right],
+        )
+        out = ...  # 重新绑定即是 carry：range 循环推导它，
+                   # pipeline 循环随之携带它
 ```
 
 参见 [InitMemRef](../passes/34-init_memref.md#声明式分配) 与

@@ -1,7 +1,8 @@
 # OutlineGraphScopes Pass
 
 Outlines `pl.graph` regions into `FunctionType::Graph` functions, making the
-scope form and `@pl.jit.graph` converge into one representation.
+scope form and a standalone `@pl.function(type=pl.FunctionType.Graph)`
+function converge into one representation.
 
 ## Overview
 
@@ -10,7 +11,7 @@ This pass transforms `GraphScopeStmt` nodes — produced by
 scope with a Call to the outlined function.
 
 Its entire purpose is convergence. After this pass, a region the user marked in
-place has the same shape as a function the user decorated with `@pl.jit.graph` —
+place has the same shape as a `@pl.jit.graph` function the user wrote —
 a `Function(Graph)` with orchestration metadata plus a `Call` — so
 `LegalizeGraphBoundary`, the Graph verifier and orchestration codegen need no
 knowledge of which surface was written. The two surfaces exist because the choice
@@ -100,8 +101,8 @@ program_outlined = outline_pass(program)
 
 The outlined function needs no level/role fixup: `Function`'s constructor
 derives `Level::CHIP` + `Role::Orchestrator` for any orchestration-like type, so
-a Graph minted here carries the same metadata the parser gives a
-`@pl.jit.graph` function.
+a Graph minted here carries the same metadata a `@pl.jit.graph` function
+is declared with.
 
 ## Naming and the graph key
 

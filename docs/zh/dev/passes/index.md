@@ -22,7 +22,7 @@ pass；`91` 及以后保留给"在多个位置运行的 pass"以及"根本不是
 | 05 | [Simplify](05-simplify.md) | 折叠算术表达式、shape 表达式与标量常量绑定 |
 | 06 | [FlattenCallExpr](06-flatten_call_expr.md) | 把嵌套调用表达式拍平为三地址形式 |
 | 07 | [OutlineHierarchyScopes](07-outline_hierarchy_scopes.md) | 把 Hierarchy 作用域外提为带 `level` / `role` 元数据的函数 |
-| 08 | [OutlineGraphScopes](08-outline_graph_scopes.md) | 把 `pl.graph` 区域外提为 `FunctionType.Graph` 函数，使作用域形式与 `@pl.jit.graph` 汇聚 |
+| 08 | [OutlineGraphScopes](08-outline_graph_scopes.md) | 把 `pl.graph` 区域外提为 `FunctionType.Graph` 函数，使作用域形式与独立 Graph 函数汇聚 |
 | 09 | [OutlineIncoreScopes](09-outline_incore_scopes.md) | 把 InCore 作用域外提为独立函数 |
 | 10 | [OutlineClusterScopes](10-outline_cluster_scopes.md) | 把 Cluster 作用域外提为 Group 函数，独立 Spmd 作用域外提为 Spmd 函数 |
 | 11 | [ConvertTensorToTileOps](11-convert_tensor_to_tile_ops.md) | 在 InCore 函数中把 tensor 算子转为 tile 算子，并更新编排层调用点 |

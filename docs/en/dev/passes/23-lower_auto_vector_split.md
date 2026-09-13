@@ -842,9 +842,9 @@ elements already carry the per-element split, so there is no single axis to reco
 | `if` merge | `RepairIfReturnVars` | both branches must yield the same halved tuple |
 | loop carry + exit | `RepairIterArgs` / `RepairReturnVars` | the backedge `Yield` must match the carry |
 
-The DSL cannot annotate either, but `ConvertToSSA` synthesizes exactly the merge phi for
-a tuple reassigned in a branch, and `pl.range(..., init_values=(tup,))` carries one
-directly.
+The DSL cannot annotate either, but `ConvertToSSA` synthesizes exactly the merge phi
+for a tuple reassigned in a branch, and a tuple reassigned in a loop body carries
+directly (the derived carry).
 
 Two different failures end in a rejection, and the diagnostics keep them apart — one
 message cannot explain both:

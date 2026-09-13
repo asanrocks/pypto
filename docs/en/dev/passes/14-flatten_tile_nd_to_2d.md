@@ -364,12 +364,13 @@ strongly affects performance, so it is not auto-selected by the pass.
 
 ```python
 # User-written: chunk the dynamic S dim, clamp the tail in valid_shape.
-for c, (o,) in pl.range(0, s_dim, CHUNK, init_values=(out,)):
+# Each chunk's store rebinds `out`, so the loop carry is derived from the
+# rebind itself — no init_values/yield_ plumbing.
+for c in pl.range(0, s_dim, CHUNK):
     valid = pl.min(CHUNK, s_dim - c)
     t = pl.load(x, [b, c, 0], [1, CHUNK, 512], valid_shape=[1, valid, 512])
     t = pl.cast(t, target_type=pl.FP32)
-    o = pl.store(t, [b, c, 0], o)        # static physical [1, CHUNK, 512], dynamic valid
-    pl.yield_(o)
+    out = pl.store(t, [b, c, 0], out)   # static physical [1, CHUNK, 512], dynamic valid
 ```
 
 Each per-chunk tile is physically `[1, CHUNK, 512]` (static) with a dynamic `valid_shape`

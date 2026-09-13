@@ -710,8 +710,8 @@ tuple 还会穿过**分支合并与循环携带**，两者都不从 `tile_vars` 
 | `if` 合并 | `RepairIfReturnVars` | 两个分支必须产出相同的折半 tuple |
 | 循环携带 + 出口 | `RepairIterArgs` / `RepairReturnVars` | 回边 `Yield` 必须与携带值一致 |
 
-DSL 对两者都无法写注解，但 `ConvertToSSA` 会为"在分支里被重新赋值的 tuple"合成正是这种 phi，
-而 `pl.range(..., init_values=(tup,))` 可以直接携带一个 tuple。
+DSL 对两者都无法写注解，但 `ConvertToSSA` 会为“在分支里被重新赋值的 tuple”合成正是这种 phi，
+而在循环体里被重新赋值的 tuple 会直接成为携带值（推导式携带）。
 
 这里有**两种**不同的失败都会以拒绝告终，诊断信息把它们分开。一是算子**直接拒绝**折半后的
 实参：可能是某条约束在折半后不再成立（`tile.tquant_mx` 要求 `M % 16 == 0`，而 per-lane 的

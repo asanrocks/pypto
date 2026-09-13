@@ -27,10 +27,10 @@ DSL 暴露**两套正交的机制**，用户可任意组合：
 
 | 表层语法 | producer 形态 | 备注 |
 | -------- | ------------- | ---- |
-| `result, tid = pl.submit(kernel, *args, deps=[...], allow_early_resolve=False, timing_slot=<0..15>)` | 单个 kernel 调用 | 尾部 `tid` 是 producer `pl.Scalar[pl.TASK_ID]`。它是 parser construct（类似 `pl.range`），不是 runtime 函数。`allow_early_resolve=True` 将该 task 标记为推测式 early-dispatch producer（让调度器提前预置其 consumer；lower 为 `Arg::set_allow_early_resolve(true)`）。`timing_slot=<0..15>` 是可选整数字面量，用于给该 task 添加选择性 device 计时标签；共享同一 slot 的所有 task 会从最早 dispatch 到最晚完成生成一个 span。同样接受 `predicate=(t[i] > 0)` —— 调度器在 dispatch 点求值的调度谓词（参见[调度谓词](#调度谓词predicate)）。 |
+| `result, tid = pl.submit(kernel, *args, deps=[...], allow_early_resolve=False, timing_slot=<0..15>)` | 单个 kernel 调用 | 尾部 `tid` 是 producer `pl.Scalar[pl.TASK_ID]`。它是 traced construct（类似 `pl.range`），不是 runtime 函数。`allow_early_resolve=True` 将该 task 标记为推测式 early-dispatch producer（让调度器提前预置其 consumer；lower 为 `Arg::set_allow_early_resolve(true)`）。`timing_slot=<0..15>` 是可选整数字面量，用于给该 task 添加选择性 device 计时标签；共享同一 slot 的所有 task 会从最早 dispatch 到最晚完成生成一个 span。同样接受 `predicate=(t[i] > 0)` —— 调度器在 dispatch 点求值的调度谓词（参见[调度谓词](#调度谓词predicate)）。 |
 | `result, tid = pl.spmd_submit(kernel, *args, core_num=N, sync_start=False, deps=[...], timing_slot=<0..15>)` | 单个 SPMD task launch | `pl.submit` 的 SPMD 版本：将 kernel 在 `N` 个 block 上分发（一个 orchestration task → 一个 `tid`）。`core_num` 是必填关键字参数（正整数表达式）；`sync_start=True` 强制所有 block 原子启动。callee 可以是 InCore / AIC / AIV / Group。launch spec 记录在 `Submit.core_num` / `Submit.sync_start` 上。同样接受 `allow_early_resolve=True`（与 `pl.submit` 相同的 early-dispatch 选项）、`timing_slot=<0..15>`（与 `pl.submit` 相同的字面量选择性 device 计时标签）和 `predicate=(t[i] > 0)`（参见[调度谓词](#调度谓词predicate)）。 |
-| `with pl.at(level=pl.Level.CORE_GROUP, deps=[...]) as tid:` | outlined `pl.at`-块 | 整块被 outline 成 InCore kernel + `Submit`；`tid` 捕获被合成的 Submit 的 TaskId，可作为后续 `pl.submit` / `pl.at` 的 dep。不写 `as tid` 时 outliner 会合成一个未使用的 TaskId Var——deps 始终走 `Submit::deps_`。同样接受 `allow_early_resolve=True`（与 `pl.submit` 相同的 early-dispatch 选项）；即使不写 `as tid` 也会强制走 `Submit` 形态，并 lower 为 `Arg::set_allow_early_resolve(true)`。同样接受 `predicate=(t[i] > 0)`（参见[调度谓词](#调度谓词predicate)；仅支持 `level=pl.Level.CORE_GROUP`，同样强制走 `Submit` 形态）。不能嵌套在 `pl.cluster()` / `pl.spmd()` / 另一个 CORE_GROUP `pl.at` 内；所在函数还必须是 `OutlineIncoreScopes` 会改写的类型（不能是 `Group` / `Spmd` / InCore 系 kernel）。 |
-| `with pl.spmd(N, deps=[...]) as tid:` | outlined SPMD 分发 | `pl.at ... as tid` 形式的 SPMD 版本。内联 body 自动外包成 InCore kernel 并在 `N` 个 block 上分发；`tid` 捕获 grid 级 producer TaskId。`deps=` 在 `pl.spmd` 三种形式上均可用；不写 `as tid` 时 outliner 会合成一个未使用的 TaskId Var，与 `pl.at` 一致。`core_num` / `sync_start` 记录在 lower 出的 `Submit` 自身的 `core_num` / `sync_start` 字段上（launch spec 属于启动点，而非外包出的被调函数）；codegen 直接从那里读取。同样接受 `allow_early_resolve=True`（与 `pl.submit` / `pl.at` 相同的 early-dispatch 选项；`pl.spmd` 三种形式均可用，即使不写 `as tid` 也会强制走 `Submit` 形态）和 `predicate=(t[i] > 0)`（参见[调度谓词](#调度谓词predicate)；同样三种形式均可用，同样强制走 `Submit` 形态）。不能嵌套在 `pl.cluster()` 内。 |
+| `with pl.at(level=pl.Level.CORE_GROUP, deps=[...]) as tid:` | outlined `pl.at`-块 | 整块被 outline 成 InCore kernel + `Submit`；`tid` 捕获被合成的 Submit 的 TaskId，可作为后续 `pl.submit` / `pl.at` 的 dep。不写 `as tid` 时 outliner 会合成一个未使用的 TaskId Var——deps 始终走 `Submit::deps_`。同样接受 `allow_early_resolve=True`（与 `pl.submit` 相同的 early-dispatch 选项）；即使不写 `as tid` 也会强制走 `Submit` 形态，并 lower 为 `Arg::set_allow_early_resolve(true)`。同样接受 `predicate=(t[i] > 0)`（参见[调度谓词](#调度谓词predicate)；仅限 `level=pl.Level.CORE_GROUP`，同样强制走 `Submit` 形态）。不能嵌套在 `pl.cluster()` / `pl.spmd()` / 另一个 CORE_GROUP `pl.at` 内；所在函数还必须是 `OutlineIncoreScopes` 会改写的类型（不能是 `Group` / `Spmd` / InCore 系 kernel）。 |
+| `with pl.spmd(N, deps=[...]) as tid:` | outlined SPMD 分发 | `pl.at ... as tid` 形式的 SPMD 版本。内联 body 自动外包成 InCore kernel 并在 `N` 个 block 上分发；`tid` 捕获 grid 级 producer TaskId。`deps=` **仅在 `as tid` 捕获形式上可用**——普通 `with` 和 `for i in pl.spmd(...)` 形式都会在 trace 期以响亮的 `TypeError` 拒绝（错误信息会给出两种受支持的写法；显式边没有可挂靠的 TaskId 变量）；`pl.at` 才是不写 `as tid` 也接受 `deps=` 的作用域形式。`core_num` / `sync_start` 记录在 lower 出的 `Submit` 自身的 `core_num` / `sync_start` 字段上（launch spec 属于启动点，而非外包出的被调函数）；codegen 直接从那里读取。同样接受 `allow_early_resolve=True`（与 `pl.submit` / `pl.at` 相同的 early-dispatch 选项；`pl.spmd` 三种形式均可用，即使不写 `as tid` 也会强制走 `Submit` 形态）和 `predicate=(t[i] > 0)`（参见[调度谓词](#调度谓词predicate)；同样三种形式均可用，同样强制走 `Submit` 形态）。不能嵌套在 `pl.cluster()` 内。 |
 | `barrier = pl.system.task_dummy(deps=[...])` | dependency-only barrier | 不提交 kernel。返回的 TaskId 是一个紧凑的 fan-in 点，可供后续 `deps=[barrier]` 使用。 |
 | `None`（Python 字面量） | 种子 / dep 条目 | "暂无 producer" 的哨兵。`prev_tid = None` 用作 TaskId 循环 iter_arg 的种子；`deps=[None]` 中的 `None` 被丢弃（不贡献任何边）。下沉为 `system.task_invalid` → `TaskId::invalid()`。 |
 
@@ -48,7 +48,8 @@ DSL 暴露**两套正交的机制**，用户可任意组合：
 per-rank 通信排序链之上。
 
 普通的 `out = self.kernel(...)` 是 **fire-and-forget**：它不返回 task id，
-并且在它上面写 `deps=` 会被拒绝（parser 报错，提示 "use `pl.submit`"）。
+并且在它上面写 `deps=` 会被拒绝——普通子 kernel 调用不接受任何关键字参数
+（trace 期的 `TypeError` 会点名违规的关键字；声明边请用 `pl.submit`）。
 每个 `deps=[...]` 条目必须是 TaskId 值：先前 `pl.submit(...)` /
 `pl.at(..., deps=) as tid` 绑定的 `tid`、`pl.system.task_dummy(deps=[...])`
 的返回值、TaskId 循环 iter_arg carry、从 TaskId 数组槽读出的
@@ -58,40 +59,65 @@ per-rank 通信排序链之上。
 
 ```python
 # 示例 1——两套机制同用：scope-wide 退出 + 显式边。
-@pl.function(type=pl.FunctionType.Orchestration)
-def main(self, x: pl.Tensor[[64], pl.FP32],
-         scratch: pl.Out[pl.Tensor[[64], pl.FP32]],
-         out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
-    with pl.manual_scope():                                           # 机制 A: scope-wide
-        scratch, stage1_tid = pl.submit(self.stage1, x, scratch)
-        out, _ = pl.submit(self.stage2, scratch, out, deps=[stage1_tid])  # 机制 B
-    return out
+@pl.program
+class Chain:
+    @pl.function(type=pl.FunctionType.InCore)
+    def stage1(self, x: pl.Tensor[[64], pl.FP32],
+               scratch: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        return pl.store(pl.load(x, [0], [64]), [0], scratch)
+
+    @pl.function(type=pl.FunctionType.InCore)
+    def stage2(self, x: pl.Tensor[[64], pl.FP32],
+               out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        return pl.store(pl.load(x, [0], [64]), [0], out)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[64], pl.FP32],
+             scratch: pl.Out[pl.Tensor[[64], pl.FP32]],
+             out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        with pl.manual_scope():                                           # 机制 A: scope-wide
+            scratch, stage1_tid = pl.submit(self.stage1, x, scratch)
+            out, _ = pl.submit(self.stage2, scratch, out, deps=[stage1_tid])  # 机制 B
+        return out
 ```
 
 ```python
 # 示例 2——只用机制 B，**不**进 manual_scope。其他 buffer 仍然走自动跟踪；
 # 显式边是在自动跟踪结果**之上**追加。注意没有 `with pl.manual_scope():`。
-@pl.function(type=pl.FunctionType.Orchestration)
-def main(self, x: pl.Tensor[[64], pl.FP32],
-         out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
-    tmp, prep_tid = pl.submit(self.preprocess, x)
-    out, _ = pl.submit(self.consume, tmp, out, deps=[prep_tid])
-    return out
+@pl.program
+class Pipeline:
+    @pl.function(type=pl.FunctionType.InCore)
+    def preprocess(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+        return pl.store(pl.load(x, [0], [64]), [0], x)
+
+    @pl.function(type=pl.FunctionType.InCore)
+    def consume(self, x: pl.Tensor[[64], pl.FP32],
+                out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        return pl.store(pl.load(x, [0], [64]), [0], out)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[64], pl.FP32],
+             out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        tmp, prep_tid = pl.submit(self.preprocess, x)
+        out, _ = pl.submit(self.consume, tmp, out, deps=[prep_tid])
+        return out
 ```
 
 ```python
 # 示例 3——以 pl.at-块作为 producer，给下游 pl.at-块加显式边。
 # `as tid` 捕获被合成 outlined Call 的 TaskId。
-@pl.function(type=pl.FunctionType.Orchestration)
-def main(self, x: pl.Tensor[[64], pl.FP32],
-         out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
-    with pl.at(level=pl.Level.CORE_GROUP) as tid_a:
-        # 块体被 outline 成 InCore kernel
-        ...
-    with pl.at(level=pl.Level.CORE_GROUP, deps=[tid_a]) as tid_b:
-        # 显式边——严格在 tid_a 块之后运行
-        ...
-    return out
+@pl.program
+class AtChain:
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[64], pl.FP32],
+             out: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+        with pl.at(level=pl.Level.CORE_GROUP) as tid_a:
+            # 块体被 outline 成 InCore kernel
+            out = pl.store(pl.load(x, [0], [64]), [0], out)
+        with pl.at(level=pl.Level.CORE_GROUP, deps=[tid_a]) as tid_b:
+            # 显式边——严格在 tid_a 块之后运行
+            out = pl.store(pl.load(out, [0], [64]), [0], out)
+        return out
 ```
 
 ```python
@@ -104,7 +130,7 @@ out, _ = pl.submit(self.consume, scratch, out, deps=[prod_tid])
 
 `pl.submit` 脱糖为单个 `ir.Submit`，其返回类型是扁平的增广
 `TupleType([*<kernel return types>, ScalarType(TASK_ID)])` ——
-元素 `0..N-1` 是 kernel 结果，元素 `N` 是 producer TaskId。parser 把每个
+元素 `0..N-1` 是 kernel 结果，元素 `N` 是 producer TaskId。construct 会把每个
 `deps=[...]` 列表直接写入类型化的 `Submit::deps_` 字段（普通 `Call` 永不
 携带 `manual_dep_edges`——ManualDepsOnSubmitOnly 不变式）。`pl.at(..., deps=)`
 走相同的路径：outliner 读 `ScopeStmt` 上的 `attrs["task_id_var"]` +
@@ -114,7 +140,7 @@ out, _ = pl.submit(self.consume, scratch, out, deps=[prod_tid])
 runtime 的 `Arg::set_dependencies(ptr, count)` 直接接收调用者持有的任意
 长度数组，所以单 call 的依赖边数没有硬上限。显式 fan-in 可写成
 `barrier = pl.system.task_dummy(deps=[tids])`，再让 consumer `deps=[barrier]`；
-它复用同一套 dependency parser，lowering 成 `rt_submit_dummy_task(...)`，
+它复用同一套 dependency 下译，lowering 成 `rt_submit_dummy_task(...)`，
 在 dep 全 invalid 时返回 invalid 且跳过 dummy submit，并可与自动
 `ExpandManualPhaseFence` barrier 共存。
 
@@ -134,12 +160,14 @@ runtime 的 `Arg::set_dependencies(ptr, count)` 直接接收调用者持有的�
 并依赖 gather producer —— 调度器只下发非空专家，且无需阻塞 orchestration 去读每个专家的
 行数。
 
-> **该比较按普通表达式解析，但永不求值。** `rc[0, 0]` 就是 `pl.read` 的常规语法糖，
-> 因此该 kwarg 下降为普通 IR —— `Gt(Cast(tensor.read(rc, [0, 0])), 0)` —— 复用 IR 已有的
-> 比较节点，而非任何私有编码。它存放在 `Submit.predicate` 上，**不在语句位置**，所以这个
-> `tensor.read` **不会**在 orchestration 中执行：执行它就会阻塞在 `wait_for_tensor_ready`，
-> 正是谓词要消灭的事情。orchestration codegen 负责把该 Expr 分解成运行时的
-> `operand OP target` 三元组，因此只接受下述形状。
+> **该比较在 trace 期求值为一个 staged 表达式，但永不被执行。** `rc[0, 0]` 就是
+> `pl.read` 的常规语法糖，因此该 kwarg 下降为普通 IR ——
+> `Gt(Cast(tensor.read(rc, [0, 0])), 0)` —— 复用 IR 已有的比较节点，而非任何
+> 私有编码。它存放在 `Submit.predicate` 上，**不在语句位置**，所以这个
+> `tensor.read` **不会**在 orchestration 中执行：执行它就会阻塞在
+> `wait_for_tensor_ready`，正是谓词要消灭的事情。orchestration codegen
+> 负责把该 Expr 分解成运行时的 `operand OP target` 三元组，因此只接受下述
+> 形状——而形状正是在 codegen 处**强制校验**的（见下文“表达力”）。
 
 | 组成 | 含义 | 约束 |
 | ---- | ---- | ---- |
@@ -159,27 +187,25 @@ orchestration codegen 会翻转算子，使 tensor 始终是运行时的操作�
 点读到的才是最新值。若遗漏，调度器可能在 producer 尚未写入张量前就求值谓词，从而基于过期
 数据做出 dispatch 决策。
 
-parser 只做**尽力而为的抽查**，不是保证:它记录 `pl.submit(...)` 通过元组解包绑定的结果变量，
-当谓词操作数是其中之一、而对应 producer TaskId 未出现在 `deps=` 时报错。解析通过应理解为
-"未发现明显错误"，而非"已证明正确"。
-
-以下情况它**看不穿**，因而会静默接受:
-
-| 未覆盖 | 原因 |
-| ------ | ---- |
-| `rc2 = rc` 后使用 `rc2[0, 0]` | 别名是新变量，没有记录的 producer |
-| 张量作 `pl.Out` 实参传入、结果绑到新名字 | 只跟踪返回绑定，不跟踪实参别名 |
-| `rc3 = self.helper(rc)` | 任何中间调用都会洗掉关联 |
-| `res = pl.spmd_submit(...)` 单左值形式 | 该路径根本不记录 |
-| `deps=` 中含 `Array[N, TASK_ID]` 条目——包括常见的 `deps=[tids[i]]` 写法 | 数组条目未逐个列出 producer，该 submit 的检查整体跳过 |
-| producer 写在源码**后面**，例如循环携带的 `rc` 由上一轮迭代写入 | 查表发生在解析谓词的那一刻，其后的 producer 尚未记录 |
-
-因此 `deps=` 写对仍然是作者的责任。
+**tracing 下没有任何检查。** parser 时代的前端做过尽力而为的抽查（它记录
+`pl.submit(...)` 通过元组解包绑定的结果变量，当谓词操作数是其中之一、而对应
+producer TaskId 未出现在 `deps=` 时报错）；tracing 前端没有对应机制——
+producer 不在 `deps=` 里的谓词会**全程无诊断地** trace 并运行（trace 期和
+pass 阶段都不会报）。把 `deps=` 写对完全是作者的责任。
 
 **表达力**固定为 `tensor[indices] OP const` —— 单个比较，与运行时单比较的
-`DispatchPredicate` 对齐。链式比较（`0 < t[i] < 8`）、算术（`t[i] % 8 == 0`）、布尔组合
-（`a[0] > 0 and b[0] > 0`）、以及非字面量的右侧（`t[i] > u[i]`）都会在解析期被拒绝；
-请在前序 kernel 里把它们归约成一个 gate 值，再对该值做谓词。
+`DispatchPredicate` 对齐。tracing 下各类违规被拒绝的位置：
+
+- 链式比较（`0 < t[i] < 8`）——在 **trace 期**：链式比较会把 staged 比较结果
+  强转为 bool（`Cannot convert Scalar to bool. Scalar wraps an IR expression and
+  has no host truth value.`）；
+- 算术（`t[i] % 8 == 0`）、布尔组合（`a[0] > 0 and b[0] > 0`）、非字面量的右侧
+  （`t[i] > u[i]`）——这些都能 **trace 通过**，但 **orchestration codegen** 会拒绝
+  （`Submit dispatch predicate must be a single comparison (==, !=, >, <, >=, <=)
+  between a tensor element and an integer literal` / `... must compare a tensor
+  element (a tensor.read, e.g. t[i]) against an integer literal`）。
+
+请在前序 kernel 里把更复杂的条件归约成一个 gate 值，再对该值做谓词。
 
 ```python
 with pl.manual_scope():
@@ -191,15 +217,18 @@ with pl.manual_scope():
     )
 ```
 
-**范围：** `predicate=` 可用于 `pl.submit` / `pl.spmd_submit`（直接产 `Submit` 的形式）、
-`with pl.spmd(...)` 作用域形式的全部三种写法（普通 `with`、`with ... as tid`、
-`for i in pl.spmd(...)`），以及 `with pl.at(level=pl.Level.CORE_GROUP, ...)`。
+**范围：** `predicate=` 可用于 `pl.submit` / `pl.spmd_submit`（直接产 `Submit` 的
+形式）、`with pl.spmd(...)` 作用域形式的全部三种写法（普通 `with`、
+`with ... as tid`、`for i in pl.spmd(...)`），以及
+`with pl.at(level=pl.Level.CORE_GROUP, ...)`（放置规则见下文的
+[`pl.at` 作用域形式](#plat-作用域形式)）。
 
 ### 作用域形式
 
-作用域形式使用相同的表达式与相同的校验，区别只在于谓词进入 IR 的路径：它先挂在该作用域的
+作用域形式使用相同的表达式；区别只在于谓词进入 IR 的路径：它先挂在该作用域的
 `attrs` 上，直到该作用域被 outline 时才移动到 `Submit.predicate`。
-因此 lowering、codegen 产物与契约都完全一致。
+因此 lowering、codegen 产物与契约都完全一致。（形状本身由 orchestration
+codegen 强制校验，与调用形式一致。）
 
 #### `pl.spmd` 作用域形式
 
@@ -213,20 +242,22 @@ with pl.spmd(4, deps=[g_tid], predicate=(rc[0, 0] > 0)) as tid:  # producer 是�
 
 由这条路径引出两点：
 
-- **`deps=` 不需要 `as tid`。** 与 `allow_early_resolve=True`、`predicate=` 一样，
-  `deps=` 在三种形式上均可用，并会强制该作用域 lower 为 `Submit`；当作用域没有
-  `as tid` 时，outliner 会合成一个未被使用的 TaskId Var。只有当*后续*任务需要等待本次
-  派发时，才需要捕获 TaskId。
+- **`deps=` 需要 `as tid` 形式。** 与 `allow_early_resolve=True`、`predicate=` 不同，
+  `deps=` 仅在捕获形式上可用——普通 `with` 和 `for i in pl.spmd(...)` 形式都会在
+  trace 期以 `TypeError` 拒绝，错误信息会给出两种受支持的写法（显式边没有可挂靠的
+  TaskId 变量）。`pl.at` 才是不写 `as tid` 也接受 `deps=` 的作用域形式（outliner
+  会合成一个未使用的 TaskId Var）。只有当*后续*任务需要等待本次派发时才需要捕获
+  TaskId——但带 `deps=` 时本来就要捕获。
 - **谓词契约依旧成立。** 若谓词读取的张量由同一函数内的其他任务产出，该 producer 必须
-  出现在 `deps=` 中——现在三种形式都能表达这一点。
+  出现在 `deps=` 中——`as tid` 形式能表达这一点。与调用形式一样，tracing 下没有检查
+  （parser 时代的抽查——它还会把作用域体内赋值的张量记录为该作用域的产物——在这里
+  不存在；作用域产出的操作数漏出 `deps=` 会无诊断地 trace 通过）。
 
 嵌套在 `pl.cluster()` 内的 `pl.spmd` 会被展开进 Group 函数、永远不会产生 `Submit`，
-因此 `predicate=`（与 `allow_early_resolve=` 一样）会在解析期被拒绝，而不是被静默丢弃。
-
-契约检查同样覆盖作用域 producer：在 `with pl.spmd(...) as tid:` /
-`with pl.at(...) as tid:` 体内被赋值的张量会被记录为该作用域的产物，所以后续 `deps=`
-漏写它会被拒绝。上表中列出的 best-effort 限制（别名、中间调用、`Array[N, TASK_ID]` 依赖）
-依然适用。
+因此 `predicate=`（与 `allow_early_resolve=` 一样）会在 trace 期以响亮的 `TypeError`
+被拒绝，而不是被静默丢弃。与调用形式一样，作用域产出的操作数也没有
+producer-in-`deps=` 契约检查——`with pl.spmd(...) as tid:` 体内赋值的张量，若在
+不带该 dep 的情况下被谓词读取，会无诊断地 trace 通过。
 
 #### `pl.at` 作用域形式
 
@@ -235,26 +266,31 @@ with pl.at(level=pl.Level.CORE_GROUP) as g_tid:                  # rc 的 produc
     rc = pl.store(pl.load(rc, [0, 0], [128, 128]), [0, 0], rc)
 
 with pl.at(level=pl.Level.CORE_GROUP,                            # producer 是依赖
-           deps=[g_tid], predicate=(rc[0, 0] > 0)) as tid:
+          deps=[g_tid], predicate=(rc[0, 0] > 0)) as tid:
     out = pl.store(pl.load(x, [0, 0], [128, 128]), [0, 0], out)
 ```
 
-`pl.at` 特有的两条限制，原因都是：只有当该作用域成为一个被独立提交的 task 时，
-谓词才有运行时载体：
+lowering 与上面的 `pl.spmd` 作用域形式完全一致：谓词先挂在该作用域的 `attrs`
+上，直到 `OutlineIncoreScopes` 把它移动到被合成的 `Submit.predicate` 上，因此
+codegen 产物与契约都相同。以下是 `pl.at` 特有的两条放置规则——原因都是
+谓词只有在作用域成为独立提交的 task 时才有运行时载体；每条都会在 trace 期
+以响亮的 `TypeError` 拒绝：
 
-- **仅支持 `level=pl.Level.CORE_GROUP`。** 其他 level 会建出 Hierarchy 作用域，它不会被
-  outline 成 task dispatch，谓词会被静默丢弃。解析期直接拒绝。
-- **该作用域自身必须就是被派发的那个 task。** 嵌套在 `pl.cluster()` / `pl.spmd()` /
-  另一个 CORE_GROUP `pl.at` 内时，内层 dispatch 会被折叠进外层 Group / Spmd wrapper
-  （或外层 kernel 体），codegen 只会从**外层** call 发出 `set_predicate`。直接写在
-  `Group` / `Spmd` / InCore 系函数体内更彻底——`OutlineIncoreScopes` 跳过这些函数体，
-  根本不会产生 `Submit`。两种情况都在解析期拒绝。
+- **仅 `level=pl.Level.CORE_GROUP`。** 其他任何 level 都会构建 Hierarchy 作用域，
+  而它永远不会被 outline 成 task 派发，谓词会被静默丢弃。
+- **作用域必须是被派发的那个。** 嵌套在 `pl.cluster()` / `pl.spmd()` / 另一个
+  CORE_GROUP `pl.at` 内时，内层派发会被折叠进外层 Group / Spmd 包装（或外层
+  kernel 体内），codegen 只从*外层*调用发射 `set_predicate`。直接写在 `Group` /
+  `Spmd` / InCore 系 kernel 函数体内更糟：`OutlineIncoreScopes` 会跳过这些函数体，
+  根本不会构建 `Submit`。
 
-  嵌套在**非** CORE_GROUP 的 `pl.at` 内则是允许的：Hierarchy 作用域不是 task wrapper，
-  内层作用域仍会被 outline 成自己的 `Submit`，产出的编排 C++ 里 `set_predicate` 与不嵌套时一致。
+  嵌套在*非* CORE_GROUP 的 `pl.at` 内没问题——Hierarchy 作用域不是 task 包装，
+  内层作用域仍会被 outline 成自己的 `Submit`，发射的 orchestration C++ 携带相同的
+  `set_predicate`。
 
-与 `pl.spmd` 一样，`pl.at` 的所有形式都接受 `deps=`，所以对函数内产出的张量加谓词时，
-**消费方**作用域不需要 `as tid`——只有**产出方**需要，以便在 `deps=` 里指名它。
+与 `pl.spmd` 一样，`deps=` 在 `pl.at` 的所有形式上可用，因此对本地产出张量的
+谓词只需在*产出*作用域上写 `as tid`，以便在 `deps=` 中指名它。与 tracing 下的
+其他地方一样，producer-in-`deps=` 契约没有检查——把 `deps=` 写对仍是作者的责任。
 
 ## Manual scope 下的 `pl.parallel`：array-carry fence
 
@@ -276,7 +312,7 @@ with pl.manual_scope():
     for phase in pl.range(N_PHASES):
         for branch in pl.parallel(N_BRANCHES):           # 编译期常量
             row = (phase * N_BRANCHES + branch) * TILE_M
-            out, prev_tid = pl.submit(self.kernel_stripe, data, row, 1.0, out, deps=[prev_tid])
+            out, prev_tid = pl.submit(self.kernel_stripe, data, row, out, deps=[prev_tid])
 ```
 
 `prev_tid` 在 `pl.parallel` 内被重新绑定，所以 codegen 把 carry 下沉为

@@ -49,7 +49,7 @@ for i in pl.pipeline(64, stage=4):
     pl.tile.store(tile_x, [i * 128], output)
 ```
 
-`pl.pipeline` accepts the same positional args as `pl.range` — `(stop)`, `(start, stop)`, or `(start, stop, step)` — plus the required `stage=` kwarg. `init_values=` is supported.
+`pl.pipeline` accepts the same positional args as `pl.range` — `(stop)`, `(start, stop)`, or `(start, stop, step)` — plus the required `stage=` kwarg. Carried values are derived from what the body rebinds, exactly as with `pl.range`.
 
 ## Behavior
 

@@ -41,7 +41,7 @@ for i in pl.unroll(0, 6, 2):
 | ---------- | ------ |
 | `start`, `stop`, `step` must be integer constants | Values needed at compile time |
 | `step` must be non-zero | Prevents infinite loops |
-| `init_values` cannot be used with `pl.unroll()` | No loop-carried state in unrolled loops |
+| `init_values` cannot be used with `pl.unroll()` | No explicit carry channel — a *derived* carry (rebinding) still traces |
 
 ## Example
 

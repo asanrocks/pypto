@@ -113,6 +113,12 @@ target 规范化为 `target_memory=Mat`。原始 `tile.load` IR 仍必须携带�
 
 再次遍历函数体。对每个其算子带 `input_constraints` 的 `Call`，检查每个受约束输入变量在 `var_memory_` 中的解析结果是否在允许列表内。任何不匹配都会记录为 `MoveKey = (producer_var, target_space)` 加入 `needed_moves_`，其中 `target_space` 取该输入槽允许列表的第一个。阶段 3 会在每个外层 `SeqStmts` 作用域（即每个插入点缓存作用域）内最多为每个唯一 key 物化一个 `tile.move`，因此同一 `(producer_var, target_space)` 仍可能在兄弟作用域（如 `then` / `else` 分支）中分别物化。
 
+#### Matches-arg 约束（`tile.assemble`）
+
+某些算子无法在注册时写死某个输入的合法 space，因为它取决于另一个操作数的落位。`tile.assemble(target, source, offset)` 就是典型：其同构下降（`pto.subview` + `pto.tmov`）要求 source 已经驻留在 target 的 space 中，而算子自身又实现了 Acc → Mat 的转换写回（FIXPIPE / `pto.tinsert`）。因此它注册了 `set_input_memory_matches_arg(1, 0, allow_acc_when_mat=true)`：实参 1（source）必须与实参 0（target）的**解析后** space 一致，且当 target 为 `Mat` 时额外允许 `Acc`。
+
+阶段 0 不会为 matches-arg 约束记录需求 —— target 的 space 在阶段 1 解析前是未知的。阶段 2 与阶段 3 通过 `RequiredSpaceForArg` 对照 `var_memory_` 求值该约束（兜底读取需求操作数自身的 `TileType` 标注），`TileMemoryInferred` 校验器在 pass 之后再以纯标注方式复查。于是，一个由 cube 产出（`Acc`）的 source 对上 `Vec` target 时，会在 assemble 之前排入一条显式的 `Acc → Vec` 桥接 `tile.move` —— `ExpandMixedKernel` 随后把该边界折叠为 `tpush` / `tpop` 对（即 `examples/models/03_flash_attention.py` 的在线 softmax 累加器更新）。当需求本身解析到任何 target 都无法拷入的 space（`Acc`）时，该不匹配属于用户错误，会在此处点名拒绝，而不是到后端才以 layout 报错的形式暴露。
+
 ### 阶段 3 — 重写（`TileMemorySpaceMutator`）
 
 完整的 `IRMutator` 重写，产出新的函数体：
@@ -152,15 +158,17 @@ target 规范化为 `target_memory=Mat`。原始 `tile.load` IR 仍必须携带�
 对于 root orchestration 函数先创建全新 LHS 存储、再调用 InCore kernel 的 tensor 程序，静止 LHS 的 bridge 会移到用户循环之前，而依赖 N 的 RHS 仍在循环中流式加载：
 
 ```python
-# Tensor 源程序
-for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):
+# Tensor 源程序（汇编通道写法显式声明携带值）
+(acc,) = pl.intrin.carry(out)
+for n in pl.range(0, 256, 128):
     rhs_n = pl.slice(rhs, [128, 128], [0, n])
     c_n = pl.matmul(lhs, rhs_n, out_dtype=pl.FP32)
-    result = pl.yield_(pl.assemble(acc, c_n, [0, n]))
+    acc_next = pl.assemble(acc, c_n, [0, n])
+    pl.intrin.yield_(acc_next)
 ```
 
 ```python
-# ConvertTensorToTileOps、L0 自动分块和 InferTileMemorySpace 之后
+# ConvertTensorToTileOps、L0 自动分块和 InferTileMemorySpace 之后（打印往返文本）
 lhs_mat = pl.tile.load(lhs, [0, 0], [16, 128], target_memory=pl.Mem.Mat)
 lhs_left = pl.tile.move(lhs_mat, target_memory=pl.Mem.Left)
 for n, (acc,) in pl.range(0, 256, 128, init_values=(out,)):

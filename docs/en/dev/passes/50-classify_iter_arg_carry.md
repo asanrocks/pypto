@@ -82,12 +82,23 @@ never by string-matching the keys.
 ## Example
 
 ```python
-@pl.function(type=pl.FunctionType.Orchestration)
-def main(self, x: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
-    for _i, (acc,) in pl.range(0, 4, init_values=(out,)):
-        acc2 = self.accumulate(x, acc)   # writes `acc` in place, returns it
-        (out,) = pl.yield_(acc2)
-    return out
+@pl.program
+class Prog:
+    @pl.function(type=pl.FunctionType.AIV)
+    def accumulate(self, x: pl.Tensor[[64, 64], pl.FP32],
+                   acc: pl.InOut[pl.Tensor[[64, 64], pl.FP32]]) -> pl.Tensor[[64, 64], pl.FP32]:
+        t = pl.load(x, [0, 0], [64, 64])
+        return pl.store(t, [0, 0], acc)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[64, 64], pl.FP32],
+             out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]) -> pl.Tensor[[64, 64], pl.FP32]:
+        (acc,) = pl.intrin.carry(out)
+        for _i in pl.range(0, 4):
+            acc2 = self.accumulate(x, acc)   # writes `acc` in place, returns it
+            pl.intrin.yield_(acc2)
+        (out,) = pl.intrin.leak()
+        return out
 ```
 
 After the pass the loop carries `attrs={"iter_arg_rebind_0": False}`: `acc2`

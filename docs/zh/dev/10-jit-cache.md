@@ -3,6 +3,16 @@
 持久缓存（persistent cache）默认关闭，可跨进程复用生成代码和完整二进制。
 每个 JIT 函数还保留进程内编译对象。缓存包含可执行代码，因此必须信任缓存写入方。
 
+> [!WARNING]
+> **运行时归属。** 本页记载的全部内容——`warmup()`、`python -m pypto.jit warm`
+> CLI，以及 `configure_cache()` / `RunConfig.cache_config` 集成——都属于已隔离的
+> `pl.jit_specializer` 运行时（`python/pypto/jit/`），仅为其自身的机制测试保留：
+> 这些接口只存在于该运行时的 `JITFunction` 对象上。追踪 `@pl.jit`
+> （`pypto/language/tracer/decorators/jit.py`）没有持久缓存——它只有以桥接签名
+> 加编译标识为键的进程内 dispatch 缓存，`compile()` 每次都构建全新产物，传给
+> 追踪 kernel 的 `RunConfig.cache_config` 会被完全忽略（参见
+> [函数](language/03-functions.md)）。
+
 ```python
 from pathlib import Path
 

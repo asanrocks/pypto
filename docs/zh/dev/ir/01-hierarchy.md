@@ -333,7 +333,7 @@ runtime = ir.RuntimeScopeStmt(manual=True, name_hint="", body=body, span=span)
     将独立的 `SpmdScopeStmt` 提取为 `Function(Spmd)`
   - `OutlineHierarchyScopes` 提取 `HierarchyScopeStmt`
   - `OutlineGraphScopes` 把 `GraphScopeStmt` 提取为 `Function(Graph)`，使作用域形式
-    与 `@pl.jit.graph` 在任何后续 Pass 看到它们之前就已汇聚
+    与独立 Graph 函数在任何后续 Pass 看到它们之前就已汇聚
   - `SplitAivScopeStmt` **不被提取**：它对 SSA 与各 outliner 透明（保留在被
     提取出的 `Function(InCore)` 体内），随后由 `LowerAutoVectorSplit`
     （pass 23）原地下降并保留包装。`ExpandMixedKernel`（pass 24）消费并

@@ -40,19 +40,25 @@ The pass applies five patterns in sequence. Each pattern sees the results of the
 **Before**:
 
 ```python
-for i in pl.range(N, init_values=[init_buf]):
-    out: pl.Tensor = pl.tensor.create(shape, dtype=pl.FP32)  # redundant alloc
-    result: pl.Tensor = self.incore_fn(iter_arg, out)          # In + Out params
-    pl.yield_(result)
+(iter_arg,) = pl.intrin.carry(init_buf)
+for i in pl.range(N):
+    out = pl.create_tensor(shape, dtype=pl.FP32)  # redundant alloc
+    result = self.incore_fn(iter_arg, out)        # In + Out params
+    pl.intrin.yield_(result)
 ```
 
 **After**:
 
 ```python
-for i in pl.range(N, init_values=[init_buf]):
-    result: pl.Tensor = self.incore_fn(iter_arg)  # InOut param (reuses iter-arg buffer)
-    pl.yield_(result)
+(iter_arg,) = pl.intrin.carry(init_buf)
+for i in pl.range(N):
+    result = self.incore_fn(iter_arg)  # InOut param (reuses iter-arg buffer)
+    pl.intrin.yield_(result)
 ```
+
+The `pl.intrin.carry`/`yield_` channel spelling (assembly dialect, migration
+guide Appendix A) states the iter-arg feedback explicitly; the printer renders
+the same loop as `init_values=`/`pl.yield_` round-trip text.
 
 ### Pattern 2: Assemble Parent Strides (AssembleParentStridesOptimizer)
 
@@ -215,10 +221,12 @@ class Before:
 
     @pl.function(type=pl.FunctionType.Orchestration)
     def main(self, buf: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-        for i in pl.range(10, init_values=[buf]):
-            out_0 = pl.tensor.create((64,), dtype=pl.FP32)
+        (iter_arg,) = pl.intrin.carry(buf)
+        for i in pl.range(10):
+            out_0 = pl.create_tensor([64], dtype=pl.FP32)
             result = self.compute(iter_arg, out_0)
-            pl.yield_(result)
+            pl.intrin.yield_(result)
+        (loop_result,) = pl.intrin.leak()
         return loop_result
 ```
 
@@ -236,9 +244,11 @@ class After:
 
     @pl.function(type=pl.FunctionType.Orchestration)
     def main(self, buf: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-        for i in pl.range(10, init_values=[buf]):
+        (iter_arg,) = pl.intrin.carry(buf)
+        for i in pl.range(10):
             result = self.compute(iter_arg)
-            pl.yield_(result)
+            pl.intrin.yield_(result)
+        (loop_result,) = pl.intrin.leak()
         return loop_result
 ```
 
