@@ -46,7 +46,7 @@ _TILE_CREATE_OP = ir.get_op("tile.create").name
 _TILE_SET_VALIDSHAPE_OP = ir.get_op("tile.set_validshape").name
 
 
-@pl.jit_specializer
+@pl.function(type=pl.FunctionType.Orchestration)
 def create_tensor_seeded_acc(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[BLOCKS, N_TILE, K], pl.INT8],
@@ -69,7 +69,7 @@ def create_tensor_seeded_acc(
     return y
 
 
-@pl.jit_specializer
+@pl.function(type=pl.FunctionType.Orchestration)
 def create_tensor_seeded_acc_2d(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[N_TILE, K], pl.INT8],
@@ -92,7 +92,7 @@ def create_tensor_seeded_acc_2d(
     return y
 
 
-@pl.jit_specializer
+@pl.function(type=pl.FunctionType.Orchestration)
 def carry_flows_into_a_later_loop(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[N_TILE, K], pl.INT8],
@@ -124,7 +124,7 @@ def carry_flows_into_a_later_loop(
     return y
 
 
-@pl.jit_specializer
+@pl.function(type=pl.FunctionType.Orchestration)
 def single_fractal_block_acc(
     x: pl.Tensor[[BLOCKS * FRACTAL_ROWS, K], pl.BF16],
     w: pl.Tensor[[K, FRACTAL_N_TILE], pl.BF16],
@@ -151,7 +151,7 @@ def single_fractal_block_acc(
     return y
 
 
-@pl.jit_specializer
+@pl.function(type=pl.FunctionType.Orchestration)
 def extent_computed_inside_the_loop(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[N_TILE, K], pl.INT8],
@@ -174,7 +174,7 @@ def extent_computed_inside_the_loop(
     return y
 
 
-@pl.jit_specializer
+@pl.function(type=pl.FunctionType.Orchestration)
 def full_height_acc(
     x: pl.Tensor[[BLOCKS * M_TILE, K], pl.INT8],
     w: pl.Tensor[[BLOCKS, N_TILE, K], pl.INT8],
@@ -195,32 +195,34 @@ def full_height_acc(
     return y
 
 
-@pl.jit_specializer
+@pl.function(type=pl.FunctionType.Orchestration)
 def vec_carry_narrowed_by_yield(
     x: pl.Tensor[[M_TILE, N_TILE], pl.FP32],
     y: pl.Out[pl.Tensor[[M_TILE, N_TILE], pl.FP32]],
 ):
     """A Vec carry whose yields are narrower -- outside this pass's remit."""
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="vec_carry"):
-        seed: pl.Tile[[M_TILE, N_TILE], pl.FP32, pl.Mem.Vec] = pl.tile.create(
-            [M_TILE, N_TILE], dtype=pl.FP32, target_memory=pl.Mem.Vec
-        )
-        for _, (carry,) in pl.pipeline(0, 4, 1, init_values=(seed,), stage=2):
-            narrowed: pl.Tile[
-                [M_TILE, N_TILE],
-                pl.FP32,
-                pl.Mem.Vec,
-                pl.TileView(valid_shape=[16, N_TILE]),
-            ] = pl.tile.set_validshape(carry, 16, N_TILE)
-            acc: pl.Tile[[M_TILE, N_TILE], pl.FP32, pl.Mem.Vec] = pl.yield_(narrowed)
+        seed = pl.tile.create([M_TILE, N_TILE], dtype=pl.FP32, target_memory=pl.Mem.Vec)
+        (carry,) = pl.intrin.carry(seed)
+        for _ in pl.pipeline(0, 4, 1, stage=2):
+            narrowed = pl.intrin.transmute(
+                pl.tile.set_validshape(carry, 16, N_TILE),
+                pl.Tile[
+                    [M_TILE, N_TILE],
+                    pl.FP32,
+                    pl.Mem.Vec,
+                    pl.TileView(valid_shape=[16, N_TILE]),
+                ],
+            )
+            pl.intrin.yield_(narrowed)
+        (acc,) = pl.intrin.leak()
         y = pl.tile.store(acc, [0, 0], y)
     return y
 
 
 def _jit_program(kernel):
-    """Specialize a fully annotated JIT function without running passes."""
-    _, _, tensor_meta, scalar_values, scalar_dtypes, per_func_dyn = kernel._bind_args_from_signature({})
-    return kernel._compile_to_program(tensor_meta, scalar_values, scalar_dtypes, per_func_dyn, pl)
+    """Wrap a fully annotated traced kernel in the single-function program."""
+    return ir.Program([kernel], kernel.name, kernel.span)
 
 
 _TENSOR_PREFIX = (

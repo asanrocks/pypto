@@ -73,7 +73,6 @@ from pypto import backend as _backend
 from pypto.ir.instruments import make_roundtrip_instrument
 from pypto.ir.op import tile_ops as T
 from pypto.ir.pass_manager import OptimizationStrategy, PassManager
-from pypto.runtime import RunConfig
 
 MS = ir.MemorySpace
 FP32 = DataType.FP32
@@ -4814,8 +4813,8 @@ def _e2e_kernel_text(fn):
 
     a2a3 rather than this file's ambient Ascend950 because 910B is the backend
     where a no-split crossing is dual-AIV dispatched, i.e. where the lane rule in
-    the tests below actually applies. The conftest fixture pins the backend at
-    setup and resets at teardown, so re-selecting it here is local to the test.
+    the tests below actually applies. Pinning the backend here is local to the
+    test: the conftest fixture resets the singleton at setup and teardown.
 
     Property verification stays ON — it is half of what these tests assert — but
     the ambient print->parse roundtrip instrument is dropped. A ``pl.jit`` kernel
@@ -4827,8 +4826,11 @@ def _e2e_kernel_text(fn):
     same way.
     """
     _backend.reset_for_testing()
+    _backend.set_backend_type(_backend.BackendType.Ascend910B)
     with passes.PassContext([passes.VerificationInstrument(passes.VerificationMode.BEFORE_AND_AFTER)]):
-        program = fn.lower(config=RunConfig(platform="a2a3"))
+        program = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(
+            ir.Program([fn], fn.name, fn.span)
+        )
 
     def body_of(func_type):
         matches = [f for f in program.functions.values() if f.func_type == func_type]
@@ -4853,7 +4855,7 @@ def test_e2e_none_region_v2c_crossing_lowers_to_split_zero_transport():
     value both lanes agree on); the compiler does not synthesize it here.
     """
 
-    @pl.jit_specializer
+    @pl.jit
     def none_v2c(
         a: pl.Tensor[[_E2E_M, _E2E_K], pl.FP16],
         q: pl.Tensor[[_E2E_M, _E2E_K], pl.FP16],
@@ -4884,7 +4886,7 @@ def test_e2e_none_region_c2v_crossing_lowers_to_split_zero_transport():
     than of the crossing.
     """
 
-    @pl.jit_specializer
+    @pl.jit
     def none_c2v(
         a: pl.Tensor[[_E2E_M, _E2E_K], pl.FP16],
         b: pl.Tensor[[_E2E_K, _E2E_N], pl.FP16],

@@ -66,6 +66,11 @@ def _run(program: ir.Program) -> ir.Program:
     return program
 
 
+def _program(fn: ir.Function) -> ir.Program:
+    """Wrap a fully annotated traced kernel in the single-function program."""
+    return ir.Program([fn], fn.name, fn.span)
+
+
 def _emit_pto(program: ir.Program, backend_type=BackendType.Ascend910B) -> str:
     reset_for_testing()
     set_backend_type(backend_type)
@@ -175,7 +180,7 @@ class NzMatmul:
         return out
 
 
-@pl.jit_specializer
+@pl.function(type=pl.FunctionType.Orchestration)
 def _batched_nz_mm(
     x: pl.Tensor[[64, 512], pl.INT8],
     w: pl.Tensor[[4, 256, 512], pl.INT8, pl.NZ],
@@ -232,8 +237,7 @@ def test_leading_dims_are_preserved():
     rank-3 tile, which ``tile.matmul`` rejects at parse time — before this pass
     ever runs.
     """
-    _, _, tm, sv, sd, dyn = _batched_nz_mm._bind_args_from_signature({})
-    program = _batched_nz_mm._compile_to_program(tm, sv, sd, dyn, pl)
+    program = _program(_batched_nz_mm)
     param_type = _nz_param(_run(program))
     assert _values(param_type.shape) == [4, 16, 16, 16, 32]
 
@@ -298,7 +302,7 @@ def test_maps_an_spmd_derived_slice_offset():
     `nb * 16` — see `test_does_not_reassociate_the_offset_arithmetic`.
     """
 
-    @pl.jit_specializer
+    @pl.function(type=pl.FunctionType.Orchestration)
     def _spmd_offset(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -312,8 +316,7 @@ def test_maps_an_spmd_derived_slice_offset():
             out[0:64, n0 : n0 + 256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sv, sd, dyn = _spmd_offset._bind_args_from_signature({})
-    call = _nz_load(_run(_spmd_offset._compile_to_program(tm, sv, sd, dyn, pl)))
+    call = _nz_load(_run(_program(_spmd_offset)))
     batch_off, col_off, row_off, in_fractal_row, in_c0_line = _elements(call.args[1])
     assert _const(batch_off) == 0
     assert _const(col_off) == 0
@@ -340,7 +343,7 @@ def test_does_not_reassociate_the_offset_arithmetic():
     multiply by the reduced factor 256/16 was synthesized.
     """
 
-    @pl.jit_specializer
+    @pl.function(type=pl.FunctionType.Orchestration)
     def _no_reassoc(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -354,8 +357,7 @@ def test_does_not_reassociate_the_offset_arithmetic():
             out[0:64, n0 : n0 + 256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sv, sd, dyn = _no_reassoc._bind_args_from_signature({})
-    after = _run(_no_reassoc._compile_to_program(tm, sv, sd, dyn, pl))
+    after = _run(_program(_no_reassoc))
     # Blocked offsets are [batch, C/c0, R/16, 0, 0] — index 2 is the row axis.
     row_off = _elements(_nz_load(after).args[1])[2]
 
@@ -388,7 +390,7 @@ def test_maps_a_loop_variable_slice_offset():
     answer, and it is exact precisely because the divisibility was proven first.
     """
 
-    @pl.jit_specializer
+    @pl.function(type=pl.FunctionType.Orchestration)
     def _loop_offset(
         x: pl.Tensor[[64, 1024], pl.INT8],
         w: pl.Tensor[[256, 1024], pl.INT8, pl.NZ],
@@ -403,8 +405,7 @@ def test_maps_a_loop_variable_slice_offset():
             out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sv, sd, dyn = _loop_offset._bind_args_from_signature({})
-    after = _run(_loop_offset._compile_to_program(tm, sv, sd, dyn, pl))
+    after = _run(_program(_loop_offset))
 
     # Two NZ loads share the weight: the k0 = 0 prologue and the loop body.
     offsets = [_elements(call.args[1]) for call in _nz_loads(after)]
@@ -493,7 +494,7 @@ def test_codegen_emits_the_divided_offset():
     offset the kernel computed, divided, rather than a re-derived index.
     """
 
-    @pl.jit_specializer
+    @pl.function(type=pl.FunctionType.Orchestration)
     def _spmd_offset(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -507,8 +508,7 @@ def test_codegen_emits_the_divided_offset():
             out[0:64, n0 : n0 + 256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sv, sd, dyn = _spmd_offset._bind_args_from_signature({})
-    text = _emit_pto(_spmd_offset._compile_to_program(tm, sv, sd, dyn, pl))
+    text = _emit_pto(_program(_spmd_offset))
     lines = text.splitlines()
 
     nz_view_line = next(line for line in lines if "make_tensor_view" in line and "layout<nz>" in line)
@@ -563,7 +563,7 @@ def test_rejects_logical_rank_above_three():
     restriction instead of emitting a view the assembler refuses.
     """
 
-    @pl.jit_specializer
+    @pl.function(type=pl.FunctionType.Orchestration)
     def _rank4_nz(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[2, 4, 256, 512], pl.INT8, pl.NZ],
@@ -576,9 +576,8 @@ def test_rejects_logical_rank_above_three():
             out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sv, sd, dyn = _rank4_nz._bind_args_from_signature({})
     with pytest.raises(ValueError, match="logical rank of at most 3"):
-        _run(_rank4_nz._compile_to_program(tm, sv, sd, dyn, pl))
+        _run(_program(_rank4_nz))
 
 
 def test_rejects_unaligned_rows():
@@ -657,7 +656,7 @@ def test_rejects_a_slice_offset_whose_alignment_cannot_be_proven():
     diagnostic anywhere downstream.
     """
 
-    @pl.jit_specializer
+    @pl.function(type=pl.FunctionType.Orchestration)
     def _unprovable(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -671,8 +670,7 @@ def test_rejects_a_slice_offset_whose_alignment_cannot_be_proven():
             out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sv, sd, dyn = _unprovable._bind_args_from_signature({})
-    program = _unprovable._compile_to_program(tm, sv, sd, dyn, pl)
+    program = _program(_unprovable)
     with pytest.raises(ValueError, match=r"offset on shape\[-2\] to be a multiple of 16"):
         _run(program)
 
@@ -688,7 +686,7 @@ def test_rejects_a_slice_offset_whose_sign_cannot_be_proven():
     written inline and waved through once bound to a name.
     """
 
-    @pl.jit_specializer
+    @pl.function(type=pl.FunctionType.Orchestration)
     def _maybe_negative(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -702,8 +700,7 @@ def test_rejects_a_slice_offset_whose_sign_cannot_be_proven():
             out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sv, sd, dyn = _maybe_negative._bind_args_from_signature({})
-    program = _maybe_negative._compile_to_program(tm, sv, sd, dyn, pl)
+    program = _program(_maybe_negative)
     with pytest.raises(ValueError, match=r"offset on shape\[-2\] to be non-negative"):
         _run(program)
 
@@ -716,7 +713,7 @@ def test_rejects_a_loop_variable_whose_step_breaks_alignment():
     the start alone would silently mis-address every later iteration.
     """
 
-    @pl.jit_specializer
+    @pl.function(type=pl.FunctionType.Orchestration)
     def _bad_step(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[256, 512], pl.INT8, pl.NZ],
@@ -730,8 +727,7 @@ def test_rejects_a_loop_variable_whose_step_breaks_alignment():
                 out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sv, sd, dyn = _bad_step._bind_args_from_signature({})
-    program = _bad_step._compile_to_program(tm, sv, sd, dyn, pl)
+    program = _program(_bad_step)
     with pytest.raises(ValueError, match=r"offset on shape\[-1\] to be a multiple of c0 = 32"):
         _run(program)
 

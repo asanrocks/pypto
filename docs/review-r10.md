@@ -108,6 +108,12 @@ do not add comments to explain it.
 growth is itself a finding and must be justified here — the orchestrator
 reviews every addition.
 
+**Outcome (round 1).** 34 candidates → 0 (oracle PASS). 7 of the 8 files were
+`unnecessary` and migrated; 1 (`tests/ut/runtime/test_prebuilt_artifact.py`,
+3 sites) is `necessary` and its path was added to the oracle's
+`TEST_ALLOWLIST` with the justification recorded in §7. `program_ast` was 0
+hits upstream and in HEAD — no work existed on that name. Verdict table in §7.
+
 **Failure mode to avoid.** These are pass/codegen suites: a rewrite that
 merely moves the fixture onto the tracing lane but silently drops the
 construct under test is worse than leaving it. Pin what the test asserts
@@ -213,14 +219,35 @@ including: what, why it was found, the red check, and the owning files. Twelve
 of the migration campaign's 37 tasks were found mid-flight; discovery is
 expected, not exceptional.
 
-None recorded yet.
+- **F1 — `pl.spmd` body region boundary differs between the parser lane and
+tracing.** Found in R1 (test_orchestration_returned_param_map.py). For
+`with pl.spmd(N, name_hint="x"):` whose body reads the per-block index, the
+parser synthesises ONE `InCoreScopeStmt` (CORE_GROUP) carrier around the whole
+body (`ast_parser._emit_spmd_body`, "inline body (reads the per-block index) →
+wrap in `InCoreScopeStmt`"). Tracing's `auto_scope` instead wraps each
+`pl.split_aiv` region separately and leaves the statements between them (a
+`pl.system.syncall` + a bare `pl.matmul`) outside any CORE_GROUP region; after
+`ConvertTensorToTileOps` that matmul lands in Vec and `AivSplitValid` rejects
+the fixture's `pl.aiv_shard` ("operand is in Vec … requires Acc"). Repro: the
+fixture in `tests/ut/codegen/test_orchestration_returned_param_map.py`, whose
+migrated text states the carrier explicitly
+(`pl.at(level=pl.Level.CORE_GROUP, name_hint="fa_fused")` nested in the spmd)
+and then reproduces the parser lane's orchestration byte-for-byte. Decide:
+intended (the tracing lane requires an explicit carrier — then document it on
+`pl.spmd`) or a frontend-equivalence divergence (then `auto_scope` should wrap
+the whole index-reading body). Owning files:
+`python/pypto/language/tracer/decorators/function.py` (auto-scope),
+`python/pypto/language/constructs/scopes.py`, `language/parser/ast_parser.py`.
+Red check: trace the fixture body without the explicit carrier and run
+`tests/ut/codegen/test_orchestration_returned_param_map.py`.
 
 ## 5. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
-| 0 | seed tracker + oracles | — (orchestrator) | done | *(this commit)* | oracles frozen: R1 red 34, R2 red 167, R4 red 2 |
-| 1 | R1 | `opencode-go/deepseek-v4.1-flash:high` | pending | | |
+| 0 | seed tracker + oracles | — (orchestrator) | done | `1acbadcc8` | oracles frozen: R1 red 34, R2 red 167, R4 red 2 |
+| 0.1 | churn-oracle scope fix | — (orchestrator) | done | *(this commit)* | R2 red restored to the seed 167/38; the tooling had been auditing itself (`scripts/review/comment_churn_allowlist.txt` reported as churn) |
+| 1 | R1 | `opencode-go/deepseek-v4.1-flash:high` | done | `be0618dcf` | 34 → 0 candidates (oracle PASS); 7 files migrated, 1 allowlisted as `necessary`; F1 found. **Orchestrator-verified**: 240 touched tests pass, D10 justification confirmed verbatim, oracle edit narrows scope without weakening it |
 | 1 | R2 | `opencode-go/deepseek-v4.1-flash:high` | pending | | |
 | 1 | R3 | `openai/gpt-5.6-luna:max` | pending | | |
 | 1 | R4 | `opencode-go/deepseek-v4.1-flash:high` | pending | | |
@@ -251,7 +278,44 @@ resume the *same* path with a corrective, time-boxed prompt. Do not pass
 
 ### R1 verdicts
 
-None recorded yet.
+Oracle: `python3 scripts/review/check_deprecated_runtime.py`.
+Before: `119 usages (85 allowlisted, 34 candidates)`, FAIL, exit 1.
+After: `88 usages (88 allowlisted, 0 candidates)`, PASS, exit 0.
+`program_ast`: 0 hits before and after (nothing to do).
+
+| File | Sites | Verdict | Change |
+| --- | --- | --- | --- |
+| `tests/ut/ir/transforms/test_block_mx_scale_tensor_views.py` | 1 | unnecessary | frozen `@pl.jit_specializer` kernel → `@pl.program` class + `_run`; the `_bind_args_from_signature` + `_compile_to_program` pair (which built the IR through `pl.parse`) is gone. 10/10 tests, same as HEAD |
+| `tests/ut/codegen/test_matmul_init_cond.py` | 1 | unnecessary | `@pl.jit` + `kernel.compile(..., config=RunConfig(codegen_only=True, save_kernels=True, ...))`. The two trip-count worlds are now the annotation: a host `int` (baked) vs bare `pl.Scalar` + `pl.runtime(4, pl.INDEX)` (a runtime scalar, and bare is what keeps the kernel on the lazy lane). Added the world pin `("to %arg3 step" in mlir) == runtime_bound`, because the annotations — not the removed `pl.RUNTIME` sentinel — now select the world; without it the parametrization is unverifiable. 14/14 tests |
+| `tests/ut/ir/transforms/test_lower_auto_vector_split.py` | 2 | unnecessary | `@pl.jit` (eager) + `PassManager.get_strategy(Default).run_passes(ir.Program([fn], fn.name, fn.span))` with the a2a3 backend pinned inline; `lower(config=RunConfig(platform="a2a3"))` and the now-unused `RunConfig` import are gone. Assertions unchanged, 2/2 e2e tests |
+| `tests/ut/ir/transforms/test_narrow_loop_carry_valid_shape.py` | 7 | unnecessary | module-level `@pl.function(type=pl.FunctionType.Orchestration)`; `_jit_program` reduces to `ir.Program([kernel], kernel.name, kernel.span)`. `vec_carry_narrowed_by_yield` restated in the dialect's carry form (`pl.intrin.carry`/`leak`/`transmute`, `pl.intrin.yield_`). 13/13 tests |
+| `tests/ut/ir/transforms/test_auto_tile_matmul_acc_mn.py` | 6 | unnecessary | same shape as the row above. 25/25 tests |
+| `tests/ut/ir/transforms/test_block_nz_tensor_views.py` | 9 | unnecessary | same shape, through a new local `_program(fn)` helper (9 call sites). 25/25 tests |
+| `tests/ut/codegen/test_orchestration_returned_param_map.py` | 5 | unnecessary | `@pl.jit.inline` helpers + `@pl.jit` entries; `_orch_code(entry, *callees)` runs the Default pipeline over `ir.Program([entry, *callees], entry.name, entry.span)` with the a2a3 backend pinned. Each spmd body now states its carrier explicitly — `pl.spmd(NUM_CORES, name_hint="fa_fused", sync_start=True)` nested with `pl.at(level=pl.Level.CORE_GROUP, name_hint="fa_fused")` — which restores the parser lane's implicit carrier (see F1). The `torch` import and the torch sample tuple are gone. 3/3 tests; the emitted orchestration C++ is **byte-identical** to the pre-migration lane for all three kernels (compared against the HEAD output captured before the rewrite) |
+| `tests/ut/runtime/test_prebuilt_artifact.py` | 3 | necessary | see below |
+
+**`tests/ut/runtime/test_prebuilt_artifact.py` — necessary (3 sites, 229 / 746
+/ 808).** The kernels there are `def kernel(): pass` stubs on which
+`compile`/`_compile` are monkeypatched; what the tests exercise is
+`JITFunction.warmup` (line 229), the automatic artifact publication through
+`compile(config=RunConfig(cache_config=CacheConfig(enabled=True, ...)))` (lines
+746, 808) and the quarantined `host` entry (for the DISTRIBUTED build kind) — all on
+`pl.jit_specializer`'s runtime. Only the
+quarantined runtime has `warmup`/`host`/`_compile`; the tracing jit has none of
+them and never reads or publishes through the artifact store
+(`docs/migration-todo.md` D10, verified: `rg 'def warmup' python/pypto` → only
+`python/pypto/jit/decorator.py`). Migrating these sites would mean porting
+`warmup`/persistent publication to the tracing jit — a feature, not a test
+migration — so the code is left untouched and the gap stands as recorded in D10.
+
+**Allowlist growth (orchestrator review required).** One entry was added to
+`TEST_ALLOWLIST` in `scripts/review/check_deprecated_runtime.py`:
+`tests/ut/runtime/test_prebuilt_artifact.py`. Rationale: the suite's own header
+calls itself specializer-mechanics coverage, and the only specializer surface it
+touches is the warmup/publication path the tracing lane does not have. The
+`tests/ut/jit/` scope in the original allowlist assumed specializer-mechanics
+tests live in that directory; this one does not. No other allowlist entry was
+touched (production sites and `tests/ut/jit/**` are unchanged).
 
 ### R2 allowlist justifications
 

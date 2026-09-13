@@ -463,12 +463,17 @@ def test_gemv_non_boolean_init_cond_is_rejected():
 
 @pytest.mark.parametrize("runtime_bound", [False, True])
 def test_shared_row_accumulator_compiles_without_acc_to_acc_copy(tmp_path, runtime_bound):
-    @pl.jit_specializer
+    # The trip count's world is what the parametrization selects: a host ``int`` is
+    # baked at trace time, a bare ``pl.Scalar`` stays a runtime scalar bound with
+    # ``pl.runtime``. pyright cannot see an annotation chosen at runtime.
+    n_tiles_ann = pl.Scalar if runtime_bound else int
+
+    @pl.jit
     def kernel(
         x: pl.Tensor[[64, 1024], pl.INT8],
         w: pl.Tensor[[128, 1024], pl.INT8],
         out: pl.Out[pl.Tensor[[64, 128], pl.INT32]],
-        n_tiles: pl.Scalar[pl.INDEX],
+        n_tiles: n_tiles_ann,  # pyright: ignore[reportInvalidTypeForm]
     ):
         with pl.at(level=pl.Level.CORE_GROUP):
             acc = pl.create_tensor([64, 128], dtype=pl.INT32)
@@ -484,12 +489,18 @@ def test_shared_row_accumulator_compiles_without_acc_to_acc_copy(tmp_path, runti
         return out
 
     kernel.compile(
-        n_tiles=pl.RUNTIME if runtime_bound else 4,
+        pl.Tensor[[64, 1024], pl.INT8],
+        pl.Tensor[[128, 1024], pl.INT8],
+        pl.Out[pl.Tensor[[64, 128], pl.INT32]],
+        pl.runtime(4, pl.INDEX) if runtime_bound else 4,
         config=RunConfig(codegen_only=True, save_kernels=True, save_kernels_dir=str(tmp_path)),
     )
     files = list(tmp_path.rglob("*.pto"))
     assert files
     mlir = "\n".join(file.read_text() for file in files)
+    # The world the parametrization selected reaches the artifact: the baked
+    # trip count is a constant, the runtime one is the kernel's scalar argument.
+    assert ("to %arg3 step" in mlir) == runtime_bound
     assert "rows=16, cols=512" in mlir
     assert "pto.tmatmul.acc" in mlir
     assert "pto.tmatmul ins" in mlir

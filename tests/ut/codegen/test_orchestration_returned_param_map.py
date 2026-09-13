@@ -42,8 +42,9 @@ import re
 
 import pypto.language as pl
 import pytest
-import torch
+from pypto import backend as _backend
 from pypto import codegen, passes
+from pypto.ir.pass_manager import OptimizationStrategy, PassManager
 from pypto.pypto_core import ir
 
 NUM_CORES = 24
@@ -64,7 +65,7 @@ HALF_ROWS = ROWS_PER_CORE // 2
 # ---------------------------------------------------------------------------------------------
 
 
-@pl.jit_specializer.inline
+@pl.jit.inline
 def _layer_guarded(
     cur: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],
@@ -79,7 +80,10 @@ def _layer_guarded(
     q_pad = pl.create_tensor([ROWS, HIDDEN], dtype=pl.BF16)
     attn_out = pl.create_tensor([ROWS, HIDDEN], dtype=pl.BF16)
 
-    with pl.spmd(NUM_CORES, name_hint="fa_fused", sync_start=True):
+    with (
+        pl.spmd(NUM_CORES, name_hint="fa_fused", sync_start=True),
+        pl.at(level=pl.Level.CORE_GROUP, name_hint="fa_fused"),
+    ):
         c = pl.get_block_idx()
         r0 = c * ROWS_PER_CORE
         pr0 = ((c + 1) % NUM_CORES) * ROWS_PER_CORE  # cross-core partner read
@@ -133,7 +137,7 @@ def _layer_guarded(
     return nxt
 
 
-@pl.jit_specializer.inline
+@pl.jit.inline
 def _layer_unconditional(
     cur: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],
@@ -148,7 +152,10 @@ def _layer_unconditional(
     q_pad = pl.create_tensor([ROWS, HIDDEN], dtype=pl.BF16)
     attn_out = pl.create_tensor([ROWS, HIDDEN], dtype=pl.BF16)
 
-    with pl.spmd(NUM_CORES, name_hint="fa_fused", sync_start=True):
+    with (
+        pl.spmd(NUM_CORES, name_hint="fa_fused", sync_start=True),
+        pl.at(level=pl.Level.CORE_GROUP, name_hint="fa_fused"),
+    ):
         c = pl.get_block_idx()
         r0 = c * ROWS_PER_CORE
         pr0 = ((c + 1) % NUM_CORES) * ROWS_PER_CORE
@@ -172,7 +179,7 @@ def _layer_unconditional(
     return nxt
 
 
-@pl.jit_specializer
+@pl.jit
 def guarded_two_trip(
     x: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],
@@ -197,7 +204,7 @@ def guarded_two_trip(
     return out
 
 
-@pl.jit_specializer
+@pl.jit
 def unconditional_two_trip(
     x: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],
@@ -222,7 +229,7 @@ def unconditional_two_trip(
     return out
 
 
-@pl.jit_specializer
+@pl.jit
 def guarded_one_trip(
     x: pl.Tensor[[ROWS, HIDDEN], pl.FP32],
     wid: pl.Tensor[[HIDDEN, HIDDEN], pl.BF16],
@@ -266,12 +273,13 @@ _OP_RE = re.compile(r"\.add_(input|inout|output)\((\w+)\)")
 _CARRY_RE = re.compile(r"^\s*(\w+)__rv_v\d+\s*=\s*(\w+);\s*$", re.MULTILINE)
 
 
-def _orch_code(kernel) -> str:
-    """Specialize + run the Default pipeline, then emit the orchestration C++ in-process.
+def _orch_code(kernel, *callees) -> str:
+    """Run the Default pipeline over the traced entry, then emit the orchestration C++ in-process.
 
-    ``lower`` returns the post-pass ``ir.Program`` without dispatching to a device;
-    the torch tensors are read for shape/dtype only. ``codegen.generate_orchestration`` is the
-    same emitter that writes ``<build>/orchestration/<name>.cpp``.
+    The entry is a traced ``ir.Function``; ``callees`` are its inline helpers, which
+    ``inline_functions`` splices at the call site. No device is involved.
+    ``codegen.generate_orchestration`` is the same emitter that writes
+    ``<build>/orchestration/<name>.cpp``.
 
     Scoped to BASIC (property) verification, like
     ``_orchestration_codegen_common._generate_orch_full_pipeline(allow_relaxed_verification=True)``:
@@ -280,16 +288,12 @@ def _orch_code(kernel) -> str:
     controls included). Property verification still runs, so real IR invariant violations are
     still caught.
     """
-    sample = (
-        torch.empty(ROWS, HIDDEN, dtype=torch.float32),
-        torch.empty(HIDDEN, HIDDEN, dtype=torch.bfloat16),
-        torch.empty(HIDDEN, HIDDEN, dtype=torch.bfloat16),
-        torch.empty(CACHE_ROWS, HIDDEN, dtype=torch.bfloat16),
-        torch.empty(CACHE_ROWS, HIDDEN, dtype=torch.bfloat16),
-        torch.empty(ROWS, HIDDEN, dtype=torch.float32),
-    )
+    _backend.reset_for_testing()
+    _backend.set_backend_type(_backend.BackendType.Ascend910B)
     with passes.PassContext([passes.VerificationInstrument(passes.VerificationMode.BEFORE_AND_AFTER)]):
-        program = kernel.lower(*sample)
+        program = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(
+            ir.Program([kernel, *callees], kernel.name, kernel.span)
+        )
     for func in program.functions.values():
         if func.func_type == ir.FunctionType.Orchestration:
             return codegen.generate_orchestration(program, func).code
@@ -336,7 +340,7 @@ class TestReturnedParamMapBinding:
         On the buggy codegen 'out_proj' is handed ``v_cache__rv_v2`` instead of ``attn_out``,
         and the loop tail yields ``v_cache__rv_v2 = q_pad_inlineNN;``.
         """
-        code = _orch_code(guarded_two_trip)
+        code = _orch_code(guarded_two_trip, _layer_guarded)
         _assert_consumer_reads_producer_buffer(code)
 
         # The poisoned map also yields garbage into the loop carry: a k/v cache carry must
@@ -369,11 +373,11 @@ class TestReturnedParamMapBinding:
 
     def test_unconditional_param_write_binds_consumer_correctly(self):
         """Control (b) removed: same param writes without the runtime guard bind correctly."""
-        _assert_consumer_reads_producer_buffer(_orch_code(unconditional_two_trip))
+        _assert_consumer_reads_producer_buffer(_orch_code(unconditional_two_trip, _layer_unconditional))
 
     def test_single_trip_loop_binds_consumer_correctly(self):
         """Control (c) removed: a 1-trip loop has no carry, so the binding is correct."""
-        _assert_consumer_reads_producer_buffer(_orch_code(guarded_one_trip))
+        _assert_consumer_reads_producer_buffer(_orch_code(guarded_one_trip, _layer_guarded))
 
 
 if __name__ == "__main__":

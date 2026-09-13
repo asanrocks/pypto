@@ -30,7 +30,15 @@ PROD_ALLOWLIST = (
 )
 
 # Test suites whose contract *is* specializer mechanics.
-TEST_ALLOWLIST = ("tests/ut/jit/",)
+TEST_ALLOWLIST = (
+    "tests/ut/jit/",
+    # The persistent artifact store and the warmup/publication path serve the
+    # quarantined runtime only: ``warmup``/``host`` exist on its JITFunction and
+    # nowhere on the tracing jit, and the tracing lane never reads the store
+    # (docs/migration-todo.md D10). The suite's own header says so, and its
+    # kernel stubs only exercise those quarantined hooks.
+    "tests/ut/runtime/test_prebuilt_artifact.py",
+)
 
 # Code surfaces only. Markdown is excluded deliberately: the migration rewrote
 # docs prose on purpose (see the tracker's scope section), and a tracker that
