@@ -1307,6 +1307,8 @@ class _JitDecorator:
     ``@pl.jit.incore``  ``@pl.function(type=InCore[, level=…])``
     ``@pl.jit.inline``  ``@pl.function(type=Inline)``
     ``@pl.jit.opaque``  ``@pl.function(type=Opaque)``
+    ``@pl.jit.graph``   ``@pl.function(type=Graph)`` — a recordable
+                        orchestration fragment (``host_build_graph``)
     ``@pl.jit.extern``  the extern tier (AIC/AIV/mixed members)
     ==================  =============================================
     """
@@ -1316,6 +1318,7 @@ class _JitDecorator:
         self.incore = _JitAlias("incore", function_type=ir.FunctionType.InCore, allow_level=True)
         self.inline = _JitAlias("inline", function_type=ir.FunctionType.Inline)
         self.opaque = _JitAlias("opaque", function_type=ir.FunctionType.Opaque)
+        self.graph = _JitAlias("graph", function_type=ir.FunctionType.Graph)
         self.extern = _JitExtern()
 
     def __call__(
