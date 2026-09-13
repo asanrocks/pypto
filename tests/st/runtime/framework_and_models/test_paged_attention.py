@@ -81,6 +81,8 @@ class QKMatmulTestCase(PTOTestCase):
         ]
 
     def get_program(self) -> Any:
+        _qk = kernel_qk_matmul  # closure capture: @pl.program adapts closure-captured callees only
+
         @pl.program
         class QKMatmulProgram:
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -90,7 +92,7 @@ class QKMatmulTestCase(PTOTestCase):
                 kj_t: pl.Tensor[[128, 128], pl.BF16],
                 out_sij: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
-                out_sij = kernel_qk_matmul(qi, kj_t, out_sij)
+                out_sij = _qk(qi, kj_t, out_sij)
                 return out_sij
 
         return QKMatmulProgram
@@ -141,6 +143,8 @@ class SoftmaxPrepareTestCase(PTOTestCase):
         ]
 
     def get_program(self) -> Any:
+        _sf = kernel_softmax_prepare  # closure capture: @pl.program adapts closure-captured callees only
+
         @pl.program
         class SoftmaxPrepareProgram:
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -158,7 +162,7 @@ class SoftmaxPrepareTestCase(PTOTestCase):
             ]:
                 # Read scale value from config tensor
                 scale: pl.Scalar[pl.FP32] = pl.tensor.read(config, [0])
-                pij_out, mij_out, lij_out = kernel_softmax_prepare(sij, scale, pij_out, mij_out, lij_out)
+                pij_out, mij_out, lij_out = _sf(sij, scale, pij_out, mij_out, lij_out)
                 return pij_out, mij_out, lij_out
 
         return SoftmaxPrepareProgram
@@ -229,6 +233,8 @@ class SoftmaxPrepareUnalignedTestCase(PTOTestCase):
         ]
 
     def get_program(self) -> Any:
+        _sfu = kernel_softmax_prepare_unaligned  # closure capture for @pl.program
+
         @pl.program
         class SoftmaxPrepareUnalignedProgram:
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -247,9 +253,7 @@ class SoftmaxPrepareUnalignedTestCase(PTOTestCase):
             ]:
                 scale: pl.Scalar[pl.FP32] = pl.tensor.read(config, [0])
                 valid_len: pl.Scalar[pl.INT64] = pl.tensor.read(valid_len_cfg, [0])
-                pij_out, mij_out, lij_out = kernel_softmax_prepare_unaligned(
-                    sij, scale, valid_len, pij_out, mij_out, lij_out
-                )
+                pij_out, mij_out, lij_out = _sfu(sij, scale, valid_len, pij_out, mij_out, lij_out)
                 return pij_out, mij_out, lij_out
 
         return SoftmaxPrepareUnalignedProgram
@@ -305,6 +309,8 @@ class PVMatmulTestCase(PTOTestCase):
         ]
 
     def get_program(self) -> Any:
+        _pv = kernel_pv_matmul  # closure capture: @pl.program adapts closure-captured callees only
+
         @pl.program
         class PVMatmulProgram:
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -314,7 +320,7 @@ class PVMatmulTestCase(PTOTestCase):
                 vj: pl.Tensor[[128, 128], pl.BF16],
                 out_oi: pl.Out[pl.Tensor[[16, 128], pl.FP32]],
             ) -> pl.Tensor[[16, 128], pl.FP32]:
-                out_oi = kernel_pv_matmul(pij, vj, out_oi)
+                out_oi = _pv(pij, vj, out_oi)
                 return out_oi
 
         return PVMatmulProgram
@@ -386,6 +392,8 @@ class OnlineUpdateTestCase(PTOTestCase):
         ]
 
     def get_program(self) -> Any:
+        _up = kernel_online_update  # closure capture: @pl.program adapts closure-captured callees only
+
         @pl.program
         class OnlineUpdateProgram:
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -408,7 +416,7 @@ class OnlineUpdateTestCase(PTOTestCase):
                 # Read is_first and is_last from config tensor
                 is_first: pl.Scalar[pl.INT64] = pl.tensor.read(config, [0])
                 is_last: pl.Scalar[pl.INT64] = pl.tensor.read(config, [1])
-                mi, li, oi, dst = kernel_online_update(mij, lij, oi_new, mi, li, oi, dst, is_first, is_last)
+                mi, li, oi, dst = _up(mij, lij, oi_new, mi, li, oi, dst, is_first, is_last)
                 return mi, li, oi, dst
 
         return OnlineUpdateProgram

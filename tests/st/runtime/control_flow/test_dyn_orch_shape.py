@@ -37,8 +37,9 @@ scenario 2; (128, 16) for scenario 3 (rows divisible by 2).
 All tests use OptimizationStrategy.Default and run across all PLATFORMS.
 """
 
-# DSL function bodies are parsed as AST, not executed — suppress pyright errors
-# from type-checking annotations that reference module-level DynVar names.
+# DSL function bodies are collected by tracing — they execute at decoration
+# time, so annotations that reference module-level DynVar names resolve
+# normally. Local annotations are documentation only (guide §4.4).
 # pyright: reportUndefinedVariable=false
 
 from typing import Any
@@ -202,7 +203,7 @@ class DynOrchReshapeAddTestCase(PTOTestCase):
                 a_flat: pl.Tensor[[M], pl.FP32],
                 b_flat: pl.Tensor[[M], pl.FP32],
                 c: pl.Out[pl.Tensor[[M, N], pl.FP32]],
-            ) -> pl.Tensor[[M, N], pl.FP32]:
+            ) -> pl.Tensor[[rows, cols], pl.FP32]:
                 a2d: pl.Tensor[[rows, cols], pl.FP32] = pl.reshape(a_flat, [rows, cols])
                 b2d: pl.Tensor[[rows, cols], pl.FP32] = pl.reshape(b_flat, [rows, cols])
                 c_out = self.add_kernel(a2d, b2d, c)
@@ -584,6 +585,17 @@ class DynOrchPagedAttentionTestCase(PTOTestCase):
     def get_program(self) -> Any:
         q_tile = 16
 
+        # Capture the module-level example kernels as builder locals so the
+        # orchestration method reaches them through closure capture: the
+        # program lane adapts captured standalone functions into callable
+        # callees, while a bare module-global name would reach the traced
+        # body as a raw ir.Function (same spelling as example 04).
+        _init = kernel_init_inplace
+        _qk = kernel_qk_matmul
+        _sm = kernel_softmax_prepare
+        _pv = kernel_pv_matmul
+        _upd = kernel_online_update
+
         @pl.program
         class DynOrchPagedAttentionProgram:
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -615,67 +627,45 @@ class DynOrchPagedAttentionTestCase(PTOTestCase):
                     for q_idx in pl.range(q_loop_cfg):
                         cur_offset = b_idx * q_head_num + q_idx * q_tile
 
-                        oi_buf: pl.Tensor[[q_tile, head_dim_cfg], pl.FP32] = pl.create_tensor(
-                            [q_tile, head_dim_cfg], dtype=pl.FP32
-                        )
-                        li_buf: pl.Tensor[[q_tile, 1], pl.FP32] = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
-                        mi_buf: pl.Tensor[[q_tile, 1], pl.FP32] = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
-                        oi, li_update, mi_update = kernel_init_inplace(oi_buf, li_buf, mi_buf)
+                        oi_buf = pl.create_tensor([q_tile, head_dim_cfg], dtype=pl.FP32)
+                        li_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
+                        mi_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
+                        oi, li_update, mi_update = _init(oi_buf, li_buf, mi_buf)
 
                         for bn in pl.range(bn_this_batch):
-                            qi: pl.Tensor[[q_tile, head_dim_cfg], pl.BF16] = pl.slice(
-                                query, [q_tile, head_dim_cfg], [cur_offset, 0]
-                            )
+                            qi = pl.slice(query, [q_tile, head_dim_cfg], [cur_offset, 0])
                             cur_block_idx = pl.tensor.read(block_table, [b_idx * block_num_cfg + bn])
                             valid_len = pl.min(block_size_cfg, cur_seq - bn * block_size_cfg)
                             kv_block_row = cur_block_idx * block_size_cfg
-                            kj: pl.Tensor[[block_size_cfg, head_dim_cfg], pl.BF16] = pl.slice(
-                                key_cache, [block_size_cfg, head_dim_cfg], [kv_block_row, 0]
-                            )
-                            vj: pl.Tensor[[block_size_cfg, head_dim_cfg], pl.BF16] = pl.slice(
-                                value_cache, [block_size_cfg, head_dim_cfg], [kv_block_row, 0]
-                            )
-                            sij_buf: pl.Tensor[[q_tile, block_size_cfg], pl.FP32] = pl.create_tensor(
-                                [q_tile, block_size_cfg], dtype=pl.FP32
-                            )
-                            sij = kernel_qk_matmul(qi, kj, sij_buf)
-                            sij_valid: pl.Tensor[[q_tile, valid_len], pl.FP32] = pl.slice(
-                                sij, [q_tile, valid_len], [0, 0]
-                            )
-                            pij_f16_buf: pl.Tensor[[q_tile, block_size_cfg], pl.BF16] = pl.create_tensor(
-                                [q_tile, block_size_cfg], dtype=pl.BF16
-                            )
-                            mi_sm_buf: pl.Tensor[[q_tile, 1], pl.FP32] = pl.create_tensor(
-                                [q_tile, 1], dtype=pl.FP32
-                            )
-                            li_sm_buf: pl.Tensor[[q_tile, 1], pl.FP32] = pl.create_tensor(
-                                [q_tile, 1], dtype=pl.FP32
-                            )
-                            pij_f16, mi, li = kernel_softmax_prepare(
+                            kj = pl.slice(key_cache, [block_size_cfg, head_dim_cfg], [kv_block_row, 0])
+                            vj = pl.slice(value_cache, [block_size_cfg, head_dim_cfg], [kv_block_row, 0])
+                            sij_buf = pl.create_tensor([q_tile, block_size_cfg], dtype=pl.FP32)
+                            sij = _qk(qi, kj, sij_buf)
+                            sij_valid = pl.slice(sij, [q_tile, valid_len], [0, 0])
+                            pij_f16_buf = pl.create_tensor([q_tile, block_size_cfg], dtype=pl.BF16)
+                            mi_sm_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
+                            li_sm_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
+                            pij_f16, mi, li = _sm(
                                 sij_valid,
                                 1.0,
                                 pij_f16_buf,
                                 mi_sm_buf,
                                 li_sm_buf,
                             )
-                            oi_tmp_buf: pl.Tensor[[q_tile, head_dim_cfg], pl.FP32] = pl.create_tensor(
-                                [q_tile, head_dim_cfg], dtype=pl.FP32
-                            )
-                            oi_tmp = kernel_pv_matmul(pij_f16, vj, oi_tmp_buf)
+                            oi_tmp_buf = pl.create_tensor([q_tile, head_dim_cfg], dtype=pl.FP32)
+                            oi_tmp = _pv(pij_f16, vj, oi_tmp_buf)
 
                             if bn == 0:
-                                is_first: pl.Scalar[pl.INT64] = pl.yield_(pl.const(1, pl.INT64))
+                                is_first = pl.const(True, pl.BOOL)
                             else:
-                                is_first: pl.Scalar[pl.INT64] = pl.yield_(pl.const(0, pl.INT64))
+                                is_first = pl.const(False, pl.BOOL)
                             if bn == bn_this_batch - 1:
-                                is_last: pl.Scalar[pl.INT64] = pl.yield_(pl.const(1, pl.INT64))
+                                is_last = pl.const(True, pl.BOOL)
                             else:
-                                is_last: pl.Scalar[pl.INT64] = pl.yield_(pl.const(0, pl.INT64))
+                                is_last = pl.const(False, pl.BOOL)
 
-                            out_view_buf: pl.Tensor[[q_tile, head_dim_cfg], pl.FP32] = pl.slice(
-                                out, [q_tile, head_dim_cfg], [cur_offset, 0]
-                            )
-                            mi_update, li_update, oi, out_view = kernel_online_update(
+                            out_view_buf = pl.slice(out, [q_tile, head_dim_cfg], [cur_offset, 0])
+                            mi_update, li_update, oi, out_view = _upd(
                                 mi, li, oi_tmp, mi_update, li_update, oi, out_view_buf, is_first, is_last
                             )
 

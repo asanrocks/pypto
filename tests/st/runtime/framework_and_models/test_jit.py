@@ -67,6 +67,14 @@ def persistent_add(x: pl.Tensor[[16, 16], pl.FP32], out: pl.Out[pl.Tensor[[16, 1
     return out
 
 
+@pl.jit
+def return_style_add(a: pl.Tensor, b: pl.Tensor):
+    """Return-style kernel (gap F8): the output is a *return value*, no Out param."""
+    with pl.at(level=pl.Level.CORE_GROUP):
+        c = pl.add(a, b)
+    return c
+
+
 def _persistent_process(root, platform, device_id, consume, connection):
     """Fresh interpreter: ordinary execution publishes, then readonly reuse executes."""
     phase = "consumer" if consume else "producer"
@@ -187,6 +195,24 @@ class TestJITExecution:
         out = torch.zeros_like(x)
         prepared(x, out, 3.0, config=test_config)
         torch.testing.assert_close(out, torch.full_like(out, 5.0))
+
+    def test_return_style_dispatch_returns_output(self, test_config):
+        """F8 regression: a kernel whose output is a return value (no ``pl.Out``)
+        hands the host the computed tensor instead of ``()``.
+
+        Before the fix the kernel compiled and executed but the synthesized
+        return buffer stayed internal to the orchestration scope, so the host
+        call returned an empty tuple.
+        """
+        return_style_add._cache.clear()
+
+        a = torch.randn(16, 16, dtype=torch.float32)
+        b = torch.randn(16, 16, dtype=torch.float32)
+
+        out = return_style_add(a, b, config=test_config)
+
+        assert isinstance(out, torch.Tensor), f"return-style dispatch dropped the output: {out!r}"
+        torch.testing.assert_close(out, a + b)
 
     def test_inplace_add(self, test_config):
         """@pl.jit: first call compiles and executes correctly on device."""

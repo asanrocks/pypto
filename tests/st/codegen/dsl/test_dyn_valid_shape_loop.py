@@ -39,7 +39,7 @@ class TestLoopDynValidShape:
         sij_buf = torch.zeros((N_ROW, BLOCK_COL), dtype=torch.float32)
         out = torch.zeros((N_ROW, BLOCK_COL), dtype=torch.float32)
         cfg = torch.tensor([N_BLOCKS, 48, BLOCK_COL], dtype=torch.int64)
-        program = dyn_valid_shape_loop.lower(sij_buf, cfg, out)
+        program = dyn_valid_shape_loop.compile_for_test(sij_buf, cfg, out)
         # Post-pass program must be non-empty and well-formed.
         assert program is not None
         assert len(program.functions) >= 1, (
@@ -51,7 +51,7 @@ class TestLoopDynValidShape:
         sij_buf = torch.zeros((N_ROW, BLOCK_COL), dtype=torch.float32)
         out = torch.zeros((N_ROW, BLOCK_COL), dtype=torch.float32)
         cfg = torch.tensor([N_BLOCKS, BLOCK_COL, BLOCK_COL], dtype=torch.int64)
-        program = dyn_valid_shape_loop.lower(sij_buf, cfg, out)
+        program = dyn_valid_shape_loop.compile_for_test(sij_buf, cfg, out)
         assert program is not None
         assert len(program.functions) >= 1, (
             f"expected >= 1 function in post-pass IR, got {len(program.functions)}"

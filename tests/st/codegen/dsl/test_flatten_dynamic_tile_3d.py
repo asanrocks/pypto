@@ -23,14 +23,16 @@ tile to ``[CHUNK, 512]`` while **preserving the dynamic ``valid_shape``**
 the full ``@pl.jit`` lowering pipeline accepts such a kernel.
 """
 
-# DSL function bodies are parsed as AST, not executed — suppress pyright errors
-# from annotations that reference module-level DynVar names and from DSL-only
+# DSL function bodies are traced — suppress pyright errors from annotations
+# that reference module-level DynVar names and from DSL-only
 # subscript-assignment syntax.
 # pyright: reportUndefinedVariable=false, reportIndexIssue=false, reportUnusedVariable=false
 
 import pypto.language as pl
 import pytest
-import torch
+from pypto import backend, ir
+from pypto.backend import BackendType
+from pypto.ir.pass_manager import OptimizationStrategy, PassManager
 
 B_DYN = pl.dynamic("B_DYN")
 S_DYN = pl.dynamic("S_DYN")
@@ -56,16 +58,14 @@ def cast_3d_dynamic(
     s_dim = pl.tensor.dim(x, 1)
     for b in pl.parallel(0, b_dim):
         with pl.at(level=pl.Level.CORE_GROUP, name_hint="inner"):
-            # User-written chunk loop over the dynamic S dim, carrying the output
-            # tensor through ``init_values`` so each chunk's store threads forward.
-            # A loop with init_values requires the assignment form of pl.yield_
-            # (the LHS supplies the post-loop binding); bare pl.yield_ is rejected.
-            for c, (o,) in pl.range(0, s_dim, CHUNK, init_values=(out,)):
+            # User-written chunk loop over the dynamic S dim. Each chunk's store
+            # rebinds ``out``, so the loop carry is derived from the rebind
+            # itself — no init_values/yield_ plumbing.
+            for c in pl.range(0, s_dim, CHUNK):
                 valid = pl.min(CHUNK, s_dim - c)
                 t = pl.load(x, [b, c, 0], [1, CHUNK, 512], valid_shape=[1, valid, 512])
                 t = pl.cast(t, target_type=pl.FP32)
-                o = pl.store(t, [b, c, 0], o)
-                chunk_out = pl.yield_(o)  # noqa: F841 — parser requires the yield-LHS binding
+                out = pl.store(t, [b, c, 0], out)
     return out
 
 
@@ -78,18 +78,24 @@ class TestFlattenDynamicTile3D:
         Flatten lowers the static per-chunk tile to 2D while preserving the
         dynamic valid tail.
         """
-        # Concrete arg shapes only seed specialization; B_DYN/S_DYN stay symbolic,
-        # so the [1, CHUNK, 512] tile keeps a dynamic valid extent at pass time.
-        # S=40 with CHUNK=16 exercises multiple chunks plus a partial tail (16 + 16 + 8).
-        x = torch.zeros((16, 40, 512), dtype=torch.bfloat16)
-        out = torch.zeros((16, 40, 512), dtype=torch.float32)
-
-        # Runs the full pass pipeline (no raise). Before the fix, FlattenTileNdTo2D
-        # dropped the dynamic valid_shape when flattening the >2D per-chunk tile.
-        program = cast_3d_dynamic.lower(x, out)
-        assert program is not None, "lower returned None"
-        # The kernel's InCore function survives the pipeline.
-        names = [fn.name for fn in program.functions.values()]
+        # The jit kernel is eagerly traced at decoration (every param carries a
+        # facade annotation), so the decoration trace *is* the specialization:
+        # B_DYN/S_DYN stay symbolic and the [1, CHUNK, 512] tile keeps a dynamic
+        # valid extent at pass time. Run the Default pass pipeline on its
+        # program — no codegen, no device.
+        backend.reset_for_testing()
+        backend.set_backend_type(BackendType.Ascend910B)
+        try:
+            # Runs the full pass pipeline (no raise). Before the fix,
+            # FlattenTileNdTo2D dropped the dynamic valid_shape when flattening
+            # the >2D per-chunk tile.
+            program = ir.Program([cast_3d_dynamic], "cast_3d_dynamic", cast_3d_dynamic.span)
+            post = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(program)
+        finally:
+            backend.reset_for_testing()
+        # The kernel's InCore function survives the pipeline (the outliner splits
+        # the pl.at scope out as ``inner``).
+        names = [fn.name for fn in post.functions.values()]
         assert any("cast_3d_dynamic" in n or "inner" in n for n in names), (
             f"expected the kernel function in post-pass IR, got {names}"
         )

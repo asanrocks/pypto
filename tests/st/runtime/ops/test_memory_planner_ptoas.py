@@ -109,11 +109,13 @@ class LoopAccumProgram:
         c: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
     ) -> pl.Tensor[[64, 64], pl.FP32]:
         tile_init: pl.Tile[[64, 64], pl.FP32] = pl.load(a, [0, 0], [64, 64])
-        for i, (acc,) in pl.range(1, 4, init_values=(tile_init,)):
+        (acc,) = pl.intrin.carry(tile_init)
+        for i in pl.range(1, 4):
             offset_i = i * 64
             tile_a: pl.Tile[[64, 64], pl.FP32] = pl.load(a, [offset_i, 0], [64, 64])
-            new_acc: pl.Tile[[64, 64], pl.FP32] = pl.add(acc, tile_a)
-            result = pl.yield_(new_acc)
+            acc = pl.add(acc, tile_a)
+            pl.intrin.yield_(acc)
+        (result,) = pl.intrin.leak()
         out: pl.Tensor[[64, 64], pl.FP32] = pl.store(result, [0, 0], c)
         return out
 
@@ -226,11 +228,13 @@ class MultiBufferCoLiveProgram:
         out: pl.Out[pl.Tensor[[_MB_ROWS, _MB_TC], pl.FP32]],
     ) -> pl.Tensor[[_MB_ROWS, _MB_TC], pl.FP32]:
         for i in pl.range(_MB_STEPS):
-            lo: pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_COLIVE[i % 2], pl.Mem.Vec] = pl.load(
-                a, [i * _MB_TR, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec
+            lo = pl.intrin.transmute(
+                pl.load(a, [i * _MB_TR, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec),
+                pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_COLIVE[i % 2], pl.Mem.Vec],
             )
-            hi: pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_COLIVE[(i + 1) % 2], pl.Mem.Vec] = pl.load(
-                b, [i * _MB_TR, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec
+            hi = pl.intrin.transmute(
+                pl.load(b, [i * _MB_TR, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec),
+                pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_COLIVE[(i + 1) % 2], pl.Mem.Vec],
             )
             # Both slots are still live here — collapse them and `lo` is gone.
             s: pl.Tile[[_MB_TR, _MB_TC], pl.FP32, pl.Mem.Vec] = pl.add(lo, hi)
@@ -270,12 +274,15 @@ class MultiBufferDoubleBufferProgram:
         seed: pl.Tile[[_MB_TR, _MB_TC], pl.FP32, pl.Mem.Vec] = pl.load(
             a, [0, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec
         )
-        for i, (acc,) in pl.range(1, _MB_STEPS, init_values=(seed,)):
-            t: pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_DB[i % 2], pl.Mem.Vec] = pl.load(
-                a, [i * _MB_TR, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec
+        (acc,) = pl.intrin.carry(seed)
+        for i in pl.range(1, _MB_STEPS):
+            t = pl.intrin.transmute(
+                pl.load(a, [i * _MB_TR, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec),
+                pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_DB[i % 2], pl.Mem.Vec],
             )
             nxt: pl.Tile[[_MB_TR, _MB_TC], pl.FP32, pl.Mem.Vec] = pl.add(acc, t)
-            r = pl.yield_(nxt)
+            pl.intrin.yield_(nxt)
+        (r,) = pl.intrin.leak()
         out = pl.store(r, [0, 0], out)
         return out
 
@@ -305,11 +312,13 @@ class MultiBufferConstSlotProgram:
         b: pl.Tensor[[_MB_TR, _MB_TC], pl.FP32],
         out: pl.Out[pl.Tensor[[_MB_TR, _MB_TC], pl.FP32]],
     ) -> pl.Tensor[[_MB_TR, _MB_TC], pl.FP32]:
-        lo: pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_CONST[0], pl.Mem.Vec] = pl.load(
-            a, [0, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec
+        lo = pl.intrin.transmute(
+            pl.load(a, [0, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec),
+            pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_CONST[0], pl.Mem.Vec],
         )
-        hi: pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_CONST[1], pl.Mem.Vec] = pl.load(
-            b, [0, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec
+        hi = pl.intrin.transmute(
+            pl.load(b, [0, 0], [_MB_TR, _MB_TC], target_memory=pl.Mem.Vec),
+            pl.Tile[[_MB_TR, _MB_TC], pl.FP32, MULTI_BUF_CONST[1], pl.Mem.Vec],
         )
         s: pl.Tile[[_MB_TR, _MB_TC], pl.FP32, pl.Mem.Vec] = pl.sub(lo, hi)
         out = pl.store(s, [0, 0], out)
@@ -352,7 +361,10 @@ class MultiBufferAccProgram:
             )
             # One L0C slot live per iteration: iteration i+1's MAD into the other
             # slot overlaps iteration i's FIXPIPE drain out of this one.
-            cur: pl.Tile[[_MB_M, _MB_TN], pl.FP32, MULTI_BUF_ACC[i % 2], pl.Mem.Acc] = pl.tile.matmul(la, lb)
+            cur = pl.intrin.transmute(
+                pl.tile.matmul(la, lb),
+                pl.Tile[[_MB_M, _MB_TN], pl.FP32, MULTI_BUF_ACC[i % 2], pl.Mem.Acc],
+            )
             out = pl.store(cur, [0, i * _MB_TN], out)
         return out
 

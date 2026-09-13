@@ -34,10 +34,14 @@ from pathlib import Path
 
 import pypto.language as pl
 import pytest
+from pypto import backend, ir
+from pypto.backend import BackendType
+from pypto.ir.pass_manager import OptimizationStrategy, PassManager
 
 torch = pytest.importorskip("torch")
 
 from pypto.runtime import RunConfig  # noqa: E402
+from pypto.runtime.runner import run_config_compile_kwargs  # noqa: E402
 
 DUMP_DIR = Path(__file__).resolve().parents[4] / "build_output" / "split_aiv_ragged_split_axis"
 
@@ -151,6 +155,37 @@ def hand_authored_partial_gather(
     return out
 
 
+def _lowered(fn: ir.Function) -> ir.Program:
+    """Post-Default-pipeline program of an eagerly traced ``@pl.jit`` kernel.
+
+    These kernels are fully annotation-shaped, so they trace at decoration and
+    the decoration trace *is* the specialization. Running the pipeline needs the
+    a2a3 backend the old ``lower(config=)`` call used to select, set the way
+    tests/ut/conftest.py's ``ascend_backend`` fixture does.
+    """
+    backend.reset_for_testing()
+    backend.set_backend_type(BackendType.Ascend910B)
+    try:
+        program = ir.Program([fn], fn.name, fn.span)
+        return PassManager.get_strategy(OptimizationStrategy.Default).run_passes(program)
+    finally:
+        backend.reset_for_testing()
+
+
+def _compiled(fn: ir.Function, cfg: RunConfig):
+    """Compile an eagerly traced ``@pl.jit`` kernel for host dispatch.
+
+    A lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
+    exactly this way (``jit.py``'s ``_compile_program``): the compile-side
+    fields become compile kwargs, everything else rides the dispatch
+    ``config=``. The eager lane has no host dispatch surface of its own — the
+    decoration returns a bare ``ir.Function`` — so the test drives the same
+    route the lazy lane would.
+    """
+    kwargs = {"platform": cfg.platform, **run_config_compile_kwargs(cfg)}
+    return ir.compile(ir.Program([fn], fn.name, fn.span), **kwargs)
+
+
 def _aiv_body(program_text: str) -> str:
     """The lowered AIV half. The outlined name is <jit>_<name_hint>_aiv, so it is
     matched by suffix rather than spelled out."""
@@ -185,7 +220,7 @@ def _ragged_rows_pto() -> str:
     cfg = RunConfig(platform="a2a3", codegen_only=True, save_kernels=True, save_kernels_dir=str(DUMP_DIR))
     error: Exception | None = None
     try:
-        ragged_rows(*_ragged_rows_args(), config=cfg)
+        _compiled(ragged_rows, cfg)(*_ragged_rows_args(), config=cfg)
     except Exception as e:  # noqa: BLE001 - see docstring
         error = e
     ptos = sorted(DUMP_DIR.rglob("*.pto"))
@@ -208,9 +243,10 @@ def test_ragged_rows_localize_to_a_per_lane_extent():
     ceil(5 / 2) = 3 would drop rows 3 and 4 on lane 0 and fabricate three rows on
     lane 1; the truth is 5 rows on lane 0 and none on lane 1.
     """
-    aiv = _aiv_body(str(ragged_rows.lower(config=RunConfig(platform="a2a3"))))
+    aiv = _aiv_body(str(_lowered(ragged_rows)))
 
-    assert "pl.tile.tpop_from_aic(split=1)" in aiv
+    # (The tpop spelling carries its explicit shape/dtype producers — spec(tpop).)
+    assert re.search(r"pl\.tile\.tpop_from_aic\([^)]*split=1", aiv), aiv
     # The per-lane extent is an expression over the region's own lane index.
     assert re.search(r"valid_shape=\[pl\.max\(pl\.const\(5.*?\) - \w+ \* pl\.const\(8", aiv), aiv
     assert "valid_shape=[3," not in aiv, f"ceil(V/2) must not survive:\n{aiv}"
@@ -262,7 +298,7 @@ def test_nested_control_flow_is_repaired_too():
     branch on the deducer's ceil(V/2) — silently, since nothing downstream can
     tell a lane-agnostic extent from a lane-aware one.
     """
-    aiv = _aiv_body(str(ragged_rows_nested.lower(config=RunConfig(platform="a2a3"))))
+    aiv = _aiv_body(str(_lowered(ragged_rows_nested)))
 
     lane = re.search(r"= pl\.tile\.get_subblock_idx\(\)", aiv)
     assert lane, aiv
@@ -280,7 +316,7 @@ def test_per_lane_extent_propagates_through_a_vector_consumer():
     must pass it through — otherwise the store would write the deducer's
     ceil(V/2) rows.
     """
-    aiv = _aiv_body(str(ragged_rows_with_compute.lower(config=RunConfig(platform="a2a3"))))
+    aiv = _aiv_body(str(_lowered(ragged_rows_with_compute)))
 
     exp_line = next((line for line in aiv.splitlines() if "pl.tile.exp(" in line), None)
     assert exp_line is not None, aiv
@@ -296,7 +332,7 @@ def test_hand_authored_partial_gather_is_rejected_where_the_lanes_are_known():
     lane-agnostic guess.
     """
     with pytest.raises(ValueError) as exc:
-        hand_authored_partial_gather.lower(config=RunConfig(platform="a2a3"))
+        _lowered(hand_authored_partial_gather)
 
     message = str(exc.value)
     assert "tile.aic_gather re-joins the two lanes positionally" in message
@@ -307,7 +343,7 @@ def test_hand_authored_partial_gather_is_rejected_where_the_lanes_are_known():
 def test_left_right_ragged_columns_are_rejected_with_a_dsl_fix():
     """The column field is pinned by the transport, so a per-lane column has no carrier."""
     with pytest.raises(ValueError) as exc:
-        ragged_cols_left_right.lower(config=RunConfig(platform="a2a3"))
+        _lowered(ragged_cols_left_right)
 
     message = str(exc.value)
     assert "LEFT_RIGHT splits the column axis" in message
@@ -320,7 +356,7 @@ def test_left_right_ragged_columns_are_rejected_with_a_dsl_fix():
 def test_ragged_rows_with_narrowed_columns_are_rejected():
     """treshape restores the column extent statically and would clobber the per-lane row."""
     with pytest.raises(ValueError) as exc:
-        ragged_rows_and_cols.lower(config=RunConfig(platform="a2a3"))
+        _lowered(ragged_rows_and_cols)
 
     message = str(exc.value)
     assert "per-lane row extent" in message

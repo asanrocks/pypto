@@ -735,9 +735,9 @@ def test_tensor_split_aiv_qk_pv_codegen_vs_golden():
     reset_for_testing()
     set_backend_type(BackendType.Ascend910B)
     try:
-        # @pl.jit compiles through the SAME Default pipeline (the specializer
-        # rewrites the kernel into @pl.program source, then run_passes runs).
-        transformed = TensorSplitAivQkPvProgram.lower(*[tensor_tensors[n] for n in arg_order])
+        # @pl.jit compiles through the SAME Default pipeline (compile_for_test
+        # builds the program from the call-time torch shapes, then run_passes).
+        transformed = TensorSplitAivQkPvProgram.compile_for_test(*[tensor_tensors[n] for n in arg_order])
         code = _assert_split_aiv_lowered_and_codegen(transformed, "tqkpv")
     finally:
         reset_for_testing()

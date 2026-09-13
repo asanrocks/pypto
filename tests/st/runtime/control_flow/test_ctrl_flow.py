@@ -423,7 +423,7 @@ class TestWhileLoopAdd(PTOTestCase):
                 b: pl.Tensor[[256, 64], pl.FP32],
                 c: pl.Out[pl.Tensor[[256, 64], pl.FP32]],
             ) -> pl.Tensor[[256, 64], pl.FP32]:
-                i: pl.Scalar[pl.INDEX] = 0
+                i = pl.const(0, pl.INDEX)
                 while i < 4:
                     offset_i = i * 64
                     tile_a: pl.Tile[[64, 64], pl.FP32] = pl.load(a, [offset_i, 0], [64, 64])

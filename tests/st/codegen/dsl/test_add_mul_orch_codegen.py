@@ -44,7 +44,7 @@ class TestOrchestrationLowering:
         b = torch.full((16, 16), 3.0, dtype=torch.float32)
         output = torch.zeros((16, 16), dtype=torch.float32)
 
-        program = example_orch.lower(a, b, output)
+        program = example_orch.compile_for_test(a, b, output)
 
         # Verify post-pass IR shape: the example_orch entry composes three
         # @pl.jit.incore helpers (kernel_add_16, kernel_add_scalar_16,

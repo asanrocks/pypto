@@ -71,11 +71,13 @@ def _build_host_ring_allreduce_program(n_ranks: int, size: int = SIZE):
         ) -> pld.DistributedTensor[[1, size], pl.FP32]:
             # Stage-in: copy local input into this rank's window slot in
             # UB-bounded chunks (valid-shape tail for ragged lengths).
-            for col, (data_iter,) in pl.range(0, size, stage_cols, init_values=(data,)):
+            (data_iter,) = pl.intrin.carry(data)
+            for col in pl.range(0, size, stage_cols):
                 valid = pl.min(stage_cols, size - col)
                 local = pl.load(inp, [0, col], [stage_rows, stage_cols], valid_shape=[1, valid])
                 data_iter = pl.store(local, [0, col], data_iter)
-                staged_data = pl.yield_(data_iter)
+                pl.intrin.yield_(data_iter)
+            (staged_data,) = pl.intrin.leak()
             return staged_data
 
         @pl.function(type=pl.FunctionType.Orchestration)
@@ -94,11 +96,13 @@ def _build_host_ring_allreduce_program(n_ranks: int, size: int = SIZE):
         ) -> pl.Tensor[[1, size], pl.FP32]:
             # Stage-out: copy the reduced result from the window slot to the
             # local output in UB-bounded chunks.
-            for col, (out_iter,) in pl.range(0, size, stage_cols, init_values=(out,)):
+            (out_iter,) = pl.intrin.carry(out)
+            for col in pl.range(0, size, stage_cols):
                 valid = pl.min(stage_cols, size - col)
                 acc = pl.load(data, [0, col], [stage_rows, stage_cols], valid_shape=[1, valid])
                 out_iter = pl.store(acc, [0, col], out_iter)
-                staged_out = pl.yield_(out_iter)
+                pl.intrin.yield_(out_iter)
+            (staged_out,) = pl.intrin.leak()
             return staged_out
 
         @pl.function(type=pl.FunctionType.Orchestration)

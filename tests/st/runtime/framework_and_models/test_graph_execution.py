@@ -29,7 +29,7 @@ feature fails quietly:
   carries a ``FunctionType.Graph`` function.
 
 The runtime ABI comes from the enclosing ``PassContext``, which is what
-``@pl.jit`` reads when it lowers; ``graph_runtime`` supplies one.
+``@pl.jit``'s compile surface reads; ``graph_runtime`` supplies one.
 
 **Run this file with ``--forked``.** A ``ChipWorker`` binds one
 ``(platform, device_id, runtime)``, and this file deliberately mixes the two: the
@@ -42,6 +42,8 @@ gives the file its own ``--forked`` step for that reason.
 import pypto.language as pl
 import pytest
 import torch
+from pypto import backend
+from pypto.backend import BackendType
 from pypto.ir.printer import python_print
 from pypto.pypto_core import passes
 
@@ -393,21 +395,32 @@ class TestGraphIsNotSilentlyDroppedAtCompile:
     """
 
     @staticmethod
-    def _lower(fn, *args, config):
-        with passes.PassContext([], runtime=passes.RuntimeKind.HOST_BUILD_GRAPH):
-            return python_print(fn.lower(*args, config=config))
+    def _lower(fn, *args):
+        """Post-pipeline text of a jit entry under the host_build_graph ABI.
 
-    def test_graph_survives_lowering(self, test_config):
+        ``compile_for_test`` runs the Default pass pipeline (no codegen, no
+        device) and inherits the ambient PassContext's runtime kind, so the
+        HOST_BUILD_GRAPH context selects the Graph ABI; the backend must be set
+        for the passes (the old ``lower(config=)`` did this via its platform).
+        """
+        backend.reset_for_testing()
+        backend.set_backend_type(BackendType.Ascend910B)
+        try:
+            with passes.PassContext([], runtime=passes.RuntimeKind.HOST_BUILD_GRAPH):
+                return python_print(fn.compile_for_test(*args))
+        finally:
+            backend.reset_for_testing()
+
+    def test_graph_survives_lowering(self):
         src = self._lower(
             per_layer_accumulate,
             torch.zeros(LAYERS * ROWS, COLS),
             torch.zeros(ROWS, COLS),
-            config=test_config,
         )
         assert "type=pl.FunctionType.Graph" in src, src
         assert "def accumulate_band" in src, src
 
-    def test_the_derived_offset_moves_to_the_caller(self, test_config):
+    def test_the_derived_offset_moves_to_the_caller(self):
         """Step A hoisted ``base``, so the entry scales it, not the region.
 
         Inside the region it would have no argument slot and replay would reuse
@@ -418,12 +431,11 @@ class TestGraphIsNotSilentlyDroppedAtCompile:
             per_layer_accumulate,
             torch.zeros(LAYERS * ROWS, COLS),
             torch.zeros(ROWS, COLS),
-            config=test_config,
         )
         entry = src[src.index("def per_layer_accumulate") :]
         assert f"* {ROWS}" in entry, entry
 
-    def test_scope_form_lowers_to_a_graph_function(self, test_config):
+    def test_scope_form_lowers_to_a_graph_function(self):
         """`with pl.graph(...)` must reach codegen as a Graph, not inlined tasks.
 
         A region that silently lowered to ordinary tasks is numerically correct,
@@ -433,24 +445,23 @@ class TestGraphIsNotSilentlyDroppedAtCompile:
             scope_form_accumulate,
             torch.zeros(LAYERS * ROWS, COLS),
             torch.zeros(ROWS, COLS),
-            config=test_config,
         )
         assert "type=pl.FunctionType.Graph" in src, src
         assert "def accumulate_band_scope" in src, src
 
-    def test_scope_form_matches_the_decorator_form(self, test_config):
+    def test_scope_form_matches_the_decorator_form(self):
         """Both surfaces lower to the same *shape*, which is the pass's contract.
 
         Not the same text: the outliner orders a region's boundary parameters by
-        capture order while the decorator form uses the signature the user wrote,
+        capture order while the declared form uses the signature the user wrote,
         so the two argument lists are permutations of each other. What must agree
         is what the runtime sees — one Graph function, the same boundary arity,
         and the derived per-layer offset computed at the caller (Step A) rather
         than inside the region, where replay would freeze it.
         """
         args = (torch.zeros(LAYERS * ROWS, COLS), torch.zeros(ROWS, COLS))
-        scope_src = self._lower(scope_form_accumulate, *args, config=test_config)
-        decorator_src = self._lower(per_layer_accumulate, *args, config=test_config)
+        scope_src = self._lower(scope_form_accumulate, *args)
+        decorator_src = self._lower(per_layer_accumulate, *args)
 
         for src in (scope_src, decorator_src):
             assert src.count("type=pl.FunctionType.Graph") == 1, src
@@ -463,27 +474,30 @@ class TestGraphIsNotSilentlyDroppedAtCompile:
             f"=== scope ===\n{scope_src}\n=== decorator ===\n{decorator_src}"
         )
 
-    def test_two_graphs_stay_two_functions(self, test_config):
+    def test_two_graphs_stay_two_functions(self):
         src = self._lower(
             two_distinct_graphs,
             torch.zeros(ROWS, COLS),
             torch.zeros(ROWS, COLS),
-            config=test_config,
         )
         assert src.count("type=pl.FunctionType.Graph") == 2, src
 
-    def test_a_graph_under_the_default_runtime_is_rejected(self, test_config):
+    def test_a_graph_under_the_default_runtime_is_rejected(self):
         """The default runtime has neither `rt_submit_graph` nor `GraphTaskArgs`.
 
         Compiling a Graph against it used to emit orchestration C++ naming
         undeclared symbols; it is a compile-time error now.
         """
-        with pytest.raises(ValueError, match="requires the host_build_graph runtime"):
-            per_layer_accumulate.lower(
-                torch.zeros(LAYERS * ROWS, COLS),
-                torch.zeros(ROWS, COLS),
-                config=test_config,
-            )
+        backend.reset_for_testing()
+        backend.set_backend_type(BackendType.Ascend910B)
+        try:
+            with pytest.raises(ValueError, match="requires the host_build_graph runtime"):
+                per_layer_accumulate.compile_for_test(
+                    torch.zeros(LAYERS * ROWS, COLS),
+                    torch.zeros(ROWS, COLS),
+                )
+        finally:
+            backend.reset_for_testing()
 
 
 # --- MoE routing: a Graph plus per-expert dispatch predicates ---

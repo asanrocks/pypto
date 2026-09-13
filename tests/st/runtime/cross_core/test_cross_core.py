@@ -645,10 +645,14 @@ class MultiPipeNoSplitProgram:
             id=1,
         )
         sum_tile: pl.Tile[[MULTI_PIPE_DIM, MULTI_PIPE_DIM], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+            shape=[MULTI_PIPE_DIM, MULTI_PIPE_DIM],
+            dtype=pl.FP32,
             split=0,
             id=0,
         )
         diff_tile: pl.Tile[[MULTI_PIPE_DIM, MULTI_PIPE_DIM], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+            shape=[MULTI_PIPE_DIM, MULTI_PIPE_DIM],
+            dtype=pl.FP32,
             split=0,
             id=1,
         )
@@ -772,8 +776,12 @@ class ExplicitSlotNumProgram:
             local_slot_num=SLOTNUM_LOCAL_SLOT_NUM,
             id=1,
         )
-        sum_tile: pl.Tile[[SLOTNUM_DIM, SLOTNUM_DIM], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=0)
-        diff_tile: pl.Tile[[SLOTNUM_DIM, SLOTNUM_DIM], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(split=0, id=1)
+        sum_tile: pl.Tile[[SLOTNUM_DIM, SLOTNUM_DIM], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+            shape=[SLOTNUM_DIM, SLOTNUM_DIM], dtype=pl.FP32, split=0, id=0
+        )
+        diff_tile: pl.Tile[[SLOTNUM_DIM, SLOTNUM_DIM], pl.FP32, pl.Mem.Mat] = pl.tpop_from_aiv(
+            shape=[SLOTNUM_DIM, SLOTNUM_DIM], dtype=pl.FP32, split=0, id=1
+        )
         sum_left = pl.move(sum_tile, target_memory=pl.Mem.Left)
         diff_right = pl.move(diff_tile, target_memory=pl.Mem.Right)
         result: pl.Tile[[SLOTNUM_DIM, SLOTNUM_DIM], pl.FP32] = pl.matmul(sum_left, diff_right)

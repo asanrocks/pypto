@@ -82,6 +82,8 @@ class SoftmaxPrepareTestCase(PTOTestCase):
         ]
 
     def get_program(self) -> Any:
+        _sf = kernel_softmax_prepare  # closure capture: @pl.program adapts closure-captured callees only
+
         @pl.program
         class SoftmaxPrepareProgram:
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -100,7 +102,7 @@ class SoftmaxPrepareTestCase(PTOTestCase):
             ]:
                 scale: pl.Scalar[pl.FP32] = pl.tensor.read(config, [0])
                 n_blocks: pl.Scalar[pl.INT64] = pl.tensor.read(n_blocks_cfg, [0])
-                pij_buf, mi_out, li_out = kernel_softmax_prepare(
+                pij_buf, mi_out, li_out = _sf(
                     sij_buf,
                     scale,
                     pij_buf,
@@ -347,6 +349,8 @@ class OnlineUpdateTestCase(PTOTestCase):
         ]
 
     def get_program(self) -> Any:
+        _up = kernel_online_update  # closure capture: @pl.program adapts closure-captured callees only
+
         @pl.program
         class OnlineUpdateProgram:
             @pl.function(type=pl.FunctionType.Orchestration)
@@ -368,7 +372,7 @@ class OnlineUpdateTestCase(PTOTestCase):
             ]:
                 is_first: pl.Scalar[pl.INT64] = pl.tensor.read(config, [0])
                 is_last: pl.Scalar[pl.INT64] = pl.tensor.read(config, [1])
-                mi, li, oi, dst = kernel_online_update(
+                mi, li, oi, dst = _up(
                     mij,
                     lij,
                     oi_new,

@@ -40,7 +40,11 @@ import pytest
 torch = pytest.importorskip("torch")
 
 import pypto.language as pl  # noqa: E402
+from pypto import backend, ir  # noqa: E402
+from pypto.backend import BackendType  # noqa: E402
+from pypto.ir.pass_manager import OptimizationStrategy, PassManager  # noqa: E402
 from pypto.runtime import RunConfig  # noqa: E402
+from pypto.runtime.runner import run_config_compile_kwargs  # noqa: E402
 
 POOL_ROWS, HEAD_DIM = 16384, 512
 ROWS, HALF, Q_ROWS = 128, 64, 16
@@ -73,10 +77,41 @@ def sparse_kv_qk(
     return out
 
 
+def _lowered(fn: ir.Function) -> ir.Program:
+    """Post-Default-pipeline program of an eagerly traced ``@pl.jit`` kernel.
+
+    These kernels are fully annotation-shaped, so they trace at decoration and
+    the decoration trace *is* the specialization. Running the pipeline needs the
+    a2a3 backend the old ``lower(config=)`` call used to select, set the way
+    tests/ut/conftest.py's ``ascend_backend`` fixture does.
+    """
+    backend.reset_for_testing()
+    backend.set_backend_type(BackendType.Ascend910B)
+    try:
+        program = ir.Program([fn], fn.name, fn.span)
+        return PassManager.get_strategy(OptimizationStrategy.Default).run_passes(program)
+    finally:
+        backend.reset_for_testing()
+
+
+def _compiled(fn: ir.Function, cfg: RunConfig):
+    """Compile an eagerly traced ``@pl.jit`` kernel for host dispatch.
+
+    A lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
+    exactly this way (``jit.py``'s ``_compile_program``): the compile-side
+    fields become compile kwargs, everything else rides the dispatch
+    ``config=``. The eager lane has no host dispatch surface of its own — the
+    decoration returns a bare ``ir.Function`` — so the test drives the same
+    route the lazy lane would.
+    """
+    kwargs = {"platform": cfg.platform, **run_config_compile_kwargs(cfg)}
+    return ir.compile(ir.Program([fn], fn.name, fn.span), **kwargs)
+
+
 def test_per_lane_gather_row_lowers_to_split_aiv_kernels():
     """The region lowers to an AIV lane that gathers into a HALF UB tile and pushes
     it, and an AIC that pops the FULL tile — no GM staging, no manual barrier."""
-    program = sparse_kv_qk.lower(config=RunConfig(platform="a2a3"))
+    program = _lowered(sparse_kv_qk)
     text = str(program)
 
     aiv = text.split("def sparse_kv_aiv")[1].split("def ")[0]
@@ -112,7 +147,7 @@ def test_per_lane_gather_row_compiles_to_pto():
     # materializes first.
     compile_error: Exception | None = None
     try:
-        sparse_kv_qk(
+        _compiled(sparse_kv_qk, cfg)(
             torch.randn(POOL_ROWS, HEAD_DIM, dtype=torch.bfloat16),
             ((torch.arange(ROWS, dtype=torch.int64) * 977) % (POOL_ROWS - ROWS)).to(torch.int32),
             torch.randn(Q_ROWS, HEAD_DIM, dtype=torch.bfloat16),
@@ -167,7 +202,7 @@ def test_oversized_ring_depth_reports_the_reserved_bytes():
     ``AllocatedMemoryAddr`` verifier — which is why both carry the same note.
     """
     with pytest.raises(ValueError) as exc:
-        _deep_ring_kv_qk.lower(config=RunConfig(platform="a2a3"))
+        _lowered(_deep_ring_kv_qk)
     message = str(exc.value)
     assert "Mat buffer usage (1064960 bytes) exceeds platform limit (524288 bytes)" in message
     assert "The first 1048576 bytes of that space are reserved by system.reserve_buffer" in message

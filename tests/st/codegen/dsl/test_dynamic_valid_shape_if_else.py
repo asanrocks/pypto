@@ -39,7 +39,7 @@ class TestDynValidShapeIfElse:
         data = torch.zeros((Q_TILE, BLOCK_COL), dtype=torch.float32)
         out = torch.zeros((Q_TILE, BLOCK_COL), dtype=torch.float32)
         cfg = torch.tensor([1, 48, BLOCK_COL], dtype=torch.int64)
-        program = dyn_valid_shape_if_else.lower(data, cfg, out)
+        program = dyn_valid_shape_if_else.compile_for_test(data, cfg, out)
         assert program is not None
         assert len(program.functions) >= 1, (
             f"expected >= 1 function in post-pass IR, got {len(program.functions)}"
@@ -50,7 +50,7 @@ class TestDynValidShapeIfElse:
         data = torch.zeros((Q_TILE, BLOCK_COL), dtype=torch.float32)
         out = torch.zeros((Q_TILE, BLOCK_COL), dtype=torch.float32)
         cfg = torch.tensor([0, 48, BLOCK_COL], dtype=torch.int64)
-        program = dyn_valid_shape_if_else.lower(data, cfg, out)
+        program = dyn_valid_shape_if_else.compile_for_test(data, cfg, out)
         assert program is not None
         assert len(program.functions) >= 1, (
             f"expected >= 1 function in post-pass IR, got {len(program.functions)}"

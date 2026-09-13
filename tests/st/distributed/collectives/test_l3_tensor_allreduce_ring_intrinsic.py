@@ -121,7 +121,8 @@ def _build_ring_allreduce_program(
             loads, and accumulation loops.
             """
             # Stage-in: copy local input into this rank's HCCL window slot.
-            for col, (data_iter,) in pl.range(0, sz, stage_cols, init_values=(data,)):
+            (data_iter,) = pl.intrin.carry(data)
+            for col in pl.range(0, sz, stage_cols):
                 valid = pl.min(stage_cols, sz - col)
                 local = pl.load(
                     inp,
@@ -130,14 +131,16 @@ def _build_ring_allreduce_program(
                     valid_shape=[1, valid],
                 )
                 data_iter = pl.store(local, [0, col], data_iter)
-                staged_data = pl.yield_(data_iter)
+                pl.intrin.yield_(data_iter)
+            (staged_data,) = pl.intrin.leak()
 
             # One call — the composite rebinds ``data`` (in-place semantics,
             # same as ``pl.store``) so subsequent reads see the reduced slice.
             data = pld.tensor.allreduce(staged_data, signal, op=REDUCE_OP, mode="ring")
 
             # Stage-out — reduced result → local output.
-            for col, (out_iter,) in pl.range(0, sz, stage_cols, init_values=(out,)):
+            (out_iter,) = pl.intrin.carry(out)
+            for col in pl.range(0, sz, stage_cols):
                 valid = pl.min(stage_cols, sz - col)
                 acc = pl.load(
                     data,
@@ -146,7 +149,8 @@ def _build_ring_allreduce_program(
                     valid_shape=[1, valid],
                 )
                 out_iter = pl.store(acc, [0, col], out_iter)
-                staged_out = pl.yield_(out_iter)
+                pl.intrin.yield_(out_iter)
+            (staged_out,) = pl.intrin.leak()
             return staged_out
 
         @pl.function(type=pl.FunctionType.Orchestration)

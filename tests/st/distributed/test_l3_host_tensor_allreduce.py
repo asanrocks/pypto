@@ -203,7 +203,8 @@ def _build_host_allreduce(
             inp: pl.Tensor[[1, sz], DTYPE],
             data: pl.InOut[pld.DistributedTensor[[1, sz], DTYPE]],
         ) -> pld.DistributedTensor[[1, sz], DTYPE]:
-            for col, (data_iter,) in pl.range(0, sz, stage_cols, init_values=(data,)):
+            (data_iter,) = pl.intrin.carry(data)
+            for col in pl.range(0, sz, stage_cols):
                 valid = pl.min(stage_cols, sz - col)
                 local = pl.load(
                     inp,
@@ -212,7 +213,8 @@ def _build_host_allreduce(
                     valid_shape=[1, valid],
                 )
                 data_iter = pl.store(local, [0, col], data_iter)
-                staged_data = pl.yield_(data_iter)
+                pl.intrin.yield_(data_iter)
+            (staged_data,) = pl.intrin.leak()
             return staged_data
 
         @pl.function(type=pl.FunctionType.Orchestration)
@@ -229,7 +231,8 @@ def _build_host_allreduce(
             data: pld.DistributedTensor[[1, sz], DTYPE],
             out: pl.Out[pl.Tensor[[1, sz], DTYPE]],
         ) -> pl.Tensor[[1, sz], DTYPE]:
-            for col, (out_iter,) in pl.range(0, sz, stage_cols, init_values=(out,)):
+            (out_iter,) = pl.intrin.carry(out)
+            for col in pl.range(0, sz, stage_cols):
                 valid = pl.min(stage_cols, sz - col)
                 reduced = pl.load(
                     data,
@@ -238,7 +241,8 @@ def _build_host_allreduce(
                     valid_shape=[1, valid],
                 )
                 out_iter = pl.store(reduced, [0, col], out_iter)
-                staged_out = pl.yield_(out_iter)
+                pl.intrin.yield_(out_iter)
+            (staged_out,) = pl.intrin.leak()
             return staged_out
 
         @pl.function(type=pl.FunctionType.Orchestration)
