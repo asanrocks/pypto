@@ -94,7 +94,7 @@ CONSTRUCTS = (
         "returns / exits",
         r"visit_return_stmt",
         r"return_types|signature_expressible",
-        "test_staged_host_join.py",
+        "test_return_exit.py",
     ),
     Construct(
         "generic scopes",

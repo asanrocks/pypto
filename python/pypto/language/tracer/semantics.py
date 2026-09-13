@@ -164,6 +164,34 @@ def _is_sequence(v: object) -> TypeIs[Sequence[object]]:
     return isinstance(v, (list, tuple))
 
 
+def _is_host_tuple(v: object) -> TypeIs[tuple[object, ...]]:
+    """Narrow a host value to a non-empty tuple of opaque elements (the
+    unparameterized isinstance narrow pyright cannot express)."""
+    return isinstance(v, tuple) and v != ()
+
+
+def _stage_staged_tuple(value: object) -> object:
+    """Stage a tuple whose elements are all staged facades as one tuple value.
+
+    The parser reads a tuple-literal binding as one staged ``MakeTuple``
+    value (``tmp = (a, b)`` → ``tmp: pl.Tuple[...] = [a, b]``) and returns
+    the bound ``tmp`` as a single value; the tracing lane's host-container
+    reading flattened the same binding at its return and dropped the
+    temporary (F37). A tuple of staged facades is therefore the staged
+    ``pl.Tuple(a, b)`` value — the parser's reading, which R4 makes normative
+    wherever the parser accepts valid Python. An all-host or mixed tuple, and
+    every list, stay host containers: host containers carry no IR, and the
+    list spelling is the separate R1 dialect item.
+    """
+    if not _is_host_tuple(value):
+        return value
+    if not all(is_staged(item) for item in value):
+        return value
+    from pypto.language.typing import Tuple as PlTuple  # noqa: PLC0415 - import cycle
+
+    return PlTuple(*value)
+
+
 def _base_facade_class(cls: type[object]) -> type[Facade] | None:
     """The closed-vocabulary base facade of ``cls``, or ``None`` outside it.
 
@@ -918,6 +946,7 @@ class PtoFrame:
                 "pld.tensor.allreduce must be a direct assignment, expression statement, "
                 "or return value before allreduce signal synthesis."
             )
+        value = _stage_staged_tuple(value)
         # None is the parser's TaskId sentinel. Reify it before the normal
         # staged binding so loop-carried dependency state gets a real Var.
         if value is None:

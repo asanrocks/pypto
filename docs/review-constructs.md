@@ -509,7 +509,335 @@ three no-shared-spelling/divergence pins.
    make the SSA pass's scope handling reject/repair it. Frontend-only fixes
    are the migration's rule. F-ids continue from F13.
 
-## 14. Round ledger
+## 14. R9 verdicts — returns / exits
+
+Both sides read before verdicting: the parser's `parse_return`
+(`ast_parser.py:6039` — the `ast.Tuple` arm at `:6050`, the inline-mode
+`_inline_return_values` capture at `:6093`, and `parse_statement`'s dispatch at
+`:1197`, which does **not** stop at a `return`), `_parse_inline_call`
+(`:8488`); the tracing lane's rewriter `_return_row` (`rewriter.py:1625`:
+the value temp + `rt.return_` + the `if rt.in_host_mode(): return` guard) →
+`interpreter.return_` (`interpreter.py:658`) → `Sema.return_` /
+`_return_impl` (`semantics.py:1348` / `:1379`, whose staged-element filter at
+`:1404` is load-bearing) + the declared-`->` check
+(`tracer/decorators/function.py:797`, `tracer/return_contract.py`). The B3 fix
+extracted the inline expansion seam into `_expand_inline_call` +
+`_inline_callee_return_values` (`:8532`–`:8600`), which `parse_return` uses.
+
+**Regime first.** The trailing-return anchors are **raw**: a straight-line
+return carries no pass state, and both lanes emit the identical one-value /
+multi-value / void `ReturnStmt`. Every return inside staged control flow is
+asserted **raw *and* post-`canonicalize()`**: raw is the interesting half
+(both lanes record the `ReturnStmt` inline, at its source position, with no
+return_var or phi), canonical is the staged-flow regime proper (the SSA pass
+joins the per-path returns of a function whose branches each return).
+
+| Variant | Regime | Verdict |
+| --- | --- | --- |
+| trailing single return (`k_trailing_return`) | raw | equivalent |
+| multi-value `return a, b` (`k_multi_value_return`) | raw | equivalent |
+| staged scalar return (`k_scalar_return`) | raw | equivalent |
+| bare `return` (`k_bare_return`) | raw | equivalent |
+| no return at all (`k_no_return`) | raw | equivalent |
+| return in an `elif` chain (`k_ret_elif`) | raw + canonical | equivalent |
+| return in an `if` nested in a staged `for` (`k_ret_nested_if_in_for`) | raw + canonical | equivalent |
+| return in a staged `for` with a body tail (`k_ret_loop_tail`) | raw + canonical | equivalent |
+| return in a staged `if` with a branch tail (`k_ret_branch_tail`) | raw + canonical | equivalent |
+| return in the for-form `pl.spmd` body (`k_ret_spmd_for`) | raw + canonical | equivalent |
+| return in a `pl.at` region (`k_ret_at_region`) | raw + canonical | equivalent |
+| return in a `pl.at` region with a tail (`k_ret_at_region_tail`) | raw + canonical | equivalent |
+| function-level early return + unreachable tail (`k_early_top`) | raw | equivalent — **F15**, fixed by B2 (both lanes stop at the function-level return) |
+| second function-level return (`k_two_top_returns`) | raw | equivalent — **F15**, fixed by B2 (same root cause) |
+| host-valued return element (`return 1.0`, `return t, 1.0`) | n/a | **needs-decision** |
+| list-literal return (`return [a, b]`) | n/a | **needs-decision** |
+| `return pl.Tuple(a, b)` | n/a | out of scope — no shared spelling |
+| declared `->` lie, or a declared `->` with no return | n/a (tracing rejects, parser accepts) | **intended divergence** — `docs/design/04-migration-guide.md` §4.4 line 241 |
+| `@pl.expand` call site | n/a (parser rejects) | out of scope — no shared spelling (`docs/design/03-entrance.md` §7) |
+| `@pl.expand` body semantics | n/a | equivalent witness (expansion ≡ the written-out body) |
+| inline single trailing return (the 4 pre-existing `_inline_anchor`s) | post-inline + canonical | equivalent (pre-existing, unchanged) |
+| inline multi-value trailing return | raw + post-inline canonical | equivalent — **F16**, fixed by B3 (both lanes wire the callee's trailing values into a two-value `ReturnStmt`) |
+| inline multi-value trailing return through a tuple temporary (`tmp = (a, b); return tmp`) | raw + post-inline canonical | equivalent — **F37**, fixed by the fix campaign (R4: the parser's one-`MakeTuple`-value reading is normative, so the tracing lane stages a tuple of staged facades as one tuple value) |
+| inline early return under staged control flow | n/a (both lanes reject) | **bug — F17**, fixed by B4 (the parser rejects the nested return the way both tracing entrances do) |
+| a second top-level return after the inline callee's trailing return (dead tail) | raw | equivalent — **F38**, fixed by the fix campaign (the inline body walk stops at the first top-level return, F15's rule, and the nested-return scan is scoped to the same collected prefix) |
+
+19 new anchors in `test_return_exit.py` (12 kernels; conformance-directory
+call sites 169 → 188; conformance-dir tests 288 → 310), all green, plus eight
+pins in the same suite and two pins in `test_inline.py`. The B2 fix turned
+F15's two pins into two more **raw** anchors in the same suite (six pins
+left there); the B3 fix turned F16's pin into
+`test_inline_multi_value_trailing_return_by_both_lanes` (raw shape +
+post-inline canonical equality) plus the canonical anchor
+`_inline_multi_value_anchor`, and filed F37 as a new pin. Each of the three
+red findings was pinned, never kept red — F15's and F16's pins are now
+anchors, F17's is now a rejection pair. The B4 fix turned F17's pin into
+`test_inline_early_return_rejected_by_both_lanes` and filed F38 as a new pin.
+The F37 fix turned that pin into
+`test_inline_temp_tuple_trailing_return_by_both_lanes` (raw shape +
+post-inline canonical equality). The F38 fix turned its pin into
+`test_inline_dead_tail_after_trailing_return_by_both_lanes` and added the
+dead-nested-return anchor `test_inline_dead_tail_nested_return_by_both_lanes`
+(both raw shape on both lanes + raw equality).
+
+The one *intended divergence* is the declared-`->` contract: tracing's
+`_check_declared_return` rejects a declared return type that lies about the
+traced body (or a declared `->` with no return) at entry —
+`docs/design/04-migration-guide.md` §4.4 line 241: *'Function return
+contracts are the exception: a declared `->` that lies about what the body
+produces is a loud decoration-time error.'* The parser is the round-trip
+owner and accepts both spellings, so no anchor exists; pinned by
+`test_declared_return_contract_is_tracing_only`.
+
+### R9 findings (all frontends left alone except F15's B2 fix)
+
+1. **F15 — a statement after a function-level `return` diverges.** The
+tracing lane's host-execution guard fires at the function level
+(`rt.in_host_mode()` is True when no staged Construct is open), so
+`_return_row`'s native `return` ends the trace and the trailing statements
+are never collected; `parse_statement` (`ast_parser.py:1197`) keeps
+dispatching the whole body, so the parser emits them as unreachable IR. A
+return nested in staged control flow (branch/loop/region) is *not* affected —
+there both lanes keep collecting (the anchors above). Red checks:
+`function_trace(k_early_top)` has 3 body stmts vs the parser's 5 (and
+`k_two_top_returns` 3 vs 4); `assert_structural_equal` raises in both raw and
+canonical regime. Pinned by
+`test_function_level_return_drops_unreachable_tail` /
+`test_function_level_double_return_same_root_cause`. Owner undecided
+(needs-decision on the layer): the tracing guard is intended and faithful to
+Python execution, which points at the parser ceasing collection at a
+function-level return; but the parser's faithful-source reading is
+defensible and no doc decides. Frontend-only fix either way.
+**State: fixed** (fix-campaign task B2) — the lane decision landed as the
+finding's own lean: the **parser** is the wrong lane. §9's *'Trace-time
+execution determines the IR'* (`docs/design/01-language.md`) makes the traced
+execution the kernel's meaning, and the rewriter's native return is
+load-bearing beyond the parser's reach (`Interpreter.return_`:
+*'the host ``return`` carries the value in production'* — it is what hands a
+value back to an `@pl.expand` caller or a host-evaluated helper), so tracing
+cannot be made to execute a tail Python never reaches; a return inside a
+*host* construct is the separate, documented host-world divergence
+(`test_host_predicate_dispatch_divergence`). `_parse_body_siblings` gained
+`stop_after_return`, passed only by `parse_function`: a `return` that is a
+direct statement of the function body ends collection (no staged Construct is
+open there, so the host guard fires and the tail is unreachable). Nested
+blocks keep the default: a return inside a staged construct suppresses the
+host exit and both lanes keep collecting (the branch/loop/region anchors
+above). Pins rewritten into the fix's expectation as
+`test_function_level_return_drops_unreachable_tail_by_both_lanes` and
+`test_function_level_double_return_dropped_by_both_lanes`.
+2. **F16 — an inline callee's multi-value trailing return diverges.** The
+backend splice wires the callee's trailing values into the caller as a
+*multi-value* `ReturnStmt` (the pass's
+`inline_functions_pass.cpp` return wiring), while the parser's parse-time
+expansion collapses the same tuple into one `MakeTuple` value
+(`_inline_return_expr`'s `ast.Tuple` arm, `ast_parser.py:6052`) — so
+`return helper(x)` returns two values on one lane and one tuple value on the
+other. The parser's *own* non-inline `return a, b` is multi-value, so the
+inline expansion changes the caller's return arity relative to the
+un-expanded body; `docs/design/01-language.md` §9 line 503 (*'neither
+frontend creates a fictional staged-tuple value'*) points at the parser lane.
+Red check: `test_inline_multi_value_trailing_return_divergence` — spliced
+`ReturnStmt` has 2 values, the parser's 1 `MakeTuple`, structural equality
+raises. **State: fixed** (fix-campaign task B3) — the lane decision landed as
+the finding's own lean, the **parser** lane: the AST caller is the
+parse-time-spliced body, so a `return helper(x)` whose trailing return is
+multi-value *is* a written-out `return a, b` and has to stay multi-value.
+`parse_return`'s value arm now routes through `_parse_return_values`, which
+takes an `@pl.inline` callee's expansion as the callee's value list
+(`_inline_callee_return_values` → `_expand_inline_call`, the extracted
+expansion `_parse_inline_call` also uses); the value-position reading is
+unchanged, `_parse_inline_call` still wraps a multi-value expansion into a
+`MakeTuple` for expression/assignment positions. The pin became
+`test_inline_multi_value_trailing_return_by_both_lanes` (raw arity 2 on both
+lanes + raw `assert_structural_equal`, then the post-inline canonical anchor
+`_inline_multi_value_anchor`). The same multi-value return written through a
+tuple temporary is **not** closed by this fix and was filed as F37 (fixed
+later — finding 4). **Retro-R4 classification (H1):** unintended bug fix — the
+collapsed one-value `MakeTuple` violated §9's explicit "neither frontend
+creates a fictional staged-tuple value", so the parser was restored to the
+already-documented rule; no spec change.
+3. **F17 — the parser silently mis-lowers an inline early return.** An inline
+callee with an early return inside staged control flow: tracing records the
+per-branch `ReturnStmt` and the backend splice rejects it loudly
+(`Inline function ... contains a non-trailing ReturnStmt; only a single
+trailing return is supported`), while the parser's `parse_return` captures
+the branch's expression into `_inline_return_expr` (renamed
+`_inline_return_values` by B3's F16 fix) and then overwrites it
+with the trailing return — the branch is emitted **empty** and its `add` is
+silently lost (the caller's value is always the trailing return). The same
+shape in `@pl.expand` is a loud `TypeError` (`docs/design/03-entrance.md`
+§7: one trailing return; early returns under staged control flow rejected),
+so tracing is the loud lane on both entrances. Red check:
+`test_inline_early_return_loud_on_tracing_dropped_by_parser` —
+`passes.inline_functions()` raises `InternalError`, while the parser's caller
+has an empty `IfStmt` branch and no `tensor.adds` call at all. Owner: the
+parser lane (reject the early return the way both tracing entrances do).
+**State: fixed** (fix-campaign task B4). The pin is rewritten to the correct
+expectation (`test_inline_early_return_rejected_by_both_lanes`, a rejection
+pair: the pass's `InternalError` at splice time, the parser's
+`ParserSyntaxError` at expansion time, both carrying the pass's "contains a
+non-trailing ReturnStmt; only a single trailing return is supported" clause).
+`_expand_inline_call` gained `_reject_inline_nested_return`, which scans the
+callee's body AST for an `ast.Return` that is not a direct statement of the
+body (nested in `if`/`for`/`while`/`with`), before any statement is emitted;
+a return that is the body's trailing statement — including a scope-wrapped
+one — stays accepted. No accepted spelling exists on either lane, so the pair
+is pinned rather than anchored (the F12/F13 shape). **Retro-R4 classification
+(H1):** unintended bug fix — the old expansion silently lost the branch's
+`add` and both other entrances already reject the shape (`CloneInlineBody`;
+`docs/design/03-entrance.md` §7), so there was no sanctioned AST-era behaviour
+to preserve; no spec change.
+4. **F37 — an inline callee's trailing return through a tuple temporary kept
+the F16 divergence (filed by the fix-campaign task B3).** The direct spelling
+is fixed (F16 above); the temp spelling was not. In the callee,
+`tmp = (a, b); return tmp` traced to a flattened two-value
+`ReturnStmt` (the tracing lane read `(a, b)` as a host container of facades),
+so the spliced caller returned two values; the parser's expansion emits
+`tmp = [a, b]` (one staged `MakeTuple`) plus `return tmp` (one value), so the
+caller keeps an extra statement and a different arity. This is the
+`return [a, b]` dialect collision above (needs-decision) applied to a
+tuple-to-local binding — whether `tmp = (a, b)` is a host container or one
+staged tuple value is exactly what the pending decision settles. Red check:
+`test_inline_temp_tuple_trailing_return_divergence`. Frontend-only; was
+blocked on the dialect decision. **State: fixed** (fix-campaign task F37).
+The ratified rules (§4 of `docs/fix-construct-parity.md`) settle the dialect:
+R4 makes the parser's reading normative wherever it accepts valid Python, so
+the parser's one-tuple reading is the AST-era behaviour tracing must
+preserve, while the `return [a, b]` *multi-value* spelling is a separate R1
+type lie. The tracing lane's binding row now stages a tuple whose every
+element is a staged facade as the staged `pl.Tuple(a, b)` value
+(`_stage_staged_tuple` in `tracer/semantics.py`), so `tmp = (a, b)` binds one
+`MakeTuple` and `return tmp` is one value — the parser's shape. The pin
+became `test_inline_temp_tuple_trailing_return_by_both_lanes` (raw shape on
+both lanes + raw `assert_structural_equal`, then the post-inline canonical
+anchor). An all-host or mixed tuple, every list, and a *nested* tuple literal
+(`tmp = ((a, b), c)`) still read as host containers on the tracing lane — the
+same reading for spellings the task did not cover, not separately fixed.
+5. **F38 — an inline callee's dead second top-level return is the F15 shape
+on the inline-expansion seam (filed by the fix-campaign task B4).** In the
+callee, `return a` followed by `return b`: the first return is the traced
+execution's host exit (`_return_row`'s in-host-mode guard), so the traced
+callee is one `ReturnStmt` carrying `a` and `CloneInlineBody` splices it; the
+parser's `_expand_inline_call` keeps walking the body because the inline
+walk is not `parse_function`'s `_parse_body_siblings(stop_after_return=True)`
+(B2's F15 fix), and `parse_return` overwrites `_inline_return_values` on every
+return, so the caller carries `b`. The two lanes disagree on which return the
+caller returns. Red check:
+`test_inline_dead_tail_after_trailing_return_divergence` — the spliced caller
+returns `tensor.adds`, the parsed caller `tensor.muls`, and
+`assert_structural_equal` raises on the op name. Frontend-only; the fix is to
+give the inline body walk F15's `stop_after_return` semantics (first return
+wins, dead tail never collected), so the spelling is pinned, not anchored, and
+not folded into F17's rejection (tracing *accepts* this shape, so rejecting it
+would be a new divergence in the other direction).
+**State: fixed** (fix-campaign task F38) — the lane decision is B2's, applied
+to this seam: the traced execution is the kernel's meaning, so the parser
+stops the inline body walk at the body's first direct `return`
+(`_expand_inline_call`'s walk and `_reject_inline_nested_return` both iterate
+`_inline_body_prefix`). The pin became
+`test_inline_dead_tail_after_trailing_return_by_both_lanes`. The widening the
+same rule forces on F17's rejection: a nested `return` in the dead tail (after
+the body's first direct return) is unreachable on both lanes and is no longer
+rejected — anchored by
+`test_inline_dead_tail_nested_return_by_both_lanes`; a *live* nested return
+keeps its rejection pair.
+
+### R9 no-anchor divergences (needs-decision, nothing edited)
+
+1. **Host-valued return elements are silently dropped by tracing.**
+`_return_impl` (`semantics.py:1404`) keeps only staged elements: `return 1.0`
+emits *no* `ReturnStmt`, `return t, 1.0` keeps only `t`. The parser lowers
+the literal to a `ConstFloat` ReturnStmt value (`return t, 1.0` → two
+values). §9 says the *staged* elements are returned as separate IR values
+(which leans tracing) but also that the frontends must agree on the IR
+dataflow (which leans parser) — no doc decides the host element. Pinned by
+`test_host_valued_return_elements_are_tracing_dropped`.
+2. **`return [a, b]` is a dialect collision.** Tracing reads the host list as
+a container of facades and emits the multi-value `ReturnStmt`; the parser
+reads it as one `MakeTuple` — the printer's own spelling for a tuple return
+(`_return_impl`'s comment at `semantics.py:1390` records the same split, and
+the tracing lane only honors the round-trip reading when the declared return
+type is a `TupleType`). Both readings are load-bearing for their dialect (the
+tracing ergonomics container rule; the parser's round-trip ownership), so the
+one accepted spelling cannot be anchored until the decision lands. Pinned by
+`test_list_literal_return_is_a_dialect_collision`.
+3. **`return pl.Tuple(a, b)` has no parser spelling** — the tracing-only
+single-tuple facade; the parser reports `Unknown operation 'pl.Tuple'`.
+Pinned by `test_pl_tuple_return_has_no_shared_spelling`.
+4. **`@pl.expand` has no parser spelling.** The entrance is additive and
+tracing-native (`docs/design/03-entrance.md` §7 line 436; §8 line 499: *'The
+AST parser remains the sole owner of round-trip syntax and is not taught
+entrance or tracing semantics'*), so the parser reports
+`Unsupported function call` and no `conformance` anchor is possible. The
+expansion's own contract is witnessed instead: the traced expansion is
+structurally the body written out at the call site, which the parser *can*
+parse (`test_expand_emits_the_written_out_body`), and the entrance's
+trailing-return/early-return contract is already covered by
+`tests/ut/language/entrance/test_expansion.py`. Pinned by
+`test_expand_call_has_no_parser_spelling`.
+
+### Discovered tasks
+
+- **F15 — a statement after a function-level `return` is collected by the
+  parser and dropped by tracing.** Red check and pin as above (finding 1).
+  Frontend-only. **State: fixed** (fix-campaign task B2). The pins are
+  rewritten to `test_function_level_return_drops_unreachable_tail_by_both_lanes`
+  and `test_function_level_double_return_dropped_by_both_lanes`, both plain
+  `conformance(..., build)` anchors asserted **raw** (straight-line kernels: no
+  staged construct, no pass state). The lane decision: the parser, not tracing
+  — the traced execution is the kernel's meaning (§9), and the rewriter's
+  native return is what returns a value to a host caller (`Interpreter.return_`
+  docstring), so the tracing side cannot be changed. The parser's
+  `_parse_body_siblings` gained `stop_after_return`, passed only by
+  `parse_function`; the statements after a function-level return are dead by
+  construction, so nothing is lost.
+- **F16 — an inline callee's multi-value trailing return: the pass splices a
+  multi-value `ReturnStmt`, the parser's expansion returns one `MakeTuple`.**
+  Red check and pin as above (finding 2). Frontend-only. **State: fixed**
+  (fix-campaign task B3): `parse_return` takes an `@pl.inline` callee's
+  expansion as the callee's value list instead of the value-position
+  `MakeTuple`, so `return helper(x)` keeps the callee's arity; the value
+  position is unchanged. The pin is rewritten to
+  `test_inline_multi_value_trailing_return_by_both_lanes` (raw arity and raw
+  equality) plus the post-inline canonical anchor
+  `_inline_multi_value_anchor`.
+- **F17 — the parser's inline expansion silently drops an early return under
+  staged control flow (branch emitted empty), which both tracing entrances
+  reject loudly.** Red check and pin as above (finding 3). Frontend-only.
+  **State: fixed** (fix-campaign task B4). The pin is rewritten to the
+  correct expectation (`test_inline_early_return_rejected_by_both_lanes`):
+  the pass rejects the shape at splice time, the parser rejects it at
+  expansion time (`_expand_inline_call`'s `_reject_inline_nested_return` scans
+  the callee's body for a `return` nested in `if`/`for`/`while`/`with` and
+  raises `ParserSyntaxError` with the pass's "non-trailing ReturnStmt"
+  clause). A return that is the body's trailing statement — scope-wrapped
+  included — still parses.
+- **F37 — an inline callee's multi-value trailing return through a tuple
+  temporary stayed divergent after F16's fix** (finding 4; filed by the
+  fix-campaign task B3). Red check and pin as above. Frontend-only; was
+  blocked on the `return [a, b]` dialect decision. **State: fixed**
+  (fix-campaign task F37): the ratified R4 ruling makes the parser's
+  one-`MakeTuple` reading normative, so the tracing lane now stages a tuple
+  whose elements are all staged facades as one `pl.Tuple` value when bound
+  (`_stage_staged_tuple`), and `tmp = (a, b); return tmp` keeps the temporary
+  and returns one value on both lanes. The pin is rewritten to
+  `test_inline_temp_tuple_trailing_return_by_both_lanes`.
+- **F38 — an inline callee's dead second top-level return** (finding 5; filed
+  by the fix-campaign task B4). The traced callee ends at the first return and
+  the pass splices it, while the parser keeps collecting and its last-wins
+  ``_inline_return_values`` overwrites the trailing return's values. Red check
+  and pin as above (`test_inline_dead_tail_after_trailing_return_divergence`).
+  Frontend-only; the fix is F15's `stop_after_return` semantics on the inline
+  body walk, not a rejection (tracing accepts the spelling). **State: fixed**
+  (fix-campaign task F38): `_inline_body_prefix` gives the inline expansion
+  the same first-return-wins prefix B2 gave the direct function body, and both
+  the walk and F17's nested-return scan read it. The pin is rewritten to
+  `test_inline_dead_tail_after_trailing_return_by_both_lanes`, with
+  `test_inline_dead_tail_nested_return_by_both_lanes` covering the dead
+  nested return the narrowed scan no longer rejects.
+
+F-ids continue from F14.
+
+## 15. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
@@ -519,3 +847,4 @@ three no-shared-spelling/divergence pins.
 | 1 | R6 `for` + iterators | worker session | done | *(this commit)* | 28 new anchors in `test_for.py` (suite 7 → 35 call sites; 83 → 111 across `test_*.py`), all green — all four iterator kinds, the 1/2/3-arg and computed bound forms, stage pinning, `attrs=`, the INT64/INDEX for-syntax bound, nesting. No red anchor. Target forms are parser-only or rejected by both (pinned): no shared spelling. Four no-anchor acceptance divergences recorded, one filed as **F11** (`attrs=` non-string key → `std::bad_cast`). |
 | 1 | R7 `break` / `continue` | worker session | done | *(this commit)* | new suite `test_break_continue.py`: 36 anchors (18 kernels × raw + canonical; conformance-directory call sites 111 → 147), all green — nesting/target selection, the deferred staged exit ordering, exits inside `while`, post-transfer collection, innermost-kind gating, `pl.pipeline`, `pl.spmd`-nested. No red anchor, so no anchor-rule `F*`. Two no-anchor divergences recorded and filed: **F12** (tracing accepts a transfer in a top-level `pl.spmd` / `pl.split_aiv` region and emits an unparseable `break`), **F13** (the parser silently drops a loop `else` suite that tracing rejects loudly). |
 | 1 | R8 binding & assignment | worker session | done | *(this commit)* | new suite `test_binding_assignment.py`: 22 anchors (conformance-directory call sites 147 → 169), all green — subscript write (tensor/tile/array, bare/partial/full-axis/in-loop), same-type staged rebind, type-changing rebind, param-name rebind, defs/store order, `pl.const` staged init, tuple unpack, the `pl.Scalar` param world. One red canonical regime filed as **F14** (a type-changing rebind inside a staged loop yields a free variable in the SSA loop init on *both* lanes — a shared §7 hole, not a parity divergence), pinned by an explicit `pytest.raises` test. Three no-shared-spelling/divergence pins: scalar-index rank-reducing write (**needs-decision**), the typed-staged-init guard (**intended divergence**, `docs/design/01-language.md` §4), `pl.runtime` (jit-entry-only, out of scope). |
+| 1 | R9 returns / exits | worker session | done | *(this commit)* | new suite `test_return_exit.py`: 19 anchors (12 kernels; conformance-directory call sites 169 → 188; conformance-dir tests 288 → 310), all green — the trailing single-return contract (multi-value, scalar, bare, void), returns inside `elif`/branch/loop/`pl.spmd`/`pl.at` (raw + canonical), plus the `@pl.expand` no-spelling witness and the declared-`->` intended divergence. Three red findings filed and pinned: **F15** (a statement after a function-level `return` is dropped by tracing, collected by the parser), **F16** (an inline callee's multi-value trailing return: pass splice multi-value vs parser `MakeTuple`), **F17** (the parser's inline expansion silently drops an early return under staged control flow that both tracing entrances reject loudly). Two needs-decision no-anchor divergences: host-valued return elements dropped by tracing; `return [a, b]` MakeTuple-vs-multi-value dialect collision. `scripts/review/check_construct_parity.py`'s construct map now points `returns / exits` at the new suite. |

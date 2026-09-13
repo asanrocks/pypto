@@ -663,7 +663,7 @@ class ASTParser:
 
         # Inline function expansion state
         self._inline_mode = False
-        self._inline_return_expr: ir.Expr | None = None
+        self._inline_return_values: list[ir.Expr] | None = None
 
         # Yield tracking state — None means tracking is inactive (outside loops/ifs)
         self._current_yield_vars: list[str] | None = None
@@ -1052,7 +1052,7 @@ class ASTParser:
             elif inline_body is not None:
                 self.builder.inline_stmt(inline_body, ir.InlineLanguage.Python, func_span)
             else:
-                self._parse_body_siblings(body_stmts)
+                self._parse_body_siblings(body_stmts, stop_after_return=True)
                 self._discard_tail_block_comments(func_def.body, upper_line=None)
 
         # Exit function scope
@@ -1285,7 +1285,9 @@ class ASTParser:
             hint=hint,
         )
 
-    def _parse_body_siblings(self, body: Sequence[ast.stmt]) -> None:
+    def _parse_body_siblings(
+        self, body: Sequence[ast.stmt], *, stop_after_return: bool = False
+    ) -> None:
         """Parse a block's body stmts, applying stale-pending sweeps between siblings.
 
         The inter-sibling sweep catches tail-of-block comments that live in the
@@ -1293,11 +1295,23 @@ class ASTParser:
         sibling. Skipped for the first sibling since there is no prior closed
         block — any pending comments at that point belong to the enclosing
         compound stmt's header or leading attachments.
+
+        ``stop_after_return`` is the **function body's** option (nested blocks
+        keep the default). A top-level ``return`` ends the traced execution:
+        the rewriter's host guard fires because no staged Construct is open
+        (``Interpreter.in_host_mode``), so the statements after it are
+        unreachable and are never collected. The parser reads source statically
+        and must produce the same IR, so it stops collecting there too. A
+        return *inside* a staged construct suppresses the host exit instead and
+        collection continues — hence the option is not propagated to nested
+        blocks.
         """
         for i, stmt in enumerate(body):
             if i > 0:
                 self._discard_stale_pending_before(stmt)
             self.parse_statement(stmt)
+            if stop_after_return and isinstance(stmt, ast.Return):
+                break
 
     def _then_branch_tail_upper(self, stmt: ast.If) -> int:
         """Inclusive upper-bound line for the then-branch's tail-drop range.
@@ -6077,11 +6091,7 @@ class ASTParser:
         if self._inline_mode:
             if stmt.value is None:
                 return  # void inline, no return value
-            if isinstance(stmt.value, ast.Tuple):
-                exprs = [self.parse_expression(elt) for elt in stmt.value.elts]
-                self._inline_return_expr = ir.MakeTuple(exprs, self.span_tracker.get_span(stmt))
-            else:
-                self._inline_return_expr = self.parse_expression(stmt.value)
+            self._inline_return_values = self._parse_return_values(stmt.value)
             return
 
         span = self.span_tracker.get_span(stmt)
@@ -6090,16 +6100,27 @@ class ASTParser:
             self.builder.return_stmt(None, span)
             return
 
-        # Handle tuple return
-        if isinstance(stmt.value, ast.Tuple):
-            return_exprs = []
-            for elt in stmt.value.elts:
-                return_exprs.append(self.parse_expression(elt))
-            self.builder.return_stmt(return_exprs, span)
-        else:
-            # Single return value
-            return_expr = self.parse_expression(stmt.value)
-            self.builder.return_stmt([return_expr], span)
+        self.builder.return_stmt(self._parse_return_values(stmt.value), span)
+
+    def _parse_return_values(self, value: ast.expr) -> list[ir.Expr]:
+        """The ``ReturnStmt`` value list for ``return value``.
+
+        A written-out `return a, b` is multi-value, and so is `return
+        helper(x)` when ``helper`` is an ``@pl.inline`` callee whose trailing
+        return is multi-value: the parse-time expansion is the body written out
+        at the call site, so the callee's trailing return *is* the caller's.
+        The backend inline splice of the same call wires the callee's trailing
+        values in the same way; a tuple lowered to one staged ``MakeTuple``
+        value would change the caller's return arity behind the author's back.
+        Every other expression is one value (a non-inline tuple return stays
+        one ``Call`` value, its elements being the callee's business).
+        """
+        if isinstance(value, ast.Tuple):
+            return [self.parse_expression(elt) for elt in value.elts]
+        inline_values = self._inline_callee_return_values(value)
+        if inline_values is not None:
+            return inline_values
+        return [self.parse_expression(value)]
 
     def parse_evaluation_statement(self, stmt: ast.Expr) -> None:
         """Parse evaluation statement (EvalStmt).
@@ -8518,6 +8539,99 @@ class ASTParser:
     def _parse_inline_call(self, _local_name: str, inline_func: "InlineFunction", call: ast.Call) -> ir.Expr:
         """Parse a call to an InlineFunction, expanding its body in-place.
 
+        The value-position reading of a multi-value trailing return is one
+        ``MakeTuple`` (the printer's tuple spelling). A return position does not
+        go through here: :meth:`_parse_return_values` takes the expansion's
+        value list, so the caller keeps the callee's arity.
+
+        Args:
+            _local_name: The name used in the caller's scope
+            inline_func: The InlineFunction object
+            call: The AST Call node
+        """
+        values = self._expand_inline_call(_local_name, inline_func, call)
+        if len(values) == 1:
+            return values[0]
+        return ir.MakeTuple(values, self.span_tracker.get_span(call))
+
+    def _inline_callee_return_values(self, expr: ast.expr) -> list[ir.Expr] | None:
+        """``expr``'s expanded trailing-return value list, when it is a call to
+        an ``@pl.inline`` callee; ``None`` for every other expression.
+
+        Matches exactly the call shape :meth:`parse_call` routes to
+        :meth:`_parse_inline_call`, so a return position can take the callee's
+        arity instead of the value-position tuple facade.
+        """
+        if not isinstance(expr, ast.Call) or not isinstance(expr.func, ast.Name):
+            return None
+        from .decorator import InlineFunction  # noqa: PLC0415 (circular import)
+
+        resolved = self.expr_evaluator.closure_vars.get(expr.func.id)
+        if not isinstance(resolved, InlineFunction):
+            return None
+        return self._expand_inline_call(expr.func.id, resolved, expr)
+
+    @staticmethod
+    def _inline_body_prefix(body: Sequence[ast.stmt]) -> list[ast.stmt]:
+        """The inline body statements the expansion collects (F15's rule).
+
+        A ``return`` that is a direct statement of the inline body is the
+        traced execution's host exit (the rewriter's ``in_host_mode`` guard),
+        so everything after the first one is dead: the traced callee the
+        backend pass splices is terminated by that return, and the parser
+        reads source statically only to produce the same IR. Both the
+        nested-return rejection (:meth:`_reject_inline_nested_return`) and the
+        expansion walk stop there — a dead tail must not turn a rejection or an
+        ``_inline_return_values`` overwrite into a divergence from the lane
+        that stopped executing. Nested blocks are not scoped by this: an inline
+        body's nested return is rejected before the walk starts.
+        """
+        collected: list[ast.stmt] = []
+        for stmt in body:
+            collected.append(stmt)
+            if isinstance(stmt, ast.Return):
+                break
+        return collected
+
+    def _reject_inline_nested_return(self, inline_func: "InlineFunction") -> None:
+        """Reject a ``return`` that is not a direct statement of an inline body.
+
+        Only a body's trailing ``return`` has a value destination at the call
+        site: the expansion splices the callee's statements in place, so a
+        return nested in an ``if``/``for``/``while`` body has no region-merge
+        semantics to land in. The backend pass rejects the same shape after
+        cloning (``CloneInlineBody``: *'contains a non-trailing ReturnStmt;
+        only a single trailing return is supported'*) and the ``@pl.expand``
+        entrance rejects it in ``Sema.return_``. The expansion used to hand the
+        nested return's expression to ``_inline_return_values`` and then
+        overwrite it with the trailing return — the branch was emitted empty
+        and its expression silently lost.
+
+        The scan covers the collected prefix only: a nested return after the
+        body's first direct return is dead on both lanes, so rejecting it would
+        invent a divergence the pass cannot see.
+        """
+        for stmt in self._inline_body_prefix(inline_func.func_def.body):
+            if isinstance(stmt, ast.Return):
+                continue
+            nested = next((node for node in ast.walk(stmt) if isinstance(node, ast.Return)), None)
+            if nested is not None:
+                raise ParserSyntaxError(
+                    f"Inline function '{inline_func.name}' contains a non-trailing ReturnStmt; "
+                    "only a single trailing return is supported",
+                    span=self.span_tracker.get_span(nested),
+                    hint=(
+                        "Move the return to the end of the inline function's body — a return "
+                        "inside staged control flow has no inline expansion semantics."
+                    ),
+                )
+
+    def _expand_inline_call(
+        self, _local_name: str, inline_func: "InlineFunction", call: ast.Call
+    ) -> list[ir.Expr]:
+        """Expand an InlineFunction's body in-place and return its trailing
+        return's value list (one entry for the single-value contract).
+
         Args:
             _local_name: The name used in the caller's scope
             inline_func: The InlineFunction object
@@ -8543,9 +8657,9 @@ class ASTParser:
             self.scope_manager.define_var(param_name, arg_expr, allow_redef=True)
 
         # Save parser state and switch to the inline function's context
-        prev_inline_state = (self._inline_mode, self._inline_return_expr)
+        prev_inline_state = (self._inline_mode, self._inline_return_values)
         self._inline_mode = True
-        self._inline_return_expr = None
+        self._inline_return_values = None
 
         prev_closure_vars = self.expr_evaluator.closure_vars
         self.expr_evaluator.closure_vars = {**inline_func.closure_vars, **prev_closure_vars}
@@ -8562,7 +8676,8 @@ class ASTParser:
         self.span_tracker.col_offset = inline_func.col_offset
 
         try:
-            for i, stmt in enumerate(inline_func.func_def.body):
+            self._reject_inline_nested_return(inline_func)
+            for i, stmt in enumerate(self._inline_body_prefix(inline_func.func_def.body)):
                 if i == 0 and self._is_docstring(stmt):
                     continue
                 self.parse_statement(stmt)
@@ -8575,8 +8690,8 @@ class ASTParser:
                 self.span_tracker.col_offset,
             ) = prev_span_state
             self.expr_evaluator.closure_vars = prev_closure_vars
-            return_expr = self._inline_return_expr
-            self._inline_mode, self._inline_return_expr = prev_inline_state
+            return_values = self._inline_return_values
+            self._inline_mode, self._inline_return_values = prev_inline_state
             # Keep the existing statement-level inline semantics for local
             # definitions, but never expose formal parameter bindings. A
             # formal may share a name with an unrelated caller variable; if it
@@ -8587,14 +8702,14 @@ class ASTParser:
                 exclude_names=set(inline_func.param_names),
             )
 
-        if return_expr is None:
+        if return_values is None:
             raise ParserTypeError(
                 f"Inline function '{inline_func.name}' has no return value",
                 span=span,
                 hint="Inline functions used as expressions must return a value",
             )
 
-        return return_expr
+        return return_values
 
     def _parse_op_positional_arg(self, arg: ast.expr) -> Any:
         """Parse a positional op argument.
