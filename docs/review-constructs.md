@@ -191,10 +191,112 @@ host-vs-staged dispatch, nesting in `while`/`spmd`) — the two anchoring
 surprises were that the elif chain is raw-equal (not merely
 post-canonical) and that `pl.spmd` nesting needs no new regime.
 
-## 11. Round ledger
+## 11. R6 verdicts — `for` + iterators
+
+Both sides read before verdicting: the parser's `parse_for_loop`
+(`ast_parser.py:2617`), `_parse_for_loop_target` (`:2568`), `_parse_range_call`
+(`:2837`) and `_parse_range_keyword` (`:2808`) — plus its `pl.unroll` bound/step
+validation (`:2677`, `:2684`) — and the tracing lane's `_for_row` rewriter
+(`rewriter.py:1386`) + `_route_target` (`:669`) +
+`RangeIterator`/`_LoopTargetBinding` (`constructs/loops.py:94`, `:47`) +
+`SemaFrame.create_for_construct` (`semantics.py:1446`) +
+`PtoForConstruct.activate_target` (`constructs.py:332`).
+
+**Regime first.** Every anchored spelling below is a staged loop —
+`pl.range`/`pl.parallel`/`pl.pipeline` are *always* staged, even with host int
+bounds (`docs/design/01-language.md` §8 line 383), and `pl.unroll` is a trace
+iterable too. So each anchor is asserted **raw**-equal *and*
+post-`canonicalize()`-equal. Raw equality holds because neither lane emits
+`iter_args` for a plain loop: on both sides the loop-carried value is the
+self-referential `AssignStmt` update to a mutable local, and the parser's
+iter_args path is reachable only through `init_values=` (which tracing does not
+have). Canonical is the staged-flow regime: the SSA pass derives the same
+loop-carried value from the same update on both sides.
+
+| Variant | Regime | Verdict |
+| --- | --- | --- |
+| `pl.range` 1-arg / staged bound (`k_loop_accum`, `k_loop_staged_bound`) | raw + canonical | equivalent (pre-existing anchors, unchanged) |
+| `pl.range(start, stop)` (`k_range_start_stop`) | raw + canonical | equivalent |
+| `pl.range(start, stop, step)` (`k_range_start_stop_step`) | raw + canonical | equivalent |
+| computed bounds over a staged Scalar, `pl.range(n - 2, n + 2, 2)` (`k_range_computed_bounds`) | raw + canonical | equivalent |
+| `pl.parallel(4)` / `pl.parallel(0, 4, 2)` (`k_parallel_loop`, `k_parallel_three_arg`) | raw + canonical | equivalent |
+| `pl.unroll(4)` / `pl.unroll(0, 6, 2)` (`k_unroll_loop`, `k_unroll_three_arg`) | raw + canonical | equivalent |
+| `pl.pipeline(8, stage=4)` / `pl.pipeline(0, 8, 2, stage=2)` (`k_pipeline_loop`, `k_pipeline_three_arg_stage`) | raw + canonical | equivalent |
+| `attrs={...}` on range, and `stage=` merged with `attrs` on pipeline (`k_range_attrs`, `k_pipeline_attrs_stage`) | raw + canonical | equivalent |
+| round-trip INT64 bound `pl.range(pl.const(4, pl.INT64))` (`k_range_int64_const_bound`) | raw + canonical | equivalent **for-syntax**: the parser's round-trip inference types the loop var INT64, tracing always types it INDEX, and the oracle declares INT64/INDEX equivalent in a loop-var (and ConstInt) position (`AreForSyntaxScalarDtypesEquivalent`, `src/ir/transforms/structural_equal.cpp:50`, applied at `:1047`). The raw IR differs in that one field only. |
+| staged `for` nested in staged `for` (`k_nested_for`), `for` inside a staged `while` (`k_for_in_while`) | raw + canonical | equivalent |
+| iter_args tuple target `for i, (v,) in pl.range(..., init_values=(...))` (`k_iter_args_target`) | n/a | **out of scope — no shared spelling**: the tracing surface of `pl.range`/`pl.parallel`/`pl.pipeline` deliberately has no `init_values=` (`docs/design/01-language.md` §8 line 415; §14 line 674 — the loop-carried channel is `pl.intrin.carry`). Parser accepts (round-trip ownership), tracing rejects at construction. Pinned by `test_iter_args_tuple_target_is_parser_only`. |
+| bare tuple target `for i, j in pl.range(4)` (`k_bare_tuple_target`) | n/a | **out of scope — both lanes reject**: parser `Iter args must be a tuple` (`_setup_iter_args`, `ast_parser.py:2591`); tracing `cannot unpack non-iterable _LoopTargetBinding` (the target binding is one proxy, `loops.py:47`). Pinned by `test_bare_tuple_target_rejected_by_both_lanes`. |
+| `stage=` on a non-pipeline iterator, missing `stage=`, zero args, `unroll=` kwarg | n/a | out of scope — both lanes reject; no accepted spelling exists to anchor (tracing rejects by signature, the parser by `_parse_range_keyword`). |
+
+All 28 new anchors land green (suite 7 → 35 call sites; conformance dir
+83 → 111). No red anchor, so no `F*` task from the anchor rule and no frontend
+edit. On "target forms (single, tuple, computed)" from section 5's R6 row: the
+parser's `_parse_for_loop_target` (`ast_parser.py:2568`) accepts exactly a
+simple name or a two-element `(loop_var, iter_args)` tuple, so "single" and
+"tuple" are the whole target grammar; "computed" is the computed
+bound/offset surface (the `n - 2`/`n + 2` bound anchor here and the pre-existing
+`k_gemm_tile_loop`'s loop-var-into-offset `i * 64`), which both lanes share.
+
+**Canonical-regime caveat (recorded, not a divergence).** The canonical pair
+runs `convert_to_ssa` + `simplify` *without* `UnrollLoops`, which a real
+pipeline runs first. For the two `pl.unroll` anchors SSA therefore derives
+`iter_args` onto the surviving Unroll marker — an artifact state both lanes
+reach identically; the roundtrip instrument's "IR not printable" warning is
+filtered in the two tests as in `tests/ut/ir/transforms/test_unroll_loops_pass.py`.
+
+### R6 no-anchor findings (acceptance-side divergences, needs-decision)
+
+These have no anchor because one lane rejects the spelling. They are
+divergences in the construct's logic, recorded here; nothing was edited.
+
+1. **Non-string `attrs=` key leaks an internal C++ error.** `pl.range(4,
+   attrs={1: 2})` (same for `pl.parallel`/`pl.unroll`/`pl.pipeline`) raises
+   `RuntimeError: std::bad_cast` from `ConvertKwargsDict`
+   (`python/bindings/modules/ir.cpp:114`, reached from `RangeIterator.begin`,
+   `constructs/loops.py:181`), while the parser raises
+   `ParserSyntaxError: attrs keys must be string literals` (`ast_parser.py:2893`).
+   The tracing factory forwards the user's dict unvalidated. Filed as **F11**.
+2. **`pl.unroll` bound/step validation is parser-only.** `pl.unroll(n)` with a
+   staged bound and `pl.unroll(0, 4, 0)` are accepted by tracing and rejected
+   by the parser (`ast_parser.py:2677`, `:2684`). The C++ pass still fails
+   loudly later (`UnrollLoops: <what> must be a compile-time integer constant`,
+   `src/ir/transforms/unroll_loops_pass.cpp:68`; `Unroll loop step cannot be
+   zero`, `:72`), so this is error-*timing* parity, not a correctness gap.
+   needs-decision: no doc intends tracing to skip the early check.
+3. **`stage=` accepts less on the tracing side.**
+   `pl.pipeline(8, stage=pl.const(2, pl.INT64))` is accepted by the parser
+   (`_is_const_int` sees the ConstInt) and rejected by tracing's `_pin_stage`
+   (host `int` required, `constructs/loops.py:233`). No round-trip pressure
+   (the printer emits a bare int), so this is an ergonomics-spelling
+   acceptance gap only. needs-decision.
+4. **The parser ignores extra positional range args.** `pl.range(0, 4, 2, 9)` is
+   accepted by the parser (`_parse_range_call` reads the first three,
+   `ast_parser.py:2862`) and rejected by tracing (`ValueError: range() takes 1
+   to 3 positional arguments`). A parser-side arity gap, not a tracing gap.
+   needs-decision.
+
+### Discovered task
+
+- **F11 — a non-string `attrs=` key reaches nanobind and raises
+  `RuntimeError: std::bad_cast` instead of a loud frontend error.** Found in
+  R6 (finding 1 above); not an anchor red, so it is a discovered task rather
+  than a construct divergence. Red check: trace any kernel containing
+  `for i in pl.range(4, attrs={1: 2}):` (a `/tmp` module run with `uv run
+  python`) → `RuntimeError: std::bad_cast`; the parser lane raises
+  `ParserSyntaxError: attrs keys must be string literals`. Owner undecided
+  (needs-decision on the layer): validate the key type in the Python
+  frontend's attr pass-through (`constructs/loops.py`, and the sibling
+  attrs-taking entries) or make `ConvertKwargsDict`
+  (`python/bindings/modules/ir.cpp:114`) raise `TypeError`. Frontend-only
+  fixes are the migration's rule. F-ids continue `docs/review-r10.md` §4's
+  series (last F10).
+
+## 12. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
 | 0 | seed this tracker | — (orchestrator) | done | `d60a4b303` | plan, contract, evidence base |
 | 0 | parity inventory oracle | — (orchestrator) | done | *(this commit)* | `scripts/review/check_construct_parity.py`; 0 stale, 10/16 constructs without anchors, 4 unclaimed structural parser handlers, 17 unclaimed public tracing entries. The gap table in section 5 is now data, not hypothesis |
 | 1 | R5 `if` / `else` / `elif` | worker session | done | *(this commit)* | 13 new anchors in `test_if.py` (suite 7 → 20 call sites; 70 → 83 across `test_*.py`), all green. **No `F*` task**: no red anchor. One intended divergence pinned (host predicate dispatch). |
+| 1 | R6 `for` + iterators | worker session | done | *(this commit)* | 28 new anchors in `test_for.py` (suite 7 → 35 call sites; 83 → 111 across `test_*.py`), all green — all four iterator kinds, the 1/2/3-arg and computed bound forms, stage pinning, `attrs=`, the INT64/INDEX for-syntax bound, nesting. No red anchor. Target forms are parser-only or rejected by both (pinned): no shared spelling. Four no-anchor acceptance divergences recorded, one filed as **F11** (`attrs=` non-string key → `std::bad_cast`). |
