@@ -1272,7 +1272,67 @@ map now points `split_aiv` at the new suite and claims
 map is one-suite-per-construct) and the new suite carries the for-form /
 capture / carrier anchors as well.
 
-## 17. Round ledger
+## 17. R12 verdicts — statement handlers (`static_print`, `static_assert`, `dump_tag`, `set_cache_policy`), `func_attr`, `optimizations`
+
+Both sides read before verdicting: the parser's `_handle_static_print`
+(`ast_parser.py:3001`), `_handle_static_assert` (`:3028`), `_handle_dump_tag`
+(`:3085` + the `_dump_tagged_vars` merge in `_parse_kernel_call` `:7001`),
+`_handle_set_cache_policy` (`:3170`) / `_collect_scope_cache_policy_decls`,
+`_consume_func_attr_prologue` (`:1063`) + `_parse_func_attr_value` (`:1174`),
+and `_parse_optimizations_list` (`:3821`) / `_parse_spmd_optimizations_list`
+(`:3908`) / `_handle_at_optimizations_kw` (`:3809`); the tracing lane's
+`compat/diagnostics.py` (the two no-ops), the `DumpTagMarker` (`typing/tensor.py:374`)
++ `Sema.record_dump_tag` (`semantics.py:363`) + `Marker.__call__`
+(`op/marker.py:340`), the `CachePolicyDecl` (`typing/tensor.py:388`) +
+`Sema.route_cache_policy` (`semantics.py:1095`) + `_DeferredDeclarableScope`,
+`constructs/func_attrs.py` + `TraceContext.collect_func_attr` (`protocol.py:383`),
+and `_fold_optimization_entries` (`constructs/scopes.py:623`).
+
+**Regime first.** Every one of these handlers is *consumed at collection* and
+emits no statement of its own, so the anchors are asserted **raw** (no pass state
+to run): the diagnostics, `func_attr` (a `Function.attrs` merge) and the empty
+`dump_tag`/`set_cache_policy` statements. The anchors whose surrounding
+construct carries loop state — a diagnostic inside a staged `pl.range`,
+`set_cache_policy` in the for-form `pl.spmd` body, the `optimizations=` scope
+attrs — additionally assert post-`canonicalize()`, the staged-flow regime proper.
+`pl.func_attr` is raw-only: `convert_to_ssa` never touches `Function.attrs`.
+
+| Variant | Regime | Verdict |
+| --- | --- | --- |
+| `pl.static_print("label", x)` / f-string form (`k_static_print_*`) | raw | equivalent |
+| `pl.static_assert(True)` / `(True, "msg")` / literal comparison (`k_static_assert_*`) | raw | equivalent |
+| both diagnostics inside a staged `pl.range` (`k_static_diag_in_loop`) | raw + canonical | equivalent |
+| `pl.static_assert(False, ...)` — parser raises, tracing silent | n/a (no IR on either lane; the effect differs) | **intended divergence** — `docs/design/00-tracing.md:111` (*'Under the tracing frontend they are silent runtime no-ops, so kernels written for the parser stay importable'*); `docs/en/user/language/05-directives.md:18-25` (*'a failing `static_assert` does not raise'*); the by-design gap **K4**, `docs/migration-known-gaps.md`; `docs/design/04-migration-guide.md` §4.4. Pinned by `test_static_assert_false_is_silent_under_tracing`. |
+| `pl.static_print()` with no argument | n/a (tracing accepts the `*args` no-op, parser rejects the arity) | **needs-decision** — the no-op contract explains the behavior but no doc decides the arity validation. Pinned by `test_static_print_argument_validation_is_parser_only`. |
+| `pl.dump_tag` forward-sticky into a consuming kernel call (`DumpTagForwardSticky`) | raw + program-canonical | equivalent |
+| `pl.dump_tag` invalidation on a derived/rebound value (`DumpTagRebindInvalidation`) | raw | equivalent |
+| `pl.dump_tag` in a kernel body | n/a (both reject) | out of scope — shared rejection. Pinned by `test_dump_tag_outside_orchestration_rejected_by_both_lanes` (also covers a non-tensor / undefined argument shape). |
+| `pl.set_cache_policy` in a `pl.at(CORE_GROUP)` body / with-form `pl.spmd` / for-form `pl.spmd` | raw (*+canonical* for the for-form) | equivalent |
+| redundant same-policy declaration (`k_cache_policy_dup`) | raw | equivalent |
+| conflicting policy for one binding | n/a (both reject) | out of scope — shared rejection. Pinned by `test_cache_policy_conflicting_policies_rejected_by_both_lanes`. |
+| declaration after the scope body's first statement | n/a (parser hoists, tracing rejects) | **needs-decision** — the parser pre-scans/hoists (`docs/en/dev/language/05-cache-policy.md` § *Where the declaration may be written*); the tracing lane is the stricter loud form (`semantics.py:1128`), no doc sanction for the ordering rule. Pinned by `test_cache_policy_must_precede_scope_first_statement`. |
+| declaration outside a scope / on a `pl.graph` body / non-Name first arg | n/a (both reject) | out of scope — shared rejections (pinned in the same suite). |
+| `pl.func_attr({"split": ...})` / `{"split": NONE}` | raw | equivalent |
+| `pl.func_attr` host scalars / `pl.adir` list / param-ref bare name / param-ref list / two directives | raw | equivalent |
+| `pl.func_attr` arbitrary-key integer list | n/a (both reject at the builder) | out of scope — shared rejection. Pinned. |
+| `pl.func_attr` duplicate key / decorator-only key / not first statement | n/a (both reject) | out of scope — shared rejections (pinned). |
+| `pl.func_attr(<pre-built dict>)` | n/a (tracing accepts, parser requires a literal) | **needs-decision** (acceptance-only, same IR). Pinned by `test_func_attr_prebuilt_dict_is_tracing_only`. |
+| `optimizations=[pl.optimizations.split(...)]` / `[pl.optimizations.cross_core_slot(...)]` | raw (*+canonical* for split) | equivalent |
+| deprecated `optimizations=[pl.split(mode, slot_num=N)]` | raw | equivalent |
+| duplicate split / bad entry / split on a Hierarchy `pl.at` | n/a (both reject) | out of scope — shared rejections (pinned). |
+
+26 anchors in the new `test_statement_handlers.py` (23 function-level + 3
+program-level `conformance(...)` call sites across 20 anchor tests; the suite's
+remaining 18 tests are the divergence/rejection pins — 38 collected tests in
+all). Conformance-directory call sites 265 → 291 (bare 244 → 267, program 21 →
+24); conformance-directory tests 407 → 445. All 26 anchors green, so **no red
+anchor and no `F*` task**; there are no frontend edits. The three `needs-decision`
+entries are acceptance-only (one spelling each, same IR when both lanes accept),
+recorded here with pins rather than filed as bugs. `scripts/review/check_construct_parity.py`'s
+map now points both `statement handlers` and `func attrs / optimizations` at the
+new suite (4 constructs still anchorless, down from 6).
+
+## 18. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
@@ -1285,3 +1345,4 @@ capture / carrier anchors as well.
 | 1 | R9 returns / exits | worker session | done | *(this commit)* | new suite `test_return_exit.py`: 19 anchors (12 kernels; conformance-directory call sites 169 → 188; conformance-dir tests 288 → 310), all green — the trailing single-return contract (multi-value, scalar, bare, void), returns inside `elif`/branch/loop/`pl.spmd`/`pl.at` (raw + canonical), plus the `@pl.expand` no-spelling witness and the declared-`->` intended divergence. Three red findings filed and pinned: **F15** (a statement after a function-level `return` is dropped by tracing, collected by the parser), **F16** (an inline callee's multi-value trailing return: pass splice multi-value vs parser `MakeTuple`), **F17** (the parser's inline expansion silently drops an early return under staged control flow that both tracing entrances reject loudly). Two needs-decision no-anchor divergences: host-valued return elements dropped by tracing; `return [a, b]` MakeTuple-vs-multi-value dialect collision. `scripts/review/check_construct_parity.py`'s construct map now points `returns / exits` at the new suite. |
 | 2 | R10 generic scopes (`scope` / `manual_scope` / `graph` / `cluster`) | worker session | done | *(this commit)* | new suite `test_generic_scopes.py`: 31 anchors (25 function-level + 6 program-level) + rejection/divergence pins (conformance-directory call sites 195 → 226; conformance-dir tests 310 → 355), all green — the four descriptors straight-line, inside/around staged control flow, the `auto_scope=False` AUTO spellings, scope leak/shadow/return/cond-bind semantics, cluster/graph nesting, placement rules, `as`-target rejection. Five findings filed and pinned: **F18** (a `pl.graph` region drops the forward-sticky `dump_vars` the parser attaches — the round's only red anchor), **F19** (`pl.scope(mode=<non-enum>)` silently selects AUTO), **F20** (no manual-scope nesting tracking on the tracing side), **F21** (graph/cluster name-hint identifier validation is parser-only), **F22** (the printer drops the yield LHS inside a manual runtime scope). Two needs-decision acceptance-only gaps (`pl.graph(name=...)` keyword, positional `pl.scope(MODE)`), one diagnostic-quality note (non-string `name_hint` fails in nanobind). `scripts/review/check_construct_parity.py`'s construct map now points `generic scopes` at the new suite (7 of 16 constructs now anchorless, down from 10). |
 | 2 | R11 `spmd` (with/for, tid capture) + `split_aiv` + the CORE_GROUP carrier + the `at` family | worker session | done | *(this commit)* | new suite `test_spmd_split_aiv.py`: 33 anchors (28 function-level + 5 program-level, across 25 tests) + 14 divergence/rejection pin tests (39 collected tests), plus 13 new `pl.at` anchors/pins in `test_at_const.py` (10 → 23) — conformance-directory call sites 226 → 272 (bare 210 → 251, program 16 → 21); conformance-dir tests 355 → 407; all 272 green. Covers the for-form (hint/sync/split/slot/both/aer/predicate/staged core_num/body-if/nesting/dispatch program), the with-form capture + `deps=` chain + TASK_ID-array store + cluster nesting + split+slot, `pl.split_aiv` (three modes, bare/in-place/in-loop/InCore-function arms, region-shape pins), the `pl.at` kwarg surface (`allow_early_resolve`, `windowize`, `cross_core_slot`, `no_dep_args`/`dumps`, capture+deps, Hierarchy/positional/in-`pl.at`/in-loop), and the CORE_GROUP carrier boundary. Four findings filed and pinned: **F23** (the carrier boundary — confirms and pins the migration review's F1: the parser wraps the whole body statically, tracing opens at the first top-level read; four red spellings), **F24** (nested `pl.split_aiv` accepted by tracing, rejected by the parser), **F25** (`pl.at(name_hint=...)` identifier validation is parser-only — F21's root cause on the `at` descriptor), **F26** (the printer drops the yield LHS inside a `SplitAivScopeStmt` — F22's sibling). One **intended divergence** (`pl.spmd(deps=)` without `as tid`, documented in `docs/en/dev/language/02-manual_dependencies.md:36`), two **needs-decision** no-anchor gaps (the bare non-differentiating spmd body; four `pl.at` kwarg-spelling checks). `scripts/review/check_construct_parity.py` now points `split_aiv` at the new suite and claims `_parse_and_validate_core_num` / `_handle_at_optimizations_kw` (6 constructs still anchorless, down from 7; 2 unclaimed structural parser handlers, down from 4). |
+| 2 | R12 statement handlers (`static_print`/`static_assert`/`dump_tag`/`set_cache_policy`) + `func_attr` + `optimizations` | worker session | done | *(this commit)* | new suite `test_statement_handlers.py`: 26 anchors (23 function-level + 3 program-level, across 20 anchor tests) + 18 divergence/rejection pins (38 collected tests) — conformance-directory call sites 265 → 291 (bare 244 → 267, program 21 → 24); conformance-dir tests 407 → 445; all 26 green. Covers the two parser-only diagnostics (label/f-string print, true/message/literal assert, both in staged flow), `dump_tag` forward-sticky merge + rebind invalidation, `set_cache_policy` on `pl.at`/with-form+for-form `pl.spmd` + the redundancy rule, `func_attr` (split enum, `NONE` drop, scalars, `pl.adir` list, param refs, multi-directive) and the fully-qualified / deprecated `optimizations=` entries. One **intended divergence** (the parser-only diagnostic no-op: `docs/design/00-tracing.md:111`, `docs/en/user/language/05-directives.md:18-25`, gap **K4**, `docs/design/04-migration-guide.md` §4.4), three **needs-decision** acceptance-only gaps (the `static_print` arity check, the `set_cache_policy` precedence rule, the `func_attr` pre-built dict). No red anchor, therefore no `F*` task and no frontend edit. `scripts/review/check_construct_parity.py` now points both `statement handlers` and `func attrs / optimizations` at the new suite (4 constructs still anchorless, down from 6). |

@@ -122,13 +122,13 @@ CONSTRUCTS = (
         "statement handlers",
         r"_handle_static_print|_handle_static_assert|_handle_dump_tag|_handle_set_cache_policy",
         r"^static_print$|^static_assert$",
-        None,
+        "test_statement_handlers.py",
     ),
     Construct(
         "func attrs / optimizations",
         r"_parse_func_attr_value|_parse_optimizations_list|_parse_spmd_optimizations_list",
         r"^_fold_optimization_entries$",
-        None,
+        "test_statement_handlers.py",
     ),
     Construct(
         "calls (kernel / extern / dispatch)",
