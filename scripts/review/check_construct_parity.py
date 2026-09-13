@@ -49,6 +49,11 @@ TRACER_FILES = (
 CONFORMANCE_DIR = Path("tests/ut/language/conformance")
 
 ANCHOR = re.compile(r"conformance\(|program_conformance\(")
+# Captures the handler convention only (`_parse_*` / `visit_*` / `_handle_*`).
+# The parser's `parse_*` methods are dispatch/expression entry points and are
+# deliberately outside this scope; a construct whose only parser-side symbol is
+# named `parse_*` still gets a construct entry, matched through the handler it
+# dispatches to.
 PARSER_SYMBOL = re.compile(r"^\s+def ((?:visit_|_handle_|_parse_)[A-Za-z_0-9]+)", re.MULTILINE)
 TRACER_SYMBOL = re.compile(r"^(?:class|def) ([A-Za-z_][A-Za-z_0-9]*)", re.MULTILINE)
 
@@ -73,7 +78,12 @@ CONSTRUCTS = (
         "test_for.py",
     ),
     Construct("while", r"_parse_while_", r"PtoWhileConstruct", "test_while_logical.py"),
-    Construct("break / continue", r"_parse_body_siblings", r"_DeferredStagedExit", None),
+    Construct(
+        "break / continue",
+        r"_parse_body_siblings",
+        r"_DeferredStagedExit",
+        "test_break_continue.py",
+    ),
     Construct(
         "binding / assignment",
         r"_parse_subscript_assignment|_parse_array_subscript_assignment",

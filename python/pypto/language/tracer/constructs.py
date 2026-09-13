@@ -59,6 +59,7 @@ from pypto.language.tracer.collector.interpreter import (
     WhileConstruct,
     WithConstruct,
 )
+from pypto.language.tracer.collector.interpreter import TransferTargetAction as _TransferTargetAction
 from pypto.language.tracer.collector.interpreter import ZeroOperandYieldAction as _ZeroOperandYieldAction
 from pypto.language.tracer.semantics import _predicate_expr, _unwrap_facade
 from pypto.pypto_core import ir
@@ -366,6 +367,34 @@ class PtoForConstruct(_YieldingConstruct[Facade], ForConstruct[Facade]):
         return loop_var
 
     # —— transfers ——
+    def transfer_target_action(self) -> _TransferTargetAction:
+        """The for-form ``pl.spmd`` region is not a transfer target.
+
+        It lowers to a scope, not a ``ForStmt``, and the parser pushes no
+        ``_loop_kind_stack`` entry for it — so a ``break``/``continue`` in its
+        body binds to the nearest *enclosing* loop, or is rejected when there
+        is none (``on_unbound_transfer``). A ``pl.split_aiv`` region is a
+        target: it *shadows* the enclosing loop (the parser's sentinel) and
+        rejects the keyword itself."""
+        if isinstance(self._descriptor, (_LoopDescriptor, _SplitAivDescriptor)):
+            return _TransferTargetAction.ACCEPT
+        return _TransferTargetAction.CROSS
+
+    def on_unbound_transfer(self, rt: Interpreter[Facade], keyword: str) -> None:
+        """The for-form ``pl.spmd`` region's rejection of a targetless transfer.
+
+        Reached when this region was crossed and no enclosing loop exists: the
+        keyword has no loop to bind to (the parser's ``'break' outside
+        loop`` — the spmd handler pushes no loop kind either)."""
+        del rt
+        raise InvalidOperationError(
+            f"'{keyword}' outside loop",
+            hint=(
+                f"'{keyword}' can only be used inside a for or while loop; the enclosing "
+                "'for ... in pl.spmd(...)' body is a scope over the SPMD blocks, not a loop"
+            ),
+        )
+
     def on_break(self, rt: Interpreter[Facade]) -> None:
         del rt
         self._validate_transfer("break")
@@ -382,11 +411,24 @@ class PtoForConstruct(_YieldingConstruct[Facade], ForConstruct[Facade]):
         return _ZeroOperandYieldAction.BLOCK if self._explicit else _ZeroOperandYieldAction.CROSS
 
     def _validate_transfer(self, keyword: str) -> None:
+        # A pl.split_aiv region is a scope over the two AIV lanes, not a loop:
+        # it shadows every enclosing loop (the parser pushes a "split_aiv"
+        # sentinel), so a transfer never binds past it. The for-form pl.spmd
+        # region never reaches here — ``transfer_target_action`` crosses it.
+        descriptor = self._descriptor
+        if isinstance(descriptor, _SplitAivDescriptor):
+            raise InvalidOperationError(
+                f"'{keyword}' not supported inside a 'for ... in pl.split_aiv(...)' body",
+                hint=(
+                    f"'{keyword}' can only be used in sequential (pl.range) or while loops; a "
+                    "pl.split_aiv body is a scope over the two AIV lanes, not a loop"
+                ),
+            )
         # Sequential-only transfer: parallel/unroll loops reject break and
-        # continue (matching the parser's rule). A trace iterable without the
-        # ``kind`` surface is a sequential range.
-        kind = self._descriptor.kind if isinstance(self._descriptor, _LoopDescriptor) else "range"
-        kind = kind or "range"
+        # continue (matching the parser's rule). Every remaining descriptor is
+        # a loop kind (a region that lowers to a scope was crossed before
+        # selection); it accepts.
+        kind = descriptor.kind if isinstance(descriptor, _LoopDescriptor) else ""
         if kind == "parallel":
             raise InvalidOperationError(
                 f"'{keyword}' not supported in parallel loops",

@@ -2565,6 +2565,31 @@ class ASTParser:
             hint=self._ITERATOR_HINT,
         )
 
+    def _reject_loop_else(self, stmt: ast.For | ast.While, kind: str) -> None:
+        """Reject a loop ``else`` suite on a staged loop.
+
+        A staged ``break`` suppresses the native keyword, and a staged loop
+        always exits through its predicate after one representative iteration:
+        the suite would be collected unconditionally instead of being skipped
+        by ``break``, quietly computing a different result. The tracing lane
+        rejects the suite when the loop Construct closes from inside it
+        (``Interpreter.exit_construct(else_follows=True)``); the parsed dialect
+        has no host world, so every loop accepted here is staged and the suite
+        has no ``ForStmt``/``WhileStmt`` representation. Both loop handlers used
+        to leave ``stmt.orelse`` unread, silently dropping the user's code
+        instead.
+        """
+        if not stmt.orelse:
+            return
+        raise ParserSyntaxError(
+            f"a staged {kind} loop cannot have an 'else' suite — the alternate break path is not collected",
+            span=self.span_tracker.get_span(stmt),
+            hint=(
+                "Restructure the loop so the suite runs after its close; "
+                "loop 'else' belongs to host loops only."
+            ),
+        )
+
     def _parse_for_loop_target(self, stmt: ast.For) -> tuple[str, ast.AST | None, bool]:
         """Parse for loop target, returning (loop_var_name, iter_args_node, is_simple_for)."""
         if isinstance(stmt.target, ast.Name):
@@ -2631,6 +2656,8 @@ class ASTParser:
         The C++ ConvertToSSA pass handles converting to SSA form.
         """
         iter_call, iterator_type = self._validate_for_loop_iterator(stmt)
+        # pl.while_() is a staged while spelled as a for; the rest are staged fors.
+        self._reject_loop_else(stmt, "while" if iterator_type == "while_" else "for")
 
         # Handle pl.while_() case
         if iterator_type == "while_":
@@ -3601,6 +3628,9 @@ class ASTParser:
         Args:
             stmt: While AST node
         """
+        # The parsed dialect has no host loop, so a natural while is staged.
+        self._reject_loop_else(stmt, "while")
+
         # Parse natural while syntax: while condition:
         condition = self.parse_expression(stmt.test)
         span = self.span_tracker.get_span(stmt)

@@ -438,7 +438,9 @@ def while_kernel(seq: pl.Tensor, seq_len: pl.Scalar[pl.INT32]) -> pl.Tensor:
 a staged loop always exits through its predicate after one representative
 iteration — the `else` would be collected unconditionally, contradicting
 Python's semantics. Staged loops with an `else` suite are rejected at trace
-time. Restructure the loop, or keep the predicate a host value.
+time, and at the AST parser's loop header (the parsed dialect has no host
+world, so every loop it accepts is staged). Restructure the loop, or keep the
+predicate a host value.
 
 ## §9 Calls: sub-kernels and inline callees
 

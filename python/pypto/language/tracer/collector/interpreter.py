@@ -91,6 +91,20 @@ class ZeroOperandYieldAction(Enum):
     CROSS = "cross"
 
 
+class TransferTargetAction(Enum):
+    """A Construct's typed answer to the ``break``/``continue`` target question.
+
+    ACCEPT: a transfer here binds to this Construct (every host and staged
+    loop). CROSS: this Construct lowers to a *scope*, not a loop, so the
+    keyword binds to the nearest *enclosing* loop — the walk crosses it, and
+    a transfer that finds no target above reaches the crossed Construct's
+    :meth:`Construct.on_unbound_transfer`.
+    """
+
+    ACCEPT = "accept"
+    CROSS = "cross"
+
+
 @dataclass(frozen=True)
 class ZeroOperandYieldSelection(Generic[V]):
     """The trace interpreter's ordered zero-operand-yield selection: the exact
@@ -125,7 +139,8 @@ class Construct(Generic[V]):
     routing. Language implementations inherit the matching class and
     implement staged hooks: the extension surface is the public host-kind
     methods themselves (``close`` and kind-specific routing, returning the
-    same public contract) plus interface-tag and zero-operand-yield hooks.
+    same public contract) plus interface-tag, zero-operand-yield, and
+    transfer-target hooks.
     The interpreter still owns installation, removal, order, and execution
     kind. The one strict Template Method is :meth:`WhileConstruct.test`:
     the algorithm and staging flag are base-owned, and a subclass overrides
@@ -163,6 +178,29 @@ class Construct(Generic[V]):
         :meth:`Interpreter.nearest_zero_operand_yield` for the selection contract).
         """
         return ZeroOperandYieldAction.CROSS
+
+    def transfer_target_action(self) -> TransferTargetAction:
+        """This Construct's answer to a ``break``/``continue`` target question.
+
+        The base classes are loops: ACCEPT. A language subclass answers CROSS
+        for a region that lowers to a scope rather than a ``ForStmt`` (see
+        :meth:`Interpreter.break_` for the selection contract).
+        """
+        return TransferTargetAction.ACCEPT
+
+    def on_unbound_transfer(self, rt: Interpreter[V], keyword: str) -> None:
+        """This CROSS Construct's answer to a transfer with no target above it.
+
+        Reached when the walk crossed a CROSS Construct and found no ACCEPT
+        target: the transfer has no loop to bind to, and *must* be rejected
+        here. The base answer is the interpreter's loud generic rejection; a
+        language subclass reports its own user-facing rule (its region shapes
+        have no loop).
+        """
+        del rt
+        raise InterpreterError(
+            f"'{keyword}' has no target loop: the nearest enclosing region lowers to a scope, not a loop"
+        )
 
     def on_zero_operand_yield(self, rt: Interpreter[V]) -> None:
         """The typed terminator callback for an ACCEPT-selected zero-operand yield
@@ -944,11 +982,14 @@ class Interpreter(Generic[V]):
         """Handle ``break``; return whether the native ``break`` should run.
 
         The nearest loop — host or staged — is the target; the trace
-        interpreter never skips it for a more convenient outer loop. A
-        staged target receives the exact callback and suppresses the native
-        keyword; a host target permits the native keyword only when no staged
-        Construct intervenes, because the alternate staged path was not
-        collected.
+        interpreter never skips it for a more convenient outer loop. The one
+        crossing is a Construct that declares itself no transfer target at all
+        (:meth:`Construct.transfer_target_action`): a region that lowers to a
+        scope has no loop for the keyword to bind to, so the walk looks
+        outward. A staged target receives the exact callback and suppresses
+        the native keyword; a host target permits the native keyword only when
+        no staged Construct intervenes, because the alternate staged path was
+        not collected.
         """
         self._reject_pending_result("break")
         return self._transfer("break")
@@ -960,13 +1001,29 @@ class Interpreter(Generic[V]):
 
     def _transfer(self, keyword: str) -> bool:
         target: Construct[V] | None = None
+        crossed: Construct[V] | None = None
         staged_seen = False
         for construct in reversed(self._construct_stack):
             if construct.kind in _LOOP_KINDS:
+                if construct.transfer_target_action() is TransferTargetAction.CROSS:
+                    # A region that lowers to a scope, not a loop: the keyword
+                    # binds to the nearest *enclosing* loop, or to nothing.
+                    crossed = crossed if crossed is not None else construct
+                    staged_seen = staged_seen or construct.is_staged()
+                    continue
                 target = construct
                 break
             staged_seen = staged_seen or construct.is_staged()
         if target is None:
+            if crossed is not None:
+                # No enclosing loop: the crossed Construct owns the rejection
+                # (its region shapes have no loop to bind to). A hook that
+                # returns is a contract violation — never a silent native
+                # keyword.
+                crossed.on_unbound_transfer(self, keyword)
+                raise InterpreterError(
+                    f"the crossed {crossed.kind} Construct did not reject a targetless '{keyword}'"
+                )
             return True  # no loop construct: the host keyword is harmless
         if target.is_staged():
             if not isinstance(target, LoopTransfer):
@@ -1189,6 +1246,7 @@ __all__ = [
     "InterpreterError",
     "ZeroOperandYieldAction",
     "ZeroOperandYieldSelection",
+    "TransferTargetAction",
     "WhileConstruct",
     "WithConstruct",
 ]

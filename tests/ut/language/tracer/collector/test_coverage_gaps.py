@@ -23,7 +23,15 @@ from collector.interface import (
     NullSema,
     WithOpen,
 )
-from collector.interpreter import ForConstruct, IfConstruct, Interpreter, WhileConstruct, WithConstruct
+from collector.interpreter import (
+    ForConstruct,
+    IfConstruct,
+    Interpreter,
+    InterpreterError,
+    TransferTargetAction,
+    WhileConstruct,
+    WithConstruct,
+)
 from collector.rewriter import instrument_function_source
 
 
@@ -337,6 +345,28 @@ class _RecLoopConstruct(ForConstruct):
         return Closed()
 
 
+class _RecScopeConstruct(_RecLoopConstruct):
+    """A staged region that lowers to a scope, not a loop: no transfer target."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.unbound = 0
+
+    def transfer_target_action(self) -> TransferTargetAction:
+        return TransferTargetAction.CROSS
+
+    def on_unbound_transfer(self, rt, keyword) -> None:
+        self.unbound += 1
+        raise RuntimeError(f"'{keyword}' outside loop")
+
+
+class _RecBareCrossConstruct(_RecLoopConstruct):
+    """A CROSS region without its own targetless rejection."""
+
+    def transfer_target_action(self) -> TransferTargetAction:
+        return TransferTargetAction.CROSS
+
+
 class _RecWhileConstruct(WhileConstruct):
     """A while construct making a lazy staging decision: activates on a Marker predicate."""
 
@@ -480,6 +510,48 @@ def test_staged_break_continue_walks_past_if_construct():
     assert loop.breaks == 1
     assert rt.continue_() is False
     assert loop.continues == 1
+    rt.close()
+
+
+def test_crossed_transfer_targets_the_enclosing_loop():
+    """A CROSS region (a scope, not a loop) is no transfer target: the walk
+    crosses it and the keyword binds to the nearest enclosing loop — the
+    ``break`` in a ``pl.spmd`` for-body nested in a staged loop."""
+    rt = Interpreter(_RecordingSema())
+    rt.enter_frame()
+    loop = _RecLoopConstruct()
+    rt._construct_stack.append(loop)
+    scope = _RecScopeConstruct()
+    rt._construct_stack.append(scope)
+    assert rt.break_() is False
+    assert loop.breaks == 1
+    assert scope.breaks == 0
+    assert rt.continue_() is False
+    assert loop.continues == 1
+    rt.close()
+
+
+def test_crossed_transfer_without_an_enclosing_loop_rejects():
+    """No target above the CROSS region: the region answers for the transfer
+    (the tracing lane's ``'break' outside loop``)."""
+    rt = Interpreter(_RecordingSema())
+    rt.enter_frame()
+    scope = _RecScopeConstruct()
+    rt._construct_stack.append(scope)
+    with pytest.raises(RuntimeError, match="'break' outside loop"):
+        rt.break_()
+    assert scope.unbound == 1
+    rt.close()
+
+
+def test_crossed_transfer_default_rejection_is_loud():
+    """A CROSS construct that does not answer for a targetless transfer gets
+    the interpreter's generic rejection, never a silent native keyword."""
+    rt = Interpreter(_RecordingSema())
+    rt.enter_frame()
+    rt._construct_stack.append(_RecBareCrossConstruct())
+    with pytest.raises(InterpreterError, match="'continue' has no target loop"):
+        rt.continue_()
     rt.close()
 
 
