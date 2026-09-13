@@ -85,23 +85,30 @@ class MemRef(_IrMemRef):
 
     Pass ``slots=N`` for N equally-sized slots of one allocation, then pick one by
     subscript. The slots are contiguous and identically sized, so rotating through
-    them is a ping-pong the packer cannot collapse::
+    them is a ping-pong the packer cannot collapse. Under the tracing frontend the
+    slot is stated at the operation, inside the ``pl.intrin.transmute`` tile type::
 
         l0c = pl.MemRef(slots=2)
 
-        ping: pl.Tile[[64, 64], pl.FP32, l0c[0], pl.Mem.Acc] = pl.tile.matmul(q, b0)
-        pong: pl.Tile[[64, 64], pl.FP32, l0c[1], pl.Mem.Acc] = pl.tile.matmul(q, b1)
+        ping = pl.intrin.transmute(pl.tile.matmul(q, b0), pl.Tile[[64, 64], pl.FP32, l0c[0], pl.Mem.Acc])
+        pong = pl.intrin.transmute(pl.tile.matmul(q, b1), pl.Tile[[64, 64], pl.FP32, l0c[1], pl.Mem.Acc])
 
     The subscript is an ordinary index expression, so it may be a **runtime**
     value — a rotation needs no unrolling::
 
         for i in pl.range(N):
-            t: pl.Tile[[64, 64], pl.FP32, l0c[i % 2], pl.Mem.Acc] = pl.tile.matmul(q, b)
+            t = pl.intrin.transmute(
+                pl.tile.matmul(q, b),
+                pl.Tile[[64, 64], pl.FP32, l0c[i % 2], pl.Mem.Acc],
+            )
 
     A constant index folds into a static address; a runtime one becomes the tile's
     address at run time. Nothing here is tied to a particular loop form — the
     index is just an expression, so `pl.range`, a `pl.pipeline` sub-index, or a
-    function parameter all work.
+    function parameter all work. The annotated form
+    (``t: pl.Tile[..., l0c[i % 2], pl.Mem.Acc] = ...``) is the printed round-trip
+    spelling — a local annotation is documentation under tracing and never reaches
+    the IR.
 
     Reference it by variable, so a misspelling is a ``NameError`` rather than a
     second allocation. Since the variable *is* the name, one declaration may not
@@ -122,26 +129,42 @@ class MemRef(_IrMemRef):
     asking the compiler to multi-buffer are alternatives, not layers: to
     hand-manage a level, drive it with ``pl.range`` and give it its own slots.
 
-    Note: ``pl.MemRef(...)`` calls inside a ``@pl.program`` body are resolved
-    by the parser (``parser/type_resolver.py``), not dispatched through this
-    ``__init__``. A ``Scalar`` byte offset is therefore only ever seen by
-    pyright; it never reaches the underlying ``ir.MemRef`` constructor.
+    Note: ``pl.MemRef(...)`` calls inside a ``@pl.program_parser`` body are
+    resolved by the parser (``parser/type_resolver.py``), not dispatched through
+    this ``__init__``; a ``Scalar`` byte offset there is only ever seen by
+    pyright. Under the tracing frontend the declaration is this plain Python
+    value, and the slot subscript in ``__getitem__`` accepts a staged index.
     """
 
-    def __getitem__(self, slot: "int | Scalar") -> "MemRef":  # type: ignore[override]
+    def __getitem__(self, slot: "int | Scalar | Expr") -> "_IrMemRef":  # type: ignore[override]
         """Select one slot of a multi-slot declared allocation.
 
         Widened over ``ir.MemRef.__getitem__`` for the same reason as
-        ``_ByteOffset``: inside a ``@pl.program`` body the subscript is resolved
-        from the AST by the parser and may be a runtime index expression, which
-        pyright sees as a ``Scalar``. It never reaches the runtime binding.
+        ``_ByteOffset``: the subscript may be a staged index expression. A
+        staged constant folds through the constant path (range-checked); a
+        staged runtime index — the rotation of every multi-buffer kernel —
+        reaches the underlying expression overload and is recorded as the
+        declaration's ``slot_index_``, which ``InitMemRef`` scales into the
+        byte offset::
+
+            buf = pl.MemRef(slots=2)
+            for i in pl.range(N):
+                t = pl.intrin.transmute(
+                    pl.load(a, [i * 64, 0], [64, 64], target_memory=pl.Mem.Vec),
+                    pl.Tile[[64, 64], pl.FP32, buf[i % 2], pl.Mem.Vec],
+                )
 
         Args:
-            slot: Slot index — a constant, or an index expression in a program body
+            slot: Slot index — a constant, or a staged index expression
 
         Returns:
             The same declaration bound to that slot
         """
+        if isinstance(slot, Scalar):
+            inner = slot.unwrap()
+            if isinstance(inner, ConstInt):
+                return super().__getitem__(inner.value)
+            slot = inner
         return super().__getitem__(slot)  # type: ignore[arg-type]
 
     @overload

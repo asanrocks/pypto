@@ -1087,12 +1087,13 @@ class MemRef(Var):
     (None when the declaration is unsubscripted). An expression rather than an int so the
     index may be a runtime value; `InitMemRef` scales it into ``byte_offset_``."""
 
+    @overload
     def __getitem__(self, slot: int) -> MemRef:
         """Select one slot of a multi-slot declared allocation by constant index.
 
-        Only constant indices go through here. A runtime index (``l0c[i % 2]``) appears
-        inside a Tile annotation, which the parser resolves from the AST without
-        evaluating the subscript.
+        Only constant indices go through here at the ``ir`` tier; the DSL
+        ``pl.MemRef`` widens the subscript to a staged index expression whose
+        constants fold to this path.
 
         Args:
             slot: Slot index, in ``[0, slot_count_)``
@@ -1103,6 +1104,27 @@ class MemRef(Var):
 
         Raises:
             ValueError: If this MemRef is not a declaration, or the index is out of range
+        """
+        ...
+
+    @overload
+    def __getitem__(self, slot: Expr) -> MemRef:
+        """Select one slot of a multi-slot declared allocation by an index expression.
+
+        The index may be a runtime value (``l0c[i % 2]``); a constant expression
+        is range-checked, a runtime one is recorded as-is and ``InitMemRef``
+        scales it into ``byte_offset_``.
+
+        Args:
+            slot: Slot index expression
+
+        Returns:
+            The same declaration bound to that slot — same base Ptr, so all slots
+            share one allocation
+
+        Raises:
+            ValueError: If this MemRef is not a declaration, holds a single slot,
+                or a constant index is out of range
         """
         ...
 

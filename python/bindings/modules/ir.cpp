@@ -38,6 +38,7 @@
 #include "pypto/ir/core.h"
 #include "pypto/ir/expr.h"
 #include "pypto/ir/function.h"
+#include "pypto/ir/kind_traits.h"
 #include "pypto/ir/memref.h"
 #include "pypto/ir/op_registry.h"
 #include "pypto/ir/phase.h"
@@ -1180,6 +1181,33 @@ void BindIR(nb::module_& m) {
                                             self.is_pinned_, self.slot_count_, std::move(index));
           },
           nb::arg("slot"), "Select one slot of a multi-slot declared allocation by constant index")
+      // `decl[expr]` selects one slot by an index expression, which may be a
+      // runtime value (`l0c[i % 2]`). The parser resolves the same subscript
+      // from the AST (`type_resolver._resolve_memref_slot_ref`); this overload
+      // is the tracing lane's spelling, reached through the DSL MemRef with a
+      // staged index. A constant expression folds through the constant path's
+      // range check; a runtime one cannot be checked statically, so it is
+      // recorded as-is and `InitMemRef` scales it into the byte offset.
+      .def(
+          "__getitem__",
+          [](const MemRef& self, const ExprPtr& slot) {
+            CHECK(self.is_pinned_) << "Only a declared allocation can be subscripted; a MemRef that "
+                                      "already describes an existing allocation has no slots";
+            CHECK(self.slot_count_ > 1)
+                << "A declaration with a single slot cannot be subscripted; declare it with "
+                   "pl.MemRef(slots=N) and select one";
+            if (auto const_slot = As<ConstInt>(slot)) {
+              CHECK(static_cast<uint64_t>(const_slot->value_) < self.slot_count_)
+                  << "Slot index " << const_slot->value_ << " is out of range for a declaration with "
+                  << self.slot_count_
+                  << " slot(s); declare it with pl.MemRef(slots=" << (self.slot_count_ + 1) << ") or higher";
+            }
+            return std::make_shared<MemRef>(self.base_, self.byte_offset_, self.size_, self.span_,
+                                            self.is_pinned_, self.slot_count_, slot);
+          },
+          nb::arg("slot"),
+          "Select one slot of a multi-slot declared allocation by an index expression, which may "
+          "be a runtime value")
       // String base constructor: MemRef("base_name", byte_offset, size) — for forward references
       // in printed IR where the base Ptr variable appears in annotations before its alloc statement
       .def(
