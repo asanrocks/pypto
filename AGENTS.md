@@ -95,7 +95,12 @@ by the declaration: a pl facade annotation (bare class included) is a runtime
 param, a plain Python annotation or none is a host knob baked at trace time;
 a contradicting call site is a loud TypeError in both directions, and
 `pl.runtime(value, dtype)` is the entry spelling for a runtime scalar (the
-dispatch cache keys on the dtype, never the value). The standalone
+dispatch cache keys on the dtype, never the value). Outputs are host-visible
+only through Out parameters: `MaterializeEntryReturns` promotes a dispatch
+entry's returned tensors to appended Out params (deleting the internal
+`tensor.create` that held them), so a return-style kernel's host call returns
+the tensors — full in-place calls get `None`, and a partial call with the
+declared signature returns only the outputs it omitted. The standalone
 `pl.function` lane stays parser-aligned: host literals lift to Const args.
 Call and submit share one instantiation semantics — `pl.submit` /
 `pl.spmd_submit` resolve their callee through `Marker.resolve_submit` (the
@@ -185,6 +190,31 @@ rebased:
 
 Every commit must pass the gate. Keep commits narrow enough that a failing
 marker family or typing rule has one identifiable owner.
+
+## Agent Orchestration (explicit opt-in)
+
+**Never launch sub-agents unless the user requests it explicitly for the
+task at hand.** Spawning `pi` worker agents is not an optimization to
+apply on own initiative — it spends the user's compute, lands commits
+under the user's name, and an unattended worker can touch far more than
+intended. When in doubt, do the work in-session and ask. When
+orchestration *is* requested, the full methodology — invocation recipe
+(`pi -p` command line, model choice, one-task-per-session, sequential
+runs with orchestrator verification, timeout-resume handling), and the
+tracker-file-as-communication-medium pattern — is recorded in
+`docs/hard-won-lessons.md` § Agent orchestration; follow it rather than
+improvising.
+
+## Hard-Won Lessons
+
+The tracing migration left an operating record of traps and method
+lessons that cost real sessions to learn: `docs/hard-won-lessons.md`. Read it before device debugging (the daily
+task-submit lock window; the `runtime` submodule drift masking bugs),
+before trusting a green check (a passing test does not prove the
+construct fired — pin constructs on the IR shape), and before running
+orchestrated agent runs (the resume-on-timeout and red-check-re-triage
+contracts). It is also the canonical place to record the next lesson
+worth keeping.
 
 ## Shared Plugins
 
