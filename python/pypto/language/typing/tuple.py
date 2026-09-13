@@ -121,12 +121,14 @@ class Tuple(metaclass=TupleMeta):
     # Var case (``ret = call`` then ``ret[i]``) projects directly — no emit.
     _emit_state: Any = None
     # The value-owned bind-hook slot, installed instance-level
-    # by the structural emit paths (``_emit.py`` projections, the
-    # single-LHS submit facade in ``constructs/submit.py``). Annotation-only — no
+    # by the structural emit paths (``_emit.py`` projections — the unpack
+    # projections and the ``pl.Tuple``/multi-return call facades).
+    # Annotation-only — no
     # default — so a bare Tuple does not satisfy ``__trace_bind__`` protocol
     # membership until a hook is actually installed. ``Callable[..., object]``:
     # the receiver is the explicit tracing context, a flow-tier type this tier
-    # cannot name.
+    # cannot name. A single-LHS ``res = pl.submit(...)`` installs none: that
+    # facade binds the Submit directly (F28).
     __trace_bind__: Callable[..., object]
 
     def __init__(self) -> None:  # noqa: D401 - metaclass builds instances

@@ -454,27 +454,35 @@ def trace_program(cls: type, *, strict_ssa: bool = False) -> ir.Program:
             kernel=kernel,
             strict_ssa=strict_ssa or marker.strict_ssa,
         )
-        if marker.return_types and not same_return_types(fn.return_types, marker.return_types):
+        # The declared signature is the ``->`` annotation only; a marker whose
+        # derived effective contract was pinned by an earlier trace of this
+        # class (``marker.return_types``) must not make the re-trace materialize
+        # that inference onto the Function.
+        if marker.declared_return_types and not same_return_types(
+            fn.return_types, marker.declared_return_types
+        ):
             # A builtin ``tuple[T1, T2]`` is a flat function signature, but
             # the tracing Sema intentionally sees no structural TupleType so
             # ``return a, b`` remains two ReturnStmt values. Pin the declared
             # flat signature onto the completed Function before callers or the
             # printer inspect it.
-            fn = rebuild_with_return_types(fn, marker.return_types)
-        if not marker.return_types:
-            # An annotationless callee — derive the return types from
-            # the actual trace (the ReturnStmt values, the same source the
-            # declared-return check compares against) so the Function's signature and
-            # later callers' ``deduce_call_return_type`` see the real type
-            # instead of UnknownType. Rebuild the Function (return_types is
-            # a read-only property) and pin the marker for callers traced
-            # after this one (class-body definition order). The derivation is
-            # the shared all-or-nothing guard (see
-            # ``derived_return_types``): a body-local extent Var (e.g. an
-            # Inline callee's ``n = pl.tensor.dim(...)`` result — the fold is
-            # Orchestration-only) has no name in scope at the signature, so
-            # the printed ``->`` would fail reparse (the AST keeps
-            # ``return_types=[]`` for exactly this case).
+            fn = rebuild_with_return_types(fn, marker.declared_return_types)
+        if not marker.declared_return_types:
+            # An annotationless callee — derive the *effective* call-site return
+            # contract from the actual trace (the ReturnStmt values, the same
+            # source the declared-return check compares against) so later
+            # callers' ``deduce_call_return_type`` see the real type instead of
+            # UnknownType, and pin the marker for callers traced after this one
+            # (class-body definition order). The Function's own signature stays
+            # the declaration the source spells (empty) — the parser's
+            # declared/effective split (``_parse_kernel_call`` +
+            # ``_effective_return_types``), so the printed ``->`` is never a
+            # materialized inference. The derivation is the shared
+            # all-or-nothing guard (see ``derived_return_types``): a body-local
+            # extent Var (e.g. an Inline callee's ``n = pl.tensor.dim(...)``
+            # result — the fold is Orchestration-only) has no name in scope at
+            # the signature, so a printed ``->`` would fail reparse (the AST
+            # keeps ``return_types=[]`` for exactly this case).
             derived = derived_return_types(fn)
             # Pin only a sound observation: a void callee is *known* void
             # (empty raw return set), and a successfully derived callee is
@@ -484,7 +492,6 @@ def trace_program(cls: type, *, strict_ssa: bool = False) -> ir.Program:
             # of guessing TASK_ID-only.
             marker.implicit_returns_pinned = bool(derived) or not return_value_types(fn)
             if derived:
-                fn = rebuild_with_return_types(fn, derived)
                 marker.return_types = list(derived)
         _check_declared_return(fn, marker)
         functions.append(fn)

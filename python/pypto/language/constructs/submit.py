@@ -12,10 +12,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from pypto.language.protocol import TraceContext
+from typing import Any
 
 from pypto.language.ambient import active_frame
 from pypto.language.diagnostics import ParserTypeError
@@ -47,15 +44,26 @@ def _submit_expr(value: Any, what: str) -> _ir.Expr:
     (the one automatic host-literal lift): facades unwrap,
     raw ``ir.Expr`` pass through, host ``int``/``bool`` literals lift to
     typed constants. Anything else is loud (the AST's parse discipline:
-    every submit operand is an IR expression)."""
+    every submit operand is an IR expression).
+
+    A host ``int`` lifts to an **INDEX** ``ConstInt`` — the language's
+    bare-integer rule (*"A bare integer literal is always INDEX-typed"*),
+    which is what the parser's ``parse_constant`` produces for the same source
+    and what the frontend's other operand boundaries (``typing/_host.py``)
+    already do. A host ``bool`` lifts to a **``ConstBool``** for the same
+    reason (``bool`` is a Python ``int`` subclass, so the check comes first);
+    typing it as a ``ConstInt`` would lie against a ``pl.BOOL`` parameter.
+    Every bare-``int``/``bool`` submit operand therefore agrees with the
+    parser: the SPMD ``core_num=`` launch spec, the dispatch ``device=``, a
+    kernel argument, and the ``deps=`` / ``dumps=`` / ``predicate=`` operands."""
     if is_facade(value):
         return value.unwrap()
     if isinstance(value, _ir.Expr):
         return value
     if isinstance(value, bool):
-        return _ir.ConstInt(int(value), DataType.INT32, _ir.Span.unknown())
+        return _ir.ConstBool(value, _ir.Span.unknown())
     if isinstance(value, int):
-        return _ir.ConstInt(value, DataType.INT32, _ir.Span.unknown())
+        return _ir.ConstInt(value, DataType.INDEX, _ir.Span.unknown())
     if isinstance(value, float):
         return _ir.ConstFloat(value, DataType.DEFAULT_CONST_FLOAT, _ir.Span.unknown())
     raise TypeError(f"{what}: expected a staged value (facade or ir.Expr), got {value!r}")
@@ -294,12 +302,66 @@ def _coerce_deps(deps: Sequence[SubmitOperand | None] | None, construct: str) ->
 
 def _coerce_dumps(dumps: Sequence[SubmitOperand | None] | None, construct: str) -> list[_ir.Expr] | None:
     """Coerce the ``dumps=`` list (tensor args) to ``ir.Expr``; ``None`` stays
-    ``None`` (no dump attr)."""
+    ``None`` (no dump attr).
+
+    Entries are deduplicated by Var identity, first occurrence kept — the
+    parser's ``_parse_submit_dumps_kwarg`` rule (and the same normalization its
+    positional-arg scan applies). ``dump_vars`` is a set-like carrier: the
+    printer emits it in arg order through a Var-identity set, so a repeated
+    entry has no printed form (``dumps=[x, x]`` prints ``dumps=[x]`` and
+    re-parses deduplicated) and the traced IR would fail the print→parse
+    round-trip invariant."""
     if dumps is None:
         return None
     if not isinstance(dumps, (list, tuple)):
         raise TypeError(f"{construct} dumps= must be a list of tensor args, got {dumps!r}")
-    return [_submit_expr(d, f"{construct} dumps entry") for d in dumps]
+    deduped: list[_ir.Expr] = []
+    for entry in (_submit_expr(d, f"{construct} dumps entry") for d in dumps):
+        if not any(entry is existing for existing in deduped):
+            deduped.append(entry)
+    return deduped
+
+
+def _merge_sticky_dump_args(
+    arg_exprs: Sequence[_ir.Expr],
+    dumps: list[_ir.Expr] | None,
+) -> list[_ir.Expr]:
+    """Build the Submit's ``dump_vars`` vector — the AST parser's per-call scan.
+
+    ``_parse_kernel_call`` builds ``dump_vars`` with one positional-arg scan
+    over ``(tagged ∪ explicit dumps=)``, Var identity deduped, for every call
+    kind, and the plain-call op boundary performs the same forward-sticky merge
+    (``Marker.__call__``). The scan is also what makes the vector *arg-ordered*:
+    the printer emits ``dumps=`` in arg order (``python_printer.cpp``), so any
+    other order — the source order of a reordered ``dumps=[y, x]`` — has no
+    printed form and fails the print→parse round trip (F43). A tagged tensor
+    that reaches ``pl.submit`` / ``pl.spmd_submit`` is a declarative dump
+    request: dropping the tag loses the user's mark (F30).
+
+    A ``dumps=`` entry that is not a positional arg is a tracing-only leniency
+    (the parser rejects it) — kept, appended after the scanned args. The
+    forward-sticky half needs a live trace (``active_frame()`` is ``None`` for
+    a direct call, which then has no tagged args, exactly like
+    ``Marker.__call__``)."""
+    explicit = list(dumps or [])
+    frame = active_frame()
+    tagged: list[_ir.Expr] = []
+    if frame is not None:
+        tagged = [e for e in arg_exprs if isinstance(e, _ir.Var) and frame.is_dump_tagged(e)]
+    if not tagged and not explicit:
+        return []
+    merged: list[_ir.Expr] = []
+    for arg in arg_exprs:
+        if not isinstance(arg, _ir.Var):
+            continue
+        if not any(arg is t for t in tagged) and not any(arg is d for d in explicit):
+            continue
+        if not any(arg is m for m in merged):
+            merged.append(arg)
+    for entry in explicit:
+        if not any(entry is m for m in merged):
+            merged.append(entry)
+    return merged
 
 
 def _opt_expr(value: Any, what: str) -> _ir.Expr | None:
@@ -332,6 +394,32 @@ def _validated_timing_slot(timing_slot: object, construct: str) -> int | None:
             f"{construct} timing_slot must be in 0..{_NUM_TASK_TIMING_SLOTS - 1}, got {timing_slot}"
         )
     return timing_slot
+
+
+def _validated_core_num(core_num: SubmitOperand | None, construct: str) -> _ir.Expr | None:
+    """Validate a submit ``core_num=`` launch width at the operand boundary.
+
+    ``core_num`` is the SPMD block count, and the language contract is a
+    *positive integer expression* — the parser's
+    ``_parse_and_validate_core_num`` rule, which the tracing lane's sibling
+    launch heads already enforce (``pl.spmd``'s ``_pin_spmd_core_num`` and
+    ``pl.intrin.spmd_direct``). This entry used to skip the check, so the
+    operand boundary's automatic host-literal lift turned ``0`` into a
+    zero-block launch whose Submit still claims a TaskId, and its ``bool`` arm
+    coerced ``True`` into an ``INT32`` ``1``.
+
+    The positivity rule reads the *coerced* expression, so a host ``0`` and a
+    staged ``pl.const(0, pl.INDEX)`` reject alike — the parser's constant check
+    sees the same ``ConstInt``. A non-integer *typed* operand is left to the IR
+    boundary (``Submit::ValidateLaunchSpec``), which already rejects it."""
+    if core_num is None:
+        return None
+    if isinstance(core_num, bool) or not (is_facade(core_num) or isinstance(core_num, (_ir.Expr, int))):
+        raise TypeError(f"{construct} core_num must be an integer expression, got {core_num!r}")
+    expr = _submit_expr(core_num, f"{construct} core_num")
+    if isinstance(expr, _ir.ConstInt) and expr.value <= 0:
+        raise ValueError(f"{construct} core_num must be a positive integer, got {expr.value}")
+    return expr
 
 
 class _SubmitOutputs:
@@ -411,18 +499,20 @@ def _lower_submit(  # noqa: PLR0913 - one kwarg per ir.Submit field
 
     Returns a staged ``Tuple`` facade over the Submit node: the 2-target
     unpack ``a, a_tid = pl.submit(...)`` iterates the element projections (each
-    carrying ``__trace_bind__`` + a shared ``_EmitState``); the single-LHS
-    ``res = pl.submit(...)`` binds the facade itself, whose ``__trace_bind__``
-    names the shared Submit once via ``ctx.let_temp`` (the AST parser's
-    ``_submit_tmp`` shape) and re-wraps over the temp so passes that walk for
-    ``ir.Submit`` find it. Dedup is value-owned (``state.temp``)."""
+    carrying ``__trace_bind__`` + a shared ``_EmitState``, so the shared node
+    is named once as a ``_tuple_tmp``); the single-LHS ``res = pl.submit(...)``
+    binds the facade itself through the ordinary bind path — one statement,
+    the Submit bound directly to the user's name, which is exactly the AST
+    parser's ``_parse_submit_single_lhs`` shape (its ``_submit_tmp`` exists
+    only on the *unpacking* path). Dedup is value-owned (``state.temp``)."""
     # A Submit references its callee without calling it; a callee whose
     # program-assembly registration is lazy (the jit envelope's global
     # wrapper) registers here — the op-layer hook, frontend-implemented.
     callee.on_submit_reference()
     attrs: dict[str, Any] | None = None
-    if dumps:
-        attrs = {"dump_vars": dumps}
+    dump_vars = _merge_sticky_dump_args(arg_exprs, dumps)
+    if dump_vars:
+        attrs = {"dump_vars": dump_vars}
     if no_dep:
         attrs = attrs or {}
         attrs["arg_direction_overrides"] = list(no_dep)
@@ -469,24 +559,16 @@ def _lower_submit(  # noqa: PLR0913 - one kwarg per ir.Submit field
         submit_node = _ir.Submit(callee.gvar, arg_exprs, deps, ret_type, span)
     state = _EmitState(submit_node)
 
-    def _emit_submit(ctx: TraceContext, name: str) -> Tuple:
-        """The single-LHS bind hook: name the shared Submit once as a temp
-        and return a fresh facade over the temp — the Sema's
-        ``_default_bind`` then stores the whole flat tuple to the target."""
-        del name
-        if state.temp is None:
-            state.temp = ctx.let_temp(state.node, "submit")
-        assert state.temp is not None  # set above; pyright closure narrowing
-        return Tuple._runtime(state.temp)
-
     if len(result_types) > 1:
         return _SubmitResult(submit_node, len(result_types), state)
 
     facade = Tuple._runtime(submit_node)
+    # The shared emit state the two-target unpack projections name the shared
+    # node through (``_structural_projection``). No bind hook: the single-LHS
+    # ``res = pl.submit(...)`` binds this facade directly, matching
+    # ``_parse_submit_single_lhs`` — a temp here left a Var-to-Var copy the
+    # parser never emits (F28).
     facade._emit_state = state
-    # The value-owned bind-hook slot declared on Tuple —
-    # the same pattern as _structural_projection's projections.
-    facade.__trace_bind__ = _emit_submit
     return facade
 
 
@@ -672,7 +754,7 @@ def spmd_submit(
         predicate=_opt_expr(predicate, "pl.spmd_submit predicate"),
         device=_opt_expr(device, "pl.spmd_submit device"),
         extra_attrs=attrs,
-        core_num=_opt_expr(core_num, "pl.spmd_submit core_num"),
+        core_num=_validated_core_num(core_num, "pl.spmd_submit"),
         timing_slot=_validated_timing_slot(timing_slot, "pl.spmd_submit"),
         sync_start=sync_start,
         spmd=True,

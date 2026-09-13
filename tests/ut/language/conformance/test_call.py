@@ -31,10 +31,13 @@ from typing import Any
 
 import pypto.language as pl
 import pytest
+from pypto.language.diagnostics import ParserError
 from pypto.language.op.marker import Marker
-from pypto.language.parser import function_parser
+from pypto.language.parser import function_parser, program_parser
 from pypto.language.tracer.decorators.function import function_mark, function_trace, trace, trace_program
 from pypto.pypto_core import DataType, ir
+
+from ._harness import program_conformance
 
 
 def _mark(f: "Callable[..., Any] | None" = None, **kw: Any) -> Any:
@@ -70,6 +73,106 @@ def helper_fn(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
 # ===========================================================================
 # The standalone-call anchor (raw-equal, straight-line)
 # ===========================================================================
+
+
+def _single_call_of(fn, name):
+    """The one detached ``Call`` to *name* inside *fn*."""
+    calls = []
+
+    class _V(ir.IRVisitor):
+        def visit_call(self, op):
+            if op.op.name == name:
+                calls.append(op)
+            super().visit_call(op)
+
+    _V().visit_function(fn)
+    assert len(calls) == 1
+    return calls[0]
+
+
+def test_annotationless_external_call_return_deduction_by_both_lanes():
+    """**F34** — an annotationless external callee that *has a body* deduces
+    its ``Call``'s result from that body on both lanes: the parser recovers it
+    through ``_effective_return_types`` (the callee's structured body), the
+    tracing ``Marker`` adapted from a traced ``ir.Function`` through the same
+    declared-else-derived split — never leaving the detached ``Call`` at
+    ``UnknownType`` (which the printer's LHS annotation upgrades on reparse)."""
+
+    def no_return_annotation(x: pl.Tensor[[16], pl.FP32]):
+        return pl.add(x, x)
+
+    def caller(x: pl.Tensor[[16], pl.FP32]) -> pl.Tensor[[16], pl.FP32]:
+        return no_return_annotation(x)
+
+    declared = no_return_annotation
+    no_return_annotation = function_trace(declared)
+    new = trace(caller)
+    no_return_annotation = function_parser(declared)
+    ast_ = function_parser(caller)
+
+    assert isinstance(_single_call_of(new, "no_return_annotation").type, ir.TensorType)
+    assert isinstance(_single_call_of(ast_, "no_return_annotation").type, ir.TensorType)
+    ir.assert_structural_equal(new, ast_, enable_auto_mapping=True)
+
+
+def test_signature_only_marker_call_return_stays_unknown():
+    """F34's signature-only half — an R2 accepted divergence, not a fix.
+
+    A bare ``Marker`` over an annotationless Python function is a
+    *declaration without a body*: the tracer records the declared signature
+    and never executes the callee, so there is no return contract to recover
+    and the detached ``Call`` keeps ``UnknownType`` (the Marker's documented
+    contract — deduction reads the declared signature, never the body). The
+    parser has no counterpart spelling to align with: its external-call path
+    always holds an ``ir.Function`` with a parsed body to derive from, so the
+    declaration-only callee is a tracing-only surface (``R2``: tracing's
+    supersets are not parity debt). The body-bearing tracing spelling is the
+    anchor above."""
+
+    def no_return_annotation(x: pl.Tensor[[16], pl.FP32]):
+        return pl.add(x, x)
+
+    callee = Marker(no_return_annotation)
+
+    def caller(x: pl.Tensor[[16], pl.FP32]) -> pl.Tensor[[16], pl.FP32]:
+        return callee(x)
+
+    new = trace(caller)
+    assert isinstance(_single_call_of(new, "no_return_annotation").type, ir.UnknownType)
+
+
+def test_external_call_attrs_acceptance_gap():
+    """A bare external call accepts ``attrs=`` through ``Marker`` but the
+    parser's external-call handler rejects all keyword arguments. This is an
+    acceptance-only gap until the call-attribute policy is decided."""
+
+    def external(x: pl.Tensor[[16], pl.FP32]) -> pl.Tensor[[16], pl.FP32]:
+        return pl.add(x, x)
+
+    callee = Marker(external)
+
+    def caller(x: pl.Tensor[[16], pl.FP32]) -> pl.Tensor[[16], pl.FP32]:
+        return callee(x, attrs={"tag": 1})
+
+    new = trace(caller)
+    assert "tag" in _find_first_call_attrs(new, "external")
+    callee = function_parser(external)
+    with pytest.raises(ParserError, match="keyword argument"):
+        function_parser(caller)
+
+
+def _find_first_call_attrs(fn, name: str) -> dict:
+    found = []
+
+    class _V(ir.IRVisitor):
+        def visit_call(self, op):
+            if op.op.name == name:
+                found.append(op)
+            super().visit_call(op)
+
+    _V().visit_function(fn)
+    assert len(found) == 1
+    return dict(found[0].attrs or {})
 
 
 def test_standalone_call_anchor_raw_equal():
@@ -468,3 +571,124 @@ def test_marker_unknown_kwarg_rejected():
 
     with pytest.raises(TypeError, match="bogus"):
         trace_program(Prog)
+
+
+# ===========================================================================
+# R13 conformance anchors — kernel, external, dispatch, and inline calls
+# ===========================================================================
+#
+# The straight-line call anchors compare raw IR: both lanes emit the same
+# detached Call and no dataflow pass is involved. The loop anchor additionally
+# compares post-canonical IR because the call result is loop-carried. Inline
+# uses the call-site pass regime: tracing emits a Call to an Inline function,
+# the inline pass splices it, and the parser expands the same body at parse
+# time before canonicalization.
+
+
+class KernelDispatchProgram:
+    @pl.function
+    def stage(self, x: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
+        return pl.add(x, x)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
+        return self.stage(x)
+
+
+class KernelDispatchLoop:
+    @pl.function
+    def stage(self, x: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
+        return pl.add(x, x)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
+        acc = x
+        for _ in pl.range(2):
+            acc = self.stage(acc)
+        return acc
+
+
+class DeviceDispatchProgram:
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def child(self, x: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
+        return x
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
+        return self.child(x, device=0)
+
+
+class CallMetadataProgram:
+    @pl.function
+    def stage(
+        self, x: pl.Tensor[[16], pl.INT32], out: pl.Out[pl.Tensor[[16], pl.INT32]]
+    ) -> pl.Tensor[[16], pl.INT32]:
+        return pl.store(pl.load(x, [0], [16]), [0], out)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[16], pl.INT32], out: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
+        return self.stage(x, out, attrs={"arg_directions": [pl.adir.input, pl.adir.output_existing]})
+
+
+class AnnotationlessKernelProgram:
+    @pl.function
+    def stage(self, x: pl.Tensor[[16], pl.INT32]):
+        return pl.add(x, x)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
+        return self.stage(x)
+
+
+def test_annotationless_kernel_dispatch_return_metadata_by_both_lanes() -> None:
+    """**F34** also reaches the program envelope: an annotationless program
+    callee's Function keeps the *declared* signature the source spells (an
+    empty return vector on both lanes) while the call site recovers the
+    concrete result type from the traced body — the parser's declared/
+    effective split, not a materialized ``->`` on the traced side."""
+    new = trace_program(AnnotationlessKernelProgram)
+    ast_ = program_parser(AnnotationlessKernelProgram)
+    assert len(new["stage"].return_types) == 0
+    assert len(ast_["stage"].return_types) == 0
+    program_conformance(AnnotationlessKernelProgram, trace_program)
+
+
+def test_annotationless_captured_callee_call_is_typed() -> None:
+    """F34's captured-callee consequence: the body-bearing external callee's
+    call must carry the recovered result type, so the caller's declared ``->``
+    is honored and the printed LHS annotation (the printer's recovered type)
+    reparses to the same IR instead of ``UnknownType``."""
+
+    def ext(x: pl.Tensor[[16], pl.FP32]):
+        return pl.add(x, x)
+
+    def build(callee):
+        @pl.program
+        class CapturedCalleeProgram:
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def main(self, x: pl.Tensor[[16], pl.FP32]) -> pl.Tensor[[16], pl.FP32]:
+                y = callee(x)
+                return y
+
+        return CapturedCalleeProgram
+
+    traced = build(function_trace(ext))
+    assert isinstance(_single_call_of(traced["main"], "ext").type, ir.TensorType)
+    ir.assert_structural_equal(traced, pl.parse(str(traced)), enable_auto_mapping=True)
+
+
+def test_kernel_dispatch_program_anchor_raw_equal() -> None:
+    program_conformance(KernelDispatchProgram, trace_program)
+
+
+def test_kernel_dispatch_in_staged_loop_anchor() -> None:
+    program_conformance(KernelDispatchLoop, trace_program)
+    program_conformance(KernelDispatchLoop, trace_program, canonical=True)
+
+
+def test_orchestrator_device_dispatch_anchor_raw_equal() -> None:
+    program_conformance(DeviceDispatchProgram, trace_program)
+
+
+def test_kernel_call_attrs_anchor_raw_equal() -> None:
+    program_conformance(CallMetadataProgram, trace_program)

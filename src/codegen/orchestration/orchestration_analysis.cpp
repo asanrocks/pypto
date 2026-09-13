@@ -197,6 +197,19 @@ void OrchestrationInfoCollector::VisitStmt_(const AssignStmtPtr& assign) {
         call_tuple_elements[it->second].push_back({tuple_get->index_, assign->var_.get()});
       }
     }
+  } else if (auto rhs_var = AsVarLike(assign->value_)) {
+    // A tuple-typed Var bound to another tuple-typed Var (``res = tmp``, F42)
+    // names the same tuple value, so it must resolve to the RHS's key: the key
+    // is how every later consumer finds the tuple (codegen's
+    // ``tuple_var_to_key_`` lookup and this collector's own element
+    // registration above). Unpropagated, a ``res[0]`` projection is silently
+    // dropped and codegen's catch-all declares an unnamed tuple Var.
+    if (As<TupleType>(assign->var_->GetType())) {
+      auto it = tuple_var_to_key.find(rhs_var.get());
+      if (it != tuple_var_to_key.end()) {
+        tuple_var_to_key[assign->var_.get()] = it->second;
+      }
+    }
   }
   IRVisitor::VisitStmt_(assign);
 }

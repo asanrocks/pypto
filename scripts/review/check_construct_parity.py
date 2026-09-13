@@ -45,6 +45,7 @@ TRACER_FILES = (
     "python/pypto/language/constructs/optimizations.py",
     "python/pypto/language/constructs/func_attrs.py",
     "python/pypto/language/intrin.py",
+    "python/pypto/language/op/marker.py",
 )
 CONFORMANCE_DIR = Path("tests/ut/language/conformance")
 
@@ -73,8 +74,8 @@ CONSTRUCTS = (
     Construct("if / else / elif", r"_parse_body_siblings|visit_If", r"PtoIfConstruct", "test_if.py"),
     Construct(
         "for + iterators",
-        r"_parse_for_loop_target|_parse_range_call",
-        r"PtoForConstruct|^range$|^parallel$|^unroll$|^pipeline$",
+        r"_parse_for_loop_target|_parse_range_call|_parse_range_keyword",
+        r"PtoForConstruct|^range$|^parallel$|^unroll$|^pipeline$|^RangeIterator$",
         "test_for.py",
     ),
     Construct("while", r"_parse_while_", r"PtoWhileConstruct", "test_while_logical.py"),
@@ -99,7 +100,7 @@ CONSTRUCTS = (
     Construct(
         "generic scopes",
         r"_parse_scope|_parse_manual_scope|_parse_legacy_scope|_parse_graph_scope",
-        r"^scope$|^manual_scope$|^graph$|^cluster$",
+        r"^scope$|^manual_scope$|^graph$|^cluster$|^ScopeMode$",
         "test_generic_scopes.py",
     ),
     Construct(
@@ -116,24 +117,29 @@ CONSTRUCTS = (
         "test_at_const.py",
     ),
     Construct("submit / spmd_submit", r"_parse_submit", r"^submit$|^spmd_submit$", "test_submit_collect.py"),
-    Construct("with-form scopes", r"_parse_scope_body", r"PtoWithConstruct", None),
-    Construct("intrin surface", r"_parse_split_transfer_op", r"^intrin$|^carry$|^leak$|^transmute$", None),
+    Construct("with-form scopes", r"_parse_scope_body", r"PtoWithConstruct", "test_spmd_with_form.py"),
+    Construct(
+        "intrin surface",
+        r"_parse_split_transfer_op",
+        r"^carry$|^leak$|^yield_$|^free_var$|^transmute$|^spmd_direct$|^spmd_direct_call$",
+        "test_intrin.py",
+    ),
     Construct(
         "statement handlers",
         r"_handle_static_print|_handle_static_assert|_handle_dump_tag|_handle_set_cache_policy",
-        r"^static_print$|^static_assert$",
+        r"^static_print$|^static_assert$|^func_attr$",
         "test_statement_handlers.py",
     ),
     Construct(
         "func attrs / optimizations",
         r"_parse_func_attr_value|_parse_optimizations_list|_parse_spmd_optimizations_list",
-        r"^_fold_optimization_entries$",
+        r"^_fold_optimization_entries$|^CrossCoreSlot$|^Optimization$|^Split$|^cross_core_slot$|^split$",
         "test_statement_handlers.py",
     ),
     Construct(
         "calls (kernel / extern / dispatch)",
         r"_parse_kernel_call|_parse_external_function_call|_parse_inline_call|_parse_dispatch_device_kwarg",
-        r"_JitExtern|_MixedExternJit",
+        r"^Marker$|_JitExtern|_MixedExternJit",
         "test_call.py",
     ),
 )
@@ -193,7 +199,7 @@ def main() -> int:
         r"_parse_(?:(?:tensor|tile|array|pld|system|prefetch|unified|builtin)_op"
         r"|op_(?:attrs|kwargs|positional_arg)|.*subscript|attr(?:s_dict|_pair|_value)"
         r"|typed_constant|sequence_literal|dtype_get_byte|printed_alloc_call"
-        r"|task_dummy|generic_attrs_dict|alloc_window_buffer_assignment)"
+        r"|task_dummy|generic_attrs_dict|alloc_window_buffer_assignment|pld_category_op)"
         r"|^visit_Name$"
     )
     structural = [s for s in unclaimed_parser if not op_surface.search(s)]

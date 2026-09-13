@@ -220,16 +220,26 @@ class Marker:
         self.param_names = [param.name_hint for param in function.params]
         self.params = list(function.params)
         self.param_directions = list(function.param_directions)
-        self.return_types = list(function.return_types)
-        self.declared_return_types = list(function.return_types)
+        # The declared/effective split the parser's ``_parse_kernel_call``
+        # uses: ``declared_return_types`` is the ``->`` the Function carries
+        # (the submit-tuple contract reads it), while the *call-site*
+        # deduction contract falls back to the body-derived types for an
+        # annotationless callee — so a call to a body-bearing external
+        # function recovers its concrete result type instead of leaving the
+        # detached Call at ``UnknownType`` (which the printer's LHS annotation
+        # would upgrade on reparse, breaking print -> parse). The Function's
+        # own signature stays the declaration: nothing is materialized onto it.
+        declared_return_types = list(function.return_types)
+        from pypto.ir.utils import derived_return_types, return_value_types  # noqa: PLC0415
+
+        self.declared_return_types = declared_return_types
+        self.return_types = declared_return_types or derived_return_types(function)
         # The adaptation pins the return set only when it is a sound fact:
         # declared/derived return types, or a genuinely void body. A body
         # whose return paths disagree or whose types the signature cannot
         # spell stays unpinned — a submit referencing it stays loud instead
         # of guessing TASK_ID-only (see ``_check_submit_callee``).
-        from pypto.ir.utils import return_value_types  # noqa: PLC0415
-
-        self.implicit_returns_pinned = bool(function.return_types) or not return_value_types(function)
+        self.implicit_returns_pinned = bool(self.return_types) or not return_value_types(function)
 
     def on_submit_reference(self) -> None:
         """A Submit references its callee without calling it. The base

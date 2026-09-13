@@ -637,10 +637,12 @@ __all__ = [
     "_normalize_shape",
     "_to_int32_scalar",
     "_to_make_tuple",
+    "derived_return_types",
     "has_partial_valid_region",
     "resolve_cast_mode",
     "resolve_saturation_deviation",
     "resolve_saturation_mode",
+    "signature_expressible",
     "use_parser_span",
     "set_pinned_span",
     "reset_pinned_span",
@@ -693,3 +695,56 @@ def return_value_types(fn: "_ir.Function") -> list["_ir.Type"]:
     ):
         return first
     return [_ir.UnknownType()]
+
+
+def _param_extent_symbols(fn: "_ir.Function") -> set[int]:
+    """The ids of the shape-extent Vars declared by ``fn``'s own params —
+    the only extents the printed signature can name."""
+    ids: set[int] = set()
+    for param in fn.params:
+        param_type = param.type
+        if isinstance(param_type, _ir.ShapedType):
+            for extent in param_type.shape:
+                if isinstance(extent, _ir.Var):
+                    ids.add(id(extent))
+    return ids
+
+
+def signature_expressible(t: "_ir.Type", fn: "_ir.Function") -> bool:
+    """Can ``t`` be spelled in ``fn``'s printed signature (the ``->``
+    annotation)? Every extent Var must be one of the function's own
+    param-declared symbols (module-scoped ``pl.dynamic`` Vars) or a
+    constant; a body-local Var has no name in scope at the signature."""
+    if not isinstance(t, _ir.ShapedType):
+        return True
+    symbols = _param_extent_symbols(fn)
+    return all(not isinstance(e, _ir.Var) or id(e) in symbols for e in t.shape)
+
+
+def derived_return_types(fn: "_ir.Function") -> list["_ir.Type"]:
+    """The sound annotationless-return derivation: the return types
+    recovered from ``fn``'s traced body, when the printed signature can
+    spell every one of them. ``[]`` otherwise — the derivation is
+    all-or-nothing, never partial.
+
+    Two guards keep the pin from lying (the migration contract: no
+    annotation that misreports the values operations produce):
+
+    * Paths disagree (``return_value_types`` yields an UnknownType) → no
+      pin. A signature carrying UnknownType would type every caller query
+      as Unknown — and a Submit's ``Tuple[<ret>, TASK_ID]`` built from it
+      is exactly the silently-wrong state. The parser's own derivation
+      (``_derive_return_types_from_body``) keeps ``[]`` for the same
+      reason.
+    * Any recovered type is inexpressible (a body-local extent Var) → no
+      pin for the *whole* function. Pinning the expressible subset of a
+      multi-return would change the signature's arity — a stronger lie
+      than keeping ``[]`` (the AST keeps ``return_types=[]`` for exactly
+      this case).
+    """
+    actual = return_value_types(fn)
+    if not actual or any(isinstance(t, _ir.UnknownType) for t in actual):
+        return []
+    if not all(signature_expressible(t, fn) for t in actual):
+        return []
+    return actual

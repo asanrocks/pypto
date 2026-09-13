@@ -1546,6 +1546,12 @@ class OrchestrationStmtCodegen : public CodegenBase {
       // No-op: tuple elements handled via tuple_var_to_elements_
     } else if (auto make_tuple = As<MakeTuple>(assign->value_)) {
       PropagateMakeTupleAssign(assign, make_tuple);
+    } else if (As<TupleType>(assign->var_->GetType())) {
+      // Tuple-typed LHS: an SSA rename of one tuple Var onto another
+      // (`res = tmp`). A tuple has no C++ emit name — codegen resolves tuple
+      // access through the tuple key — so the copy is a pure alias and emits
+      // nothing (`HandleTupleRebindAssign`).
+      HandleTupleRebindAssign(assign);
     } else if (As<ArrayType>(assign->var_->GetType())) {
       // ArrayType LHS: an SSA rename of one backing C-stack array — the
       // derive-the-carry rebind `tids = tids_next` (a fresh array per
@@ -4307,6 +4313,34 @@ class OrchestrationStmtCodegen : public CodegenBase {
       if (tid_it != manual_task_id_map_.end()) {
         manual_task_id_map_[assign->var_.get()] = tid_it->second;
       }
+    }
+  }
+
+  /// Alias a tuple-typed Var→Var AssignStmt LHS onto the RHS's tuple key.
+  ///
+  /// A tuple Var has no C++ emit name: every consumer of a tuple value (a
+  /// ``pl.submit`` result today) resolves it through ``tuple_var_to_key_``,
+  /// which is what points the element projections at the Submit's
+  /// ``TaskOutputTensors`` declaration. A copy ``res = tmp`` therefore
+  /// declares nothing and only re-points the LHS at the RHS's tuple. Without
+  /// this the statement falls to the catch-all Var-RHS path and is emitted as
+  /// ``auto res = tmp;`` against a name no declaration in the generated `.cpp`
+  /// defines (F42). The key itself is propagated by
+  /// ``OrchestrationInfoCollector`` so element projections are collected under
+  /// the same tuple; mirroring it here keeps this instance's own map in step
+  /// when the analysis was seeded from a different body.
+  void HandleTupleRebindAssign(const AssignStmtPtr& assign) {
+    auto rhs_var = AsVarLike(assign->value_);
+    INTERNAL_CHECK_SPAN(rhs_var, assign->span_)
+        << "Internal error: tuple-typed assign '" << assign->var_->name_hint_
+        << "' expects a Var value naming the same tuple, got " << assign->value_->TypeName();
+    auto key_it = tuple_var_to_key_.find(rhs_var.get());
+    if (key_it != tuple_var_to_key_.end()) {
+      tuple_var_to_key_[assign->var_.get()] = key_it->second;
+    }
+    auto tid_it = manual_task_id_map_.find(rhs_var.get());
+    if (tid_it != manual_task_id_map_.end()) {
+      manual_task_id_map_[assign->var_.get()] = tid_it->second;
     }
   }
 

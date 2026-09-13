@@ -1551,6 +1551,155 @@ class TestManualScopeCodegen:
         assert dump_lines, code
         assert any("ext_x" in ln for ln in dump_lines), code
 
+    def test_duplicate_dumps_entries_lower_to_one_dump_arg(self):
+        """**F29 (fixed)** — a duplicated ``dumps=[x, x]`` entry is redundant,
+        not wrong codegen: it lowers to byte-identical orchestration code.
+
+        ``CollectDumpVarSet`` collects a ``std::set`` of arg Var pointers and
+        marks ``Arg::dump`` once per callee param, so the duplicate never reached
+        the emitted ``.dump(...)`` — the codegen was never the defect. What the
+        duplicate *did* break is the print→parse round trip: before the F29 fix
+        this test could not run at all, because the Default pipeline's
+        ``RoundtripInstrument`` rejected the traced IR after the first pass
+        (``Structural equality assertion failed at: body[0].value.attrs / Reason:
+        Kwargs value mismatch for key 'dump_vars'`` — the printer emits ``dumps=``
+        in arg order through a Var-identity set). That is why R5's trivial-drift
+        carve-out did not apply and the tracing lane's ``_coerce_dumps`` now
+        dedups by Var identity like ``_parse_submit_dumps_kwarg``. The accepted
+        spelling stays accepted; the codegen is unchanged by the fix.
+        """
+        backend.reset_for_testing()
+        backend.set_backend_type(BackendType.Ascend910B)
+
+        @pl.program
+        class DupDumpsProg:
+            @pl.function(type=pl.FunctionType.InCore)
+            def k(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+                return x
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+                out, _ = pl.submit(self.k, x, dumps=[x, x])
+                return out
+
+        @pl.program
+        class SingleDumpProg:
+            @pl.function(type=pl.FunctionType.InCore)
+            def k(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+                return x
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+                out, _ = pl.submit(self.k, x, dumps=[x])
+                return out
+
+        pm = PassManager.get_strategy(OptimizationStrategy.Default)
+        dup_code = _generate_orch_code(pm.run_passes(DupDumpsProg))
+        single_code = _generate_orch_code(pm.run_passes(SingleDumpProg))
+
+        dup_dump_lines = [ln for ln in dup_code.split("\n") if ".dump(" in ln]
+        assert len(dup_dump_lines) == 1, dup_code
+        assert dup_dump_lines[0].count("ext_x") == 1, dup_code
+        assert dup_code == single_code, (dup_code, single_code)
+
+    def test_single_lhs_submit_binds_the_submit_not_a_var_copy(self):
+        """The single-LHS ``res = pl.submit(self.k, x)`` reaches codegen as one
+        assignment — the Submit bound directly to ``res`` (F28).
+
+        The tracing lane used to name the Submit ``_submit_N`` via
+        ``ctx.let_temp`` and then copy it to ``res``. The copy is not inert:
+        codegen has no emit name for a tuple-typed Var, so the alias lowered to
+        ``auto res = _submit_1;`` — an undeclared identifier in the
+        orchestration ``.cpp`` (the Submit's outputs live in ``task_0_outs``,
+        and the tuple-element projection is the only supported read). The
+        parser's ``_parse_submit_single_lhs`` binds the Submit directly; the
+        tracing lane now matches it, so the single-LHS spelling is one task
+        launch and no alias declaration.
+        """
+        backend.reset_for_testing()
+        backend.set_backend_type(BackendType.Ascend910B)
+
+        @pl.program
+        class Prog:
+            @pl.function(type=pl.FunctionType.InCore)
+            def k(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+                return x
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def main(
+                self, x: pl.Tensor[[64], pl.FP32], y: pl.Tensor[[64], pl.FP32]
+            ) -> pl.Tensor[[64], pl.FP32]:
+                with pl.manual_scope():
+                    res = pl.submit(self.k, x)  # noqa: F841 - the single-LHS bind is the shape under test
+                return y
+
+        pm = PassManager.get_strategy(OptimizationStrategy.Default)
+        transformed = pm.run_passes(Prog)
+        code = _generate_orch_code(transformed)
+
+        body = code.split("SIMPLER_SCOPE(ScopeMode::MANUAL) {", 1)[1]
+        assert "rt_submit_aiv_task" in body, code
+        assert "auto res" not in body, code
+
+    def test_tuple_var_copy_aliases_the_submit_outputs(self):
+        """A Var-to-Var copy of a Submit's tuple-typed result is a pure alias
+        (**F42**).
+
+        ``tmp = pl.submit(self.k, x); res = tmp`` is accepted by *both* lanes
+        (a plain ``AssignStmt`` of one tuple-typed Var to another — the parser
+        binds it through ``_assign_or_let``, tracing through the ordinary
+        ``_default_bind``) and both lanes produce the identical IR, so the
+        defect was codegen's: a tuple Var has no C++ emit name (a Submit's
+        outputs are declared ``TaskOutputTensors task_0_outs = ...``), and the
+        copy fell to the catch-all Var-RHS path, emitted verbatim as
+        ``auto res = tmp;`` — an undeclared identifier in the generated `.cpp`.
+        The copy now carries the tuple identity across, so it declares nothing
+        and the ``res[0]`` projection still resolves to the Submit's
+        runtime-allocated output (previously the unmapped alias dropped that
+        read entirely).
+        """
+        backend.reset_for_testing()
+        backend.set_backend_type(BackendType.Ascend910B)
+
+        @pl.program
+        class Prog:
+            @pl.function(type=pl.FunctionType.InCore)
+            def producer(
+                self,
+                x: pl.Tensor[[64], pl.FP32],
+                ret0__out: pl.Out[pl.Tensor[[64], pl.FP32]],
+            ) -> pl.Tensor[[64], pl.FP32]:
+                xt = pl.load(x, [0], [64], [64], target_memory=pl.Mem.Vec)
+                yt = pl.tile.add(xt, xt)
+                return pl.store(yt, [0], ret0__out)
+
+            @pl.function(type=pl.FunctionType.InCore)
+            def consumer(self, a: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+                return a
+
+            @pl.function(type=pl.FunctionType.Orchestration)
+            def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
+                with pl.manual_scope():
+                    # ``ret0__out`` deliberately not supplied: the Submit
+                    # synthesises it, so the result aliases through get_ref.
+                    tmp = pl.submit(self.producer, x)
+                    res = tmp
+                    out = res[0]
+                    a, _ = pl.submit(self.consumer, out)
+                return a
+
+        pm = PassManager.get_strategy(OptimizationStrategy.Default)
+        transformed = pm.run_passes(Prog)
+        code = _generate_orch_code(transformed)
+
+        body = code.split("SIMPLER_SCOPE(ScopeMode::MANUAL) {", 1)[1]
+        assert "TaskOutputTensors task_0_outs" in body, code
+        # The copy is not a declaration: a tuple Var has no emit name.
+        assert "auto res = tmp;" not in body, code
+        # …and the element read through the alias resolves to the Submit output.
+        assert "const Tensor& out = task_0_outs.get_ref(0);" in body, code
+        assert "params_t1.add_input(out);" in body, code
+
     def test_submit_runtime_allocated_out_synths_add_output_and_get_ref_alias(self):
         """A ``pl.submit`` that omits a trailing ``pl.Out`` param exercises all
         three ``Submit::args_`` coverage regions in one program.
