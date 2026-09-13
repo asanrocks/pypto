@@ -161,7 +161,7 @@ def _compute_window_buffer_bytes(shape: list[int | Expr], dtype: DataType) -> in
 
     # Dynamic path: at least one genuinely dynamic dim.
     span = _ir.Span.unknown()
-    # Initialize from the first dim instead of ConstInt(1) to avoid a redundant
+    # Seed from the first dim instead of ConstInt(1) to avoid a redundant
     # Mul(1, dim0) identity in the emitted IR.
     first = shape[0]
     if isinstance(first, int):

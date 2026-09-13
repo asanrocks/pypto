@@ -476,7 +476,7 @@ class _AtKwargState:
     # ``dumps=[t1, t2]`` AST kept verbatim; resolved into outer-scope Var
     # refs by the caller and written to ScopeStmt.attrs[dump_vars]. The
     # scope-level selective-dump surface, symmetric with ``deps=``: the printer
-    # emits it for any scope carrying ``kAttrDumpVars`` (populated by ``pl.dump_tag``
+    # emits it for any scope carrying ``kAttrDumpVars`` (seeded by ``pl.dump_tag``
     # at parse, by an explicit ``dumps=`` list, and by the inline-call
     # ``dump_vars`` transfer), and the outliner translates it into the
     # synthesised dispatch's ``kAttrDumpVars``.
@@ -5767,7 +5767,7 @@ class ASTParser:
         """
         # ``dumps=`` is the explicit scope-level dump surface (symmetric with
         # ``deps=``) and also the print/reparse round-trip surface. The
-        # forward-sticky ``pl.dump_tag`` entry is merged in later by
+        # forward-sticky ``pl.dump_tag`` seed is merged in later by
         # :meth:`_parse_scope_body` (the single injection point shared by the
         # ``pl.at`` and ``pl.cluster`` paths), so it is
         # not consulted here.
@@ -9382,7 +9382,7 @@ class ASTParser:
         if negate:
             value = -value
 
-        # Resolve dtype from second argument.
+        # Resolve dtype from second argument
         dtype = self.type_resolver.resolve_dtype(call.args[1])
 
         if isinstance(value, bool):

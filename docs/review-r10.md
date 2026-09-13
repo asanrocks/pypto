@@ -119,6 +119,17 @@ merely moves the fixture onto the tracing lane but silently drops the
 construct under test is worse than leaving it. Pin what the test asserts
 before and after.
 
+**Outcome (round 1).** `167 lines in 38 files` → **`0 / 0` (oracle PASS)**.
+32 of the 167 lines were restored as `unnecessary` (10 files); 133 lines in 28
+files are `necessary`, every one carrying a row in §7. Two lines left the
+report because the oracle had miscounted them: `#include` in
+`python/bindings/modules/ir.cpp` and `src/ir/op/tile_ops/cross_core.cpp` is a
+preprocessor directive, not a comment (oracle scope fix in §7). One hunk is
+`needs-decision` (escalated, not edited). The load-bearing finding is the
+`necessary` rule itself: the changeset ships its own comment/vocabulary
+authority (`docs/guide-comments.md`), which is why most of the 167 lines are
+justified prose work rather than incidental churn — see §7.
+
 ### R2 — unnecessary changes to upstream comments
 
 **Axis.** Comment-only edits to code files that the dialect migration did not
@@ -241,14 +252,81 @@ the whole index-reading body). Owning files:
 Red check: trace the fixture body without the explicit carrier and run
 `tests/ut/codegen/test_orchestration_returned_param_map.py`.
 
+- **F2 — the changeset introduces 52 files whose license header violates the
+repo's own `check_headers` lint.** `python3 tests/lint/check_headers.py .`
+fails 52 files at HEAD and **0 at `origin/main`** (measured by running the
+checker against each `origin/main` blob), so every failure is new here — the
+`docs/hard-won-lessons.md` claim that `check_headers` failures are "pre-existing
+license-wording drift" is stale and was not reproducible. Three variants:
+`You may not use` → `You should not use` (20 files), `MERCHANTABILITY, OR` →
+`MERCHANTABILITY OR` (32 files), `This program is free software,` → `;` / `:`
+(5 / 6 files, several files carrying two variants), all 0 at `origin/main`; plus
+pre-header lines (`#!/usr/bin/env python3` in
+`scripts/fix_cusparselt_metadata.py`, `scripts/migrate_intrin.py`;
+`# ruff: noqa: E501` in `python/pypto/language/protocol.py`,
+`python/pypto/language/tracer/semantics.py`) and one file with no header at all
+(`python/pypto/language/op/_validation.py`). R2 fixed the three files where the
+drift appeared as comment-only churn (`python/pypto/ir/formatter.py`,
+`python/pypto/language/parser/diagnostics/__init__.py`,
+`python/pypto/language/typing/tuple.py`; check_headers 55 → 52 failing); the
+remaining 52 are new files and out of R2's axis. Fix: restore the canonical
+header from `tests/lint/check_headers.py` (the exact text is in that file).
+Red check: `python3 tests/lint/check_headers.py .` (exit 1, 52 files).
+Owner: whichever commit created each file — all 52 are in the changeset.
+
+- **F3 — 14 files of the changeset are not `ruff format` clean, so the
+pre-commit `ruff-format` hook fails.** `uv run ruff format --check .` reports
+`14 files would be reformatted` at HEAD (0 outside the changeset); scoped to
+the changeset's `.py` files the count was 15 before R2 removed the extra blank
+line in `python/pypto/language/typing/scalar.py`. Seven are modified files that
+were formatted at `origin/main` (`python/pypto/jit/decorator.py`,
+`python/pypto/language/typing/tensor.py`,
+`tests/ut/ir/transforms/test_auto_tile_matmul_l0.py`,
+`test_expand_mixed_kernel_a5.py`, `test_expand_mixed_kernel_split_aiv.py`,
+`tests/ut/language/parser/test_decorator.py`, `test_scalar_dispatch.py`); seven
+are new files (`constructs/scopes.py`, `tests/ut/jit/test_program_assembly_names.py`,
+`test_submit_resolve.py`, `tests/ut/language/conformance/test_jit.py`,
+`test_staged_host_join.py`, `test_while_logical.py`,
+`tests/ut/language/test_collector_contract.py`). Note `./scripts/gate` does not
+run `ruff format`, so this is invisible to the gate. Red check:
+`uv run ruff format --check .`.
+
+- **F4 — the R2 oracle cannot see docstring-only churn, and one such edit is
+wrong.** `check_comment_churn.py` recognises only `#`/`//` lines, so a hunk
+that changes only docstring text is invisible even though R2's axis ("comment
+edits the dialect migration did not require") covers it. Found instance:
+`tests/ut/jit/test_qwen3_decode.py`'s module docstring now names the specializer
+for a cross-file composition (``@pl.jit_specializer``, plus the inline form),
+but every decorator in
+`examples/models/qwen3_jit/` is `@pl.jit`/`@pl.jit.inline`
+(`rg -n '^@pl\.' examples/models/qwen3_jit/*.py`); the blanket rename
+`pl.jit` → `pl.jit_specializer` misfired on the one example that moved to the
+tracing lane. The rest of the class is unenumerated because the oracle cannot
+enumerate it: fixing it means teaching the oracle to accept docstring-only
+hunks (a scope decision for the orchestrator, not a side effect of this task).
+Red check: `rg -n 'jit_specializer' tests/ut/jit/test_qwen3_decode.py` against
+the example's decorators.
+
+- **F5 — the R1 oracle audits the tracker itself, so tracker prose can turn R1
+red.** `scripts/review/check_deprecated_runtime.py` scans `docs/review-r10.md`
+(`.md` is in its `CODE` set) and counts a non-prose line as a usage whenever the
+quarantined runtime's name is written immediately before `.` or `(`. Two rows
+added to §R2 verdicts did exactly that and flipped R1 from PASS to "2
+non-allowlisted usages"; the rows were reworded. Fix: exclude
+`docs/review-r10.md` from that oracle the way the churn oracle excludes its own
+`scripts/review/`, or treat markdown table/prose lines as prose. Red check:
+`python3 scripts/review/check_deprecated_runtime.py` after any tracker edit
+(PASS = `88 allowlisted, 0 candidates`).
+
 ## 5. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
 | 0 | seed tracker + oracles | — (orchestrator) | done | `1acbadcc8` | oracles frozen: R1 red 34, R2 red 167, R4 red 2 |
-| 0.1 | churn-oracle scope fix | — (orchestrator) | done | *(this commit)* | R2 red restored to the seed 167/38; the tooling had been auditing itself (`scripts/review/comment_churn_allowlist.txt` reported as churn) |
+| 0.1 | churn-oracle scope fix | — (orchestrator) | done | `cce8029da` | R2 red restored to the seed 167/38; the tooling had been auditing itself (`scripts/review/comment_churn_allowlist.txt` reported as churn) |
+| 0.2 | F5 fix: R1 oracle off markdown | — (orchestrator) | done | *(this commit)* | the tracker's own prose can no longer flip R1 red; markdown removed from the oracle's code set |
 | 1 | R1 | `opencode-go/deepseek-v4.1-flash:high` | done | `be0618dcf` | 34 → 0 candidates (oracle PASS); 7 files migrated, 1 allowlisted as `necessary`; F1 found. **Orchestrator-verified**: 240 touched tests pass, D10 justification confirmed verbatim, oracle edit narrows scope without weakening it |
-| 1 | R2 | `opencode-go/deepseek-v4.1-flash:high` | pending | | |
+| 1 | R2 | `opencode-go/deepseek-v4.1-flash:high` | done | `27ab5aeff` | 167 → 0 flagged lines (oracle PASS; 133 lines in 28 files allowlisted with reasons, 32 lines restored, 2 reclassified by an oracle scope fix); F2–F4 found. **Orchestrator-verified**: 108 modified-upstream vs 25 pure-addition lines, samples confirm the reasons, F2/F3 confirmed real. **Escalated**: the `vocabulary` group rests on a doc the changeset itself added |
 | 1 | R3 | `openai/gpt-5.6-luna:max` | pending | | |
 | 1 | R4 | `opencode-go/deepseek-v4.1-flash:high` | pending | | |
 
@@ -317,10 +395,103 @@ touches is the warmup/publication path the tracing lane does not have. The
 tests live in that directory; this one does not. No other allowlist entry was
 touched (production sites and `tests/ut/jit/**` are unchanged).
 
-### R2 allowlist justifications
+### R2 verdicts
 
-None recorded yet — one row per entry added to
-`comment_churn_allowlist.txt`.
+Oracle: `python3 scripts/review/check_comment_churn.py`.
+Before: `167 lines in 38 files`, FAIL, exit 1.
+After: `0 lines in 0 files`, PASS, exit 0, with `133 lines in 28 files`
+allowlisted.
+
+Decomposition of the 167 → 0: **32 lines restored** (10 files), **2 lines
+reclassified by an oracle scope fix** (below), **133 lines allowlisted** (28
+files, one row each below).
+
+**The `necessary` rule used here.** The changeset carries its own prose
+authority: `docs/guide-comments.md` (added by `90172e387`, retained at HEAD by
+its own instruction). Its "Scope of the Commit" explicitly covers
+*implementation comments* and *test documentation*; its Preferred Vocabulary
+retires named words (`mint, minted` → create/produce/emit/wrap/bind;
+`seed` → a binding proxy, with established unrelated uses still valid); and its
+Docstring Rules forbid citing document paths in production comments. A
+prose-only hunk is `necessary` when it (a) sits on code this changeset rewrote
+or renamed, or (b) applies that retained vocabulary without reducing accuracy.
+A hunk that does neither — or that makes the comment *less* accurate — is
+`unnecessary` and was restored byte-for-byte to `origin/main`.
+
+**Oracle scope fix (2 lines, not churn).** `is_comment` treated any line whose
+content starts with `#` as a comment, so the two `#include` additions in
+`python/bindings/modules/ir.cpp` and `src/ir/op/tile_ops/cross_core.cpp` were
+counted as prose. In C/C++ that character opens a preprocessor directive, so
+the `#` marker is now keyed to the hash-comment languages (`.py`, `.pyi`,
+`.toml`, `.yaml`, `.yml`, `.txt`, `.cfg`, `.cmake`, `.sh`); `//` still counts
+everywhere. This *narrows* the report (C/C++ comment hunks are still caught by
+`//`) instead of allowlisting two whole C++ files, which would have hidden
+future comment churn in them. No other hunk changes classification.
+
+#### Unnecessary — restored (10 files, 32 lines)
+
+| File | Lines | What was restored | Why |
+| --- | --- | --- | --- |
+| `python/pypto/ir/formatter.py` | 4 | `You should not use` → `You may not use`; `MERCHANTABILITY OR` → `MERCHANTABILITY, OR` | License template drift, unrelated to any dialect or vocabulary decision — and it violates the repo's own header lint (evidence below) |
+| `python/pypto/language/parser/diagnostics/__init__.py` | 4 | `free software:` → `free software,`; `MERCHANTABILITY OR` → `MERCHANTABILITY, OR` | same |
+| `python/pypto/language/typing/tuple.py` | 2 | `free software;` → `free software,` | same |
+| `python/pypto/language/op/__init__.py` | 3 | deleted the added second copy of the "Promoted tile-only ops …" comment | The hunk left the upstream comment in place and added a near-duplicate below it — a duplicated comment, not a required update. The upstream sentence stays true (``abs`` and the bitwise family are still re-exported from ``unified_ops``); only its enumeration became incomplete when `create_tile` moved |
+| `python/pypto/language/typing/dynamic.py` | 4 | `populated on first use by unwrap()` → `by TypeResolver`; `all paths` → `all parsers` | `TypeResolver` is still a first-use populator of `_ir_var` (`parser/type_resolver.py:1109,1139,1878`), so the rewrite is narrower than the code; the new by-name sharing is already documented by the class docstring and `unwrap()` docstring added in the same commit |
+| `python/pypto/language/typing/scalar.py` | 3 | `Scalar wraps an IR expression` → `symbolic expression`; removed the added blank line before `__class_getitem__` | `docs/glossary.md` (the permanent vocabulary) *reserves* "symbolic" for exactly this domain ("symbolic expressions"), so the swap contradicts the authority it claims; the blank line is a `ruff format` violation (red check below) |
+| `python/pypto/language/parser/ast_parser.py` | 6 | `(populated by pl.dump_tag` → `(seeded by pl.dump_tag`; `pl.dump_tag entry is merged` → `pl.dump_tag seed is merged`; dropped the added period after `Resolve dtype from second argument` | "seed" as *initialize/create* is an established unrelated use the guide keeps valid and the tree still uses at HEAD (`tile_ops/transform.cpp:791`, `tensor_ops/broadcast.cpp:421`, `ir/op/tensor_ops.py:60`, `jit/decorator.py`); the dtype line changed only by a period |
+| `tests/ut/jit/test_qwen3_decode.py` | 2 | `need torch to build random input tensors` → `to construct tensor metadata samples` | The rewrite is *less* accurate: `_make_args` allocates `torch.empty` (explicitly uninitialized, see the comment below it), nothing random is built |
+| `tests/ut/language/parser/test_manual_scope_parsing.py` | 2 | `Create K producer scopes` → `Seed K producer scopes` | same "seed = create/initialize" established use as the `ast_parser.py` row |
+| `python/pypto/language/distributed/op/tensor_ops.py` | 2 | `Initialize from the first dim` → `Seed from the first dim` | same; the code beneath is untouched |
+
+Evidence for the three license restores: `python3 tests/lint/check_headers.py .` —
+**55 failing files before, 52 after**; the three restored files pass, and all
+three passed on their `origin/main` blobs. (The checker is a pre-commit hook,
+not part of `./scripts/gate`.) Evidence for `typing/scalar.py`:
+`uv run ruff format --check python/pypto/language/typing/scalar.py` —
+`Would reformat: …scalar.py` before, `1 file already formatted` after.
+
+#### Necessary — allowlisted (28 files, 133 lines)
+
+| File | Lines | Reason |
+| --- | --- | --- |
+| `examples/models/03_flash_attention.py` | 6 | Body rewritten to derived loop carries + staged joins (`pl.yield_` → rebinding); the three comments described the retired yield/SSA-phi shape |
+| `examples/models/02_vector_dag.py` | 2 | New comment for the new `pl.const(1.0, pl.FP32)` staged-scalar spelling in the same hunk |
+| `examples/intermediate/06_dyn_valid_shape.py` | 3 | `lower` → `compile_for_test` (API renamed by the changeset) |
+| `examples/models/qwen3_jit/qwen3_decode.py` | 5 | same rename |
+| `python/pypto/ir/compile.py` | 7 | New comment for the new `_metadata_program=transformed_program` argument (code changed in the same hunk) |
+| `python/pypto/language/parser/ast_parser.py` | 12 | Relaxed-reassignment comment describes the behavior that replaced the raise (fresh let on a type-changing rebind); `literal` matches the widened accepted literal set (`bool` now under dtype validation) |
+| `python/pypto/language/parser/decorator.py` | 5 | `_FUNCTION_DECORATOR_NAMES = {"function", "function_parser"}` widened the accepted set in the same commit, so the three per-branch comments naming `pl.function` as the only literal were stale |
+| `python/pypto/runtime/runner.py` | 2 | Guide's Docstring Rules: production docstrings and comments must not cite document paths (`docs/en/dev/08-entry-points.md` and `runtime/docs/dfx/pmu-profiling.md` are still present, so this is a policy edit, not a broken link) |
+| `src/codegen/orchestration/orchestration_codegen.cpp` | 13 | `HandleArrayRebindAssign` is a new declaration path (absent at `origin/main`): "Three lowering paths" → four and the caller list are the new code's documentation |
+| `src/ir/transforms/inline_functions_pass.cpp` | 4 | New comment for the new `defs_ordered` member (deterministic first-encounter order) added in the same hunk |
+| `src/ir/transforms/utils/return_lineage_utils.cpp` | 6 | Extended comment for the new `fresh_create_stop` out-param and its consumer `TraceToBackingBuffer` |
+| `tests/st/codegen/dsl/test_flatten_dynamic_tile_3d.py` | 4 | "DSL function bodies are parsed as AST, not executed" → traced: the dialect claim itself |
+| `tests/st/runtime/control_flow/test_dyn_orch_shape.py` | 5 | same dialect claim |
+| `tests/ut/ir/transforms/test_outline_graph_scopes.py` | 2 | `what this test feeds the parser` → the construct: the test now feeds a construct (raises `TypeError`, not `ParserSyntaxError`) |
+| `tests/ut/ir/verifier/test_perf_hint_tile_innermost_dim.py` | 5 | Parser-attached spans → tracing spans, with new span assertions in the same hunk |
+| `tests/ut/language/parser/test_flash_attention.py` | 2 | The module's decorator is `@pl.function_parser` at HEAD (`test_flash_attention.py:41`); the comment named `@pl.function` |
+| `tests/ut/jit/test_decorator.py` | 8 | The quarantined runtime's decorators (the ``pl.jit_specializer`` family) are used throughout this file (42 occurrences); the comments named the tracing `@pl.jit` family |
+| `tests/ut/jit/test_spmd.py` | 2 | The file's dep is `@pl.jit.incore` (line 64) after the `from pypto.jit.decorator import jit` → `pl.jit` switch in the same commit |
+| `tests/ut/jit/test_qwen3_decode.py` | 14 | `lower` → `compile_for_test` (required, line 38) + the rewritten module-cache comment (rename plus a fixture-scope rationale — see the needs-decision row) |
+| `tests/ut/ir/transforms/test_lower_auto_vector_split.py` | 2 | `pl.jit(...).lower()` → `.compile_for_test()` |
+| `tests/ut/codegen/test_orchestration_codegen_more.py` | 5 | Test extended from two to three chained calls (new `third` assertions), so the alias/name comments and the "Same for ``second``" addition describe the new assertions |
+| `tests/ut/ir/test_distributed_ops.py` | 3 | New comment for the changed test input (`_validate_chunk(True, …)` replaced `_validate_chunk(1.5, …)`) |
+| `tests/ut/ir/transforms/test_simplify_pass.py` | 3 | New comment for the rewritten `Expected` fixture (canonical const-left `Le` staged explicitly) |
+| `tests/ut/runtime/test_prebuilt_artifact.py` | 3 | New module comment recording why this suite decorates with `pl.jit_specializer` — the same justification R1 allowlisted its path against the deprecated-runtime oracle |
+| `tests/st/runtime/ops/test_memory_planner_ptoas.py` | 2 | Cited test relocated by the changeset: `tests/ut/codegen/test_multi_buffer_codegen.py` → `tests/ut/ir/parser/test_multi_buffer_codegen.py` |
+| `tests/ut/codegen/test_orchestration_codegen.py` | 4 | Guide-retired vocabulary: "alias is minted" → "is created" ×2, no code change, assertions identical |
+| `tests/ut/codegen/test_orchestration_misc.py` | 2 | same "minted" → "created" |
+| `tests/ut/ir/transforms/test_convert_to_ssa_pass.py` | 2 | same ("SSA mints a fresh version" → "creates") |
+
+#### Needs-decision (escalate; recorded, not edited)
+
+| File | Lines | Question |
+| --- | --- | --- |
+| `tests/ut/jit/test_qwen3_decode.py` | 12 | The module-cache comment was replaced wholesale (upstream: "Module-level memoization keeps the non-trivial full-pipeline lowering to one run…") with the `compile_for_test` rename *plus* six new lines of rationale for a fixture-scoped (rather than `scope="class"`) fixture — conftest autouse ordering and the `PYPTO_PROG_BUILD_DIR` redirect. The rename is required; the added rationale is new information the migration did not need, but it documents non-obvious ordering, which `docs/guide-comments.md`'s Comment Rules ask for. Arguable either way, so the file is allowlisted and this row is left for the orchestrator. |
+
+One entry per line was appended to `scripts/review/comment_churn_allowlist.txt`,
+grouped by reason; that file carries the one-word tag only, the argument lives
+in the tables above.
 
 ### R3 non-minimal findings
 

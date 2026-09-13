@@ -45,8 +45,8 @@ class DynVar(Scalar):
         if not name.isidentifier():
             raise ValueError(f"DynVar name must be a valid identifier, got {name!r}")
         self.name = name
-        # Lazily populated on first use by unwrap().  Once set, all paths
-        # that encounter this DynVar share the same ir.Var instance,
+        # Lazily populated on first use by TypeResolver.  Once set, all parsers
+        # that encounter this DynVar object share the same ir.Var instance,
         # ensuring structural equality across @pl.function boundaries.
         self._ir_var: Var | None = None
         # Bypass Scalar.__init__ (which requires dtype or expr) and set

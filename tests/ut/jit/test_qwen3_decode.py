@@ -16,7 +16,7 @@ Orchestration entry + several InCore-class kernels)."""
 
 import pytest
 
-# Module-level skip — tests need torch to build random input tensors.
+# Module-level skip — tests need torch to construct tensor metadata samples.
 torch = pytest.importorskip("torch")
 
 from pypto.pypto_core import ir  # noqa: E402

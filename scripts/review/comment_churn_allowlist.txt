@@ -7,3 +7,50 @@
 #
 # Empty at seed time: R2 starts from the hardcoded intent that no code comment
 # needs to change for a dialect migration, and must justify every entry it adds.
+#
+# Entered in round 1 (R2). Every path below carries a row in
+# docs/review-r10.md §R2 verdicts; the one-word reason is repeated here so an
+# entry is never read without one. Full paths with the `.py`/`.cpp` suffix keep
+# each entry exact (no sibling file shares the prefix).
+#
+# api-rename: the comment names an API this changeset renamed (`lower` ->
+# `compile_for_test`, `pl.jit` -> `pl.jit_specializer`, the specializer's `jit`
+# import -> `pl.jit`).
+examples/intermediate/06_dyn_valid_shape.py
+examples/models/qwen3_jit/qwen3_decode.py
+tests/ut/ir/transforms/test_lower_auto_vector_split.py
+tests/ut/jit/test_decorator.py
+tests/ut/jit/test_spmd.py
+# dialect: the comment stated the retired parser/AST lane as the execution model
+# (parsed vs traced, parser vs construct, `@pl.jit.incore` context).
+examples/models/03_flash_attention.py
+examples/models/02_vector_dag.py
+tests/st/codegen/dsl/test_flatten_dynamic_tile_3d.py
+tests/st/runtime/control_flow/test_dyn_orch_shape.py
+tests/ut/ir/transforms/test_outline_graph_scopes.py
+tests/ut/ir/verifier/test_perf_hint_tile_innermost_dim.py
+tests/ut/language/parser/test_flash_attention.py
+# code-changed: the hunk sits on code this changeset rewrote, so the comment
+# had to move with it (or is new prose for the new code path).
+python/pypto/ir/compile.py
+python/pypto/language/parser/ast_parser.py
+python/pypto/language/parser/decorator.py
+src/codegen/orchestration/orchestration_codegen.cpp
+src/ir/transforms/inline_functions_pass.cpp
+src/ir/transforms/utils/return_lineage_utils.cpp
+tests/ut/codegen/test_orchestration_codegen_more.py
+tests/ut/ir/test_distributed_ops.py
+tests/ut/ir/transforms/test_simplify_pass.py
+tests/ut/runtime/test_prebuilt_artifact.py
+# relocation: the comment cites a path/name this changeset moved.
+tests/st/runtime/ops/test_memory_planner_ptoas.py
+# vocabulary: docs/guide-comments.md (added by 90172e387, retained at HEAD)
+# retires the word used before the edit ("mint/minted" -> create; production
+# comments must not cite document paths).
+python/pypto/runtime/runner.py
+tests/ut/codegen/test_orchestration_codegen.py
+tests/ut/codegen/test_orchestration_misc.py
+tests/ut/ir/transforms/test_convert_to_ssa_pass.py
+# vocabulary + needs-decision: the compile_for_test rename is required; the
+# rewritten fixture-scope rationale is escalated in §R2 verdicts.
+tests/ut/jit/test_qwen3_decode.py

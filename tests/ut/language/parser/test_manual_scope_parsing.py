@@ -1103,7 +1103,7 @@ class TestSubmitDepsPerElementAndComprehension:
         class Prog:
             @pl.function_parser(type=pl.FunctionType.Opaque)
             def main(self, x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
-                # Create K producer scopes; collect their TaskIds in an array.
+                # Seed K producer scopes; collect their TaskIds in an array.
                 tids = pl.array.create(K, pl.TASK_ID)
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="p0") as t0:
                     y0: pl.Tensor[[64], pl.FP32] = x

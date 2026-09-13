@@ -2,9 +2,11 @@
 """R2 oracle: report comment-only changes to code files vs a base ref.
 
 "Comment-only hunk" means every added/removed line in the hunk is blank or a
-comment (``#`` / ``//``), with no code change in the same hunk. Those are the
-hunks whose only possible justification is prose, so they are the candidates
-for unnecessary churn in upstream comments.
+comment (``#`` in the hash-comment languages, ``//`` everywhere), with no code
+change in the same hunk. A ``#`` line in C/C++ is a preprocessor directive, so
+``#include`` / ``#define`` count as code. Those are the hunks whose only
+possible justification is prose, so they are the candidates for unnecessary
+churn in upstream comments.
 
 Docs prose (``docs/**/*.md``) is out of scope: the migration rewrote it
 deliberately (commits 87d7f25c7, 5061fe4dc). Markdown headings would otherwise
@@ -26,15 +28,21 @@ import sys
 from pathlib import Path
 
 CODE = (".py", ".cpp", ".h", ".hpp", ".cc", ".rs", ".toml", ".yaml", ".yml", ".txt", ".cfg", ".cmake")
+# ``#`` opens a comment only in the hash-comment languages. In C/C++ the same
+# character opens a preprocessor directive (``#include``, ``#define``, ...),
+# which is code, not prose.
+HASH_COMMENT = (".py", ".pyi", ".toml", ".yaml", ".yml", ".txt", ".cfg", ".cmake", ".sh")
 # The review apparatus is not the changeset under review: its own comment-only
 # files (this oracle's allowlist, for one) would otherwise report as findings.
 OUT_OF_SCOPE = ("scripts/review/",)
 DEFAULT_ALLOWLIST = Path(__file__).with_name("comment_churn_allowlist.txt")
 
 
-def is_comment(line: str) -> bool:
+def is_comment(line: str, path: str) -> bool:
     s = line[1:].strip()
-    return s == "" or s.startswith("#") or s.startswith("//")
+    if s == "" or s.startswith("//"):
+        return True
+    return s.startswith("#") and path.endswith(HASH_COMMENT)
 
 
 def comment_only_hunks(base: str) -> dict[str, int]:
@@ -70,7 +78,7 @@ def comment_only_hunks(base: str) -> dict[str, int]:
             continue
         if any(path.startswith(prefix) for prefix in OUT_OF_SCOPE):
             continue
-        if all(is_comment(line) for line in lines):
+        if all(is_comment(line, path) for line in lines):
             cov[path] = cov.get(path, 0) + len(lines)
     return cov
 

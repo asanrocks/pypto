@@ -245,7 +245,7 @@ class Scalar(metaclass=ScalarMeta):
         return Scalar(expr=self.unwrap() != (to_expr(other)))
 
     def __hash__(self) -> int:
-        # Required when __eq__ is overridden. Scalar wraps an IR expression,
+        # Required when __eq__ is overridden. Scalar wraps a symbolic expression,
         # so we fall back to identity-based hashing.
         return id(self)
 

@@ -69,9 +69,6 @@ from .tensor_ops import (
 # Promoted tile-only ops (accessible as pl.load, etc.). ``abs`` and the
 # bitwise family are re-exported below from ``unified_ops`` instead so the
 # unified Tensor/Tile dispatch wins.
-# Promoted tile-only ops (accessible as pl.load, etc.). ``abs`` and
-# ``create_tile`` are re-exported below from ``unified_ops`` instead so
-# the unified Tensor/Tile dispatch wins.
 from .tile_ops import (
     addc,
     addsc,
