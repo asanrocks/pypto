@@ -134,22 +134,26 @@ def build_chained_snapshot_manual_dummy_phase_fence(*, branches: int = DEFAULT_B
         ) -> pl.Tensor[[big_m, big_n], pl.FP32]:
             with pl.manual_scope():
                 tids = pl.array.create(branches, pl.TASK_ID)
-                for a_phase, (tids_a,) in pl.range(2, init_values=(tids,)):
+                (tids_a,) = pl.intrin.carry(tids)
+                for a_phase in pl.range(2):
                     tids_next = pl.array.create(branches, pl.TASK_ID)
                     deps = pl.system.task_dummy(deps=[tids_a])
                     for branch in pl.parallel(branches):
                         row: pl.Scalar[pl.INDEX] = (a_phase * branches + branch) * tile_m
                         out, tid = pl.submit(self.kernel_stripe, data, row, 1.0, out, deps=[deps])
                         tids_next[branch] = tid
-                    tids = pl.yield_(tids_next)
-                for b_phase, (tids_b,) in pl.range(2, init_values=(tids,)):
+                    pl.intrin.yield_(tids_next)
+                (tids,) = pl.intrin.leak()
+                (tids_b,) = pl.intrin.carry(tids)
+                for b_phase in pl.range(2):
                     tids_next = pl.array.create(branches, pl.TASK_ID)
                     deps = pl.system.task_dummy(deps=[tids_b])
                     for branch in pl.parallel(branches):
                         row: pl.Scalar[pl.INDEX] = ((2 + b_phase) * branches + branch) * tile_m
                         out, tid = pl.submit(self.kernel_stripe, data, row, 1.0, out, deps=[deps])
                         tids_next[branch] = tid
-                    tids = pl.yield_(tids_next)
+                    pl.intrin.yield_(tids_next)
+                (tids,) = pl.intrin.leak()
             return out
 
     return ChainedSnapshotManualDummyPhaseFence

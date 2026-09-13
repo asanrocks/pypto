@@ -158,25 +158,26 @@ def dyn_valid_shape_loop(
 
 
 if __name__ == "__main__":
-    # Smoke test via lower (no code generation or device execution required).
+    # Smoke test via compile_for_test (the pass pipeline only — no codegen,
+    # no device).
     data = torch.randn(Q_TILE, BLOCK_COL, dtype=torch.float32)
     out = torch.zeros(Q_TILE, BLOCK_COL, dtype=torch.float32)
 
     # Same kernel, two vlen values: full block (64) and partial last block (32).
     # Each is its own specialization and runs through the pipeline independently.
-    prog_full = dyn_valid_shape.lower(data, 0.5, 64, out)
+    prog_full = dyn_valid_shape.compile_for_test(data, 0.5, 64, out)
     print(f"dyn_valid_shape (full): {len(prog_full.functions)} fn(s)")
-    prog_partial = dyn_valid_shape.lower(data, 0.5, 32, out)
+    prog_partial = dyn_valid_shape.compile_for_test(data, 0.5, 32, out)
     print(f"dyn_valid_shape (partial): {len(prog_partial.functions)} fn(s)")
 
     # One specialization covers both branches: is_last is read at runtime.
     cfg = torch.tensor([1, 48, BLOCK_COL], dtype=torch.int64)
-    prog_if_else = dyn_valid_shape_if_else.lower(data, cfg, out)
+    prog_if_else = dyn_valid_shape_if_else.compile_for_test(data, cfg, out)
     print(f"dyn_valid_shape_if_else: {len(prog_if_else.functions)} fn(s)")
 
     sij_buf = torch.randn(N_ROW, BLOCK_COL, dtype=torch.float32)
     loop_out = torch.zeros(N_ROW, BLOCK_COL, dtype=torch.float32)
     loop_cfg = torch.tensor([2, 48, BLOCK_COL], dtype=torch.int64)
-    prog_loop = dyn_valid_shape_loop.lower(sij_buf, loop_cfg, loop_out)
+    prog_loop = dyn_valid_shape_loop.compile_for_test(sij_buf, loop_cfg, loop_out)
     print(f"dyn_valid_shape_loop: {len(prog_loop.functions)} fn(s)")
     print("OK")

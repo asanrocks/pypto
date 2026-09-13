@@ -210,8 +210,8 @@ def make_kernel_online_update(q_tile: int, head_dim: int):
         li: pl.InOut[pl.Tensor[[Q_HEADS, 1], pl.FP32]],
         oi: pl.InOut[pl.Tensor[[Q_HEADS, HEAD_DIM_DYN], pl.FP32]],
         dst: pl.Out[pl.Tensor[[Q_HEADS, HEAD_DIM_DYN], pl.FP32]],
-        is_first: pl.Scalar[pl.INDEX],
-        is_last: pl.Scalar[pl.INDEX],
+        is_first: pl.Scalar[pl.BOOL],
+        is_last: pl.Scalar[pl.BOOL],
     ) -> tuple[
         pl.Tensor[[Q_HEADS, 1], pl.FP32],
         pl.Tensor[[Q_HEADS, 1], pl.FP32],
@@ -230,11 +230,11 @@ def make_kernel_online_update(q_tile: int, head_dim: int):
         li_tile = pl.load(li, [0, 0], [q_tile, 1], target_memory=pl.MemorySpace.Vec)
         oi_tile = pl.load(oi, [0, 0], [q_tile, head_dim], target_memory=pl.MemorySpace.Vec)
 
-        if is_first == 1:
+        if is_first:
             mi_out = pl.store(mij_tile, [0, 0], mi)
             li_out = pl.store(lij_tile, [0, 0], li)
             oi_out = pl.store(oi_new_tile, [0, 0], oi)
-            if is_last == 1:
+            if is_last:
                 dst_tile = pl.row_expand_div(oi_new_tile, lij_tile)
                 dst_out = pl.store(dst_tile, [0, 0], dst)
             else:
@@ -270,7 +270,7 @@ def make_kernel_online_update(q_tile: int, head_dim: int):
             li_out = pl.store(li_updated_dn, [0, 0], li)
 
             oi_out = pl.store(oi_updated, [0, 0], oi)
-            if is_last == 1:
+            if is_last:
                 dst_tile = pl.row_expand_div(oi_updated, li_updated_dn)
                 dst_out = pl.store(dst_tile, [0, 0], dst)
             else:
@@ -329,7 +329,8 @@ def make_kernel_qk_matmul(
         (pre-extracted by orchestration from block_table).
         key_cache is stored as (rows, head_dim); transpose at load to get (head_dim, block_size).
         """
-        for i, (sij_buf_iter,) in pl.range(n_blocks, init_values=(sij_buf,)):
+        (sij_buf_iter,) = pl.intrin.carry(sij_buf)
+        for i in pl.range(n_blocks):
             phys_block = pl.read(block_indices, i)
 
             kj_row = phys_block * block_size
@@ -351,7 +352,8 @@ def make_kernel_qk_matmul(
             kj_l0b = pl.move(kj_l1, target_memory=pl.MemorySpace.Right)
             sij_l0c = pl.matmul(qi_l0a, kj_l0b)
             sij_buf_updated = pl.store(sij_l0c, [i * q_tile, 0], sij_buf_iter)
-            (sij_buf_out,) = pl.yield_(sij_buf_updated)
+            pl.intrin.yield_(sij_buf_updated)
+        (sij_buf_out,) = pl.intrin.leak()
         return sij_buf_out
 
     return kernel_qk_matmul
@@ -416,10 +418,9 @@ def make_kernel_pv_matmul(
         pij_l0a = pl.move(pij_l1, target_memory=pl.MemorySpace.Left)
         vj_l0b = pl.move(vj_l1, target_memory=pl.MemorySpace.Right)
         oi_l0c = pl.matmul(pij_l0a, vj_l0b)
-        oi_l0c_out = oi_l0c
-
         # Remaining blocks: matmul_acc (accumulate onto L0C)
-        for i, (oi_l0c_iter,) in pl.range(1, n_blocks, init_values=(oi_l0c,)):
+        (oi_l0c_iter,) = pl.intrin.carry(oi_l0c)
+        for i in pl.range(1, n_blocks):
             phys_block = pl.read(block_indices, i)
             vj_row = phys_block * block_size
 
@@ -438,7 +439,8 @@ def make_kernel_pv_matmul(
             pij_l0a_i = pl.move(pij_l1_i, target_memory=pl.MemorySpace.Left)
             vj_l0b_i = pl.move(vj_l1_i, target_memory=pl.MemorySpace.Right)
             oi_l0c_acc = pl.matmul_acc(oi_l0c_iter, pij_l0a_i, vj_l0b_i)
-            (oi_l0c_out,) = pl.yield_(oi_l0c_acc)
+            pl.intrin.yield_(oi_l0c_acc)
+        (oi_l0c_out,) = pl.intrin.leak()
 
         oi_new = pl.store(oi_l0c_out, [0, 0], oi_new)
         return oi_new
@@ -590,13 +592,13 @@ def build_paged_attention_multi_config_program(
 
                         # 4. Online update flags
                         if bn == 0:
-                            is_first = pl.yield_(1)
+                            is_first = pl.const(True, pl.BOOL)
                         else:
-                            is_first = pl.yield_(0)
+                            is_first = pl.const(False, pl.BOOL)
                         if bn + n_blocks == bn_this_batch:
-                            is_last = pl.yield_(1)
+                            is_last = pl.const(True, pl.BOOL)
                         else:
-                            is_last = pl.yield_(0)
+                            is_last = pl.const(False, pl.BOOL)
 
                         # 5. Online update (VECTOR)
                         out_view_buf = pl.slice(out, [q_tile, head_dim_cfg], [cur_offset, 0])

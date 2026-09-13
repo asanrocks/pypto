@@ -356,13 +356,13 @@ def build_dynamic_paged_attention_program(
 
                         # Determine position flags for the online softmax update kernel
                         if bn == 0:
-                            is_first = pl.yield_(1)
+                            is_first = pl.const(True, pl.BOOL)
                         else:
-                            is_first = pl.yield_(0)
+                            is_first = pl.const(False, pl.BOOL)
                         if bn == bn_this_batch - 1:
-                            is_last = pl.yield_(1)
+                            is_last = pl.const(True, pl.BOOL)
                         else:
-                            is_last = pl.yield_(0)
+                            is_last = pl.const(False, pl.BOOL)
 
                         # Stage 4: online update — merge (mij, lij, oi_new) into (mi, li, oi)
                         # and write final normalised output on the last block

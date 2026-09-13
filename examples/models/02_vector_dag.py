@@ -86,10 +86,12 @@ def vector_dag(a: pl.Tensor, b: pl.Tensor, f: pl.Out[pl.Tensor]):
     """
     c = pl.create_tensor([128, 128], dtype=pl.FP32)
     c = kernel_add_128(a, b, c)
+    # The scalar params are runtime-declared (pl.Scalar[pl.FP32]), so the
+    # in-trace constants must be staged: pl.const, not a bare host float.
     d = pl.create_tensor([128, 128], dtype=pl.FP32)
-    d = kernel_add_scalar_128(c, 1.0, d)
+    d = kernel_add_scalar_128(c, pl.const(1.0, pl.FP32), d)
     e = pl.create_tensor([128, 128], dtype=pl.FP32)
-    e = kernel_add_scalar_128(c, 2.0, e)
+    e = kernel_add_scalar_128(c, pl.const(2.0, pl.FP32), e)
     g = pl.create_tensor([128, 128], dtype=pl.FP32)
     g = kernel_mul_128(d, e, g)
     f = kernel_add_128(g, c, f)
@@ -141,9 +143,9 @@ def example_orch(a: pl.Tensor, b: pl.Tensor, f_result: pl.Out[pl.Tensor]):
     c = pl.create_tensor([16, 16], dtype=pl.FP32)
     c = kernel_add_16(a, b, c)
     d = pl.create_tensor([16, 16], dtype=pl.FP32)
-    d = kernel_add_scalar_16(c, 1.0, d)
+    d = kernel_add_scalar_16(c, pl.const(1.0, pl.FP32), d)
     e = pl.create_tensor([16, 16], dtype=pl.FP32)
-    e = kernel_add_scalar_16(c, 2.0, e)
+    e = kernel_add_scalar_16(c, pl.const(2.0, pl.FP32), e)
     f_result = kernel_mul_16(d, e, f_result)
     return f_result
 

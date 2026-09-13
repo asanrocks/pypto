@@ -11,17 +11,17 @@
 Flash Attention with loop-level iter_args.
 
 Demonstrates advanced DSL control flow:
-  - pl.range with init_values for loop-carried state (iter_args)
-  - Nested if/else with pl.yield_ for SSA phi nodes
+  - Derived loop carries: the body's rebinding of mi/li/attn/oi is the carry
+  - Nested staged if/else with plain assignment at the branch joins
   - Online softmax with running max/sum accumulators
-  - Multi-output yield for updating loop state
+  - Multi-name carry through the KV-block loop
 
 Algorithm:
   For each KV block j in [0, 16):
     sij = Q @ Kj^T (scaled)
     pij = softmax(sij) with online max/sum correction
     Oi = update(Oi, pij @ Vj)
-  Return Oi / li (final normalization)
+  Return Oi / li (final normalization), written into the output tensor
 
 Run:  python examples/models/03_flash_attention.py
 Next: examples/models/04_paged_attention.py
@@ -31,23 +31,19 @@ import pypto.language as pl
 
 
 @pl.jit
-def flash_attention(q_13: pl.Tensor, k_16: pl.Tensor, v_19: pl.Tensor):
-    with pl.at(level=pl.Level.CORE_GROUP):
-        attn_initial = pl.create_tensor([64, 128], dtype=pl.FP32)
-        oi_update_initial = pl.create_tensor([64, 128], dtype=pl.FP32)
-        li_update_initial = pl.create_tensor([64, 1], dtype=pl.FP32)
-        mi_update_initial = pl.create_tensor([64, 1], dtype=pl.FP32)
+def flash_attention(q_13: pl.Tensor, k_16: pl.Tensor, v_19: pl.Tensor, o_20: pl.Out[pl.Tensor]):
+    # slot_num=1 halves the automatic cross-core pipe's Vec reservation (the
+    # default depth-2 ring holds 64 KiB against a 188416 B budget); the packed
+    # tiles then fit alongside it.
+    with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.cross_core_slot(slot_num=1)]):
+        # Loop-carried state; the loop body's rebinds derive the carries.
+        attn_update = pl.create_tensor([64, 128], dtype=pl.FP32)
+        oi_update = pl.create_tensor([64, 128], dtype=pl.FP32)
+        li_update = pl.create_tensor([64, 1], dtype=pl.FP32)
+        mi_update = pl.create_tensor([64, 1], dtype=pl.FP32)
 
-        # statement.for with iter_args → pl.range with tuple unpacking
-        for i, (mi_update, li_update, attn_update, oi_update) in pl.range(
-            16,
-            init_values=(
-                mi_update_initial,
-                li_update_initial,
-                attn_initial,
-                oi_update_initial,
-            ),
-        ):
+        # statement.for with derived iter_args
+        for i in pl.range(16):
             # Inner statement.block
             kj = pl.slice(k_16, [64, 128], [i * 64, 0])
             vj = pl.slice(v_19, [64, 128], [i * 64, 0])
@@ -59,32 +55,34 @@ def flash_attention(q_13: pl.Tensor, k_16: pl.Tensor, v_19: pl.Tensor):
             l_ij = pl.row_sum(p_ij)
             tildaPij_83 = pl.cast(p_ij, target_type=pl.FP16, mode="round")
 
-            # Nested if with yield (SSA phi node)
+            # Nested staged if; both branches assign the same names
             if i == 0:
                 # Inner statement.block
                 oiUpdate_87 = pl.matmul(tildaPij_83, vj, out_dtype=pl.FP16)
                 oiUpdate_90 = pl.assemble(oi_update, oiUpdate_87, offset=[0, 0])
 
-                # Nested if inside first branch
+                # Nested if inside first branch: a staged join, so plain assignment
                 if i == 15:
-                    attn_94 = pl.div(oiUpdate_90, l_ij)
-                    attn_95 = pl.yield_(attn_94)
+                    attn_95 = pl.div(oiUpdate_90, l_ij)
                 else:
-                    attn_95 = pl.yield_(attn_update)
+                    attn_95 = attn_update
 
                 # More statements in first branch
                 liUpdate_98 = pl.assemble(li_update, l_ij, offset=[0, 0])
                 miUpdate_101 = pl.assemble(mi_update, row_max, offset=[0, 0])
 
-                # statement.yield → pl.yield_ with assignment
-                miUpdate_126, liUpdate_127, attn_128, oiUpdate_129 = pl.yield_(
-                    miUpdate_101, liUpdate_98, attn_95, oiUpdate_90
-                )
+                # Rebinding *is* the carry update
+                mi_update = miUpdate_101
+                li_update = liUpdate_98
+                attn_update = attn_95
+                oi_update = oiUpdate_90
             else:
-                # Else branch
-                mi_102 = pl.create_tensor(shape=[64, 1], dtype=pl.FP32)
-                miUpdate_103 = pl.maximum(mi_102, row_max)
-                t1_104 = pl.sub(mi_102, miUpdate_103)
+                # Else branch — the online-softmax correction against the carried
+                # running max (mi_update), not a fresh tile: m_new = max(m_old, m_j),
+                # O and l rescale by exp(m_old - m_new), the new block contributes
+                # exp(s - m_new).
+                miUpdate_103 = pl.maximum(mi_update, row_max)
+                t1_104 = pl.sub(mi_update, miUpdate_103)
                 t2_105 = pl.exp(t1_104)
                 t3_106 = pl.sub(row_max, miUpdate_103)
                 t4_107 = pl.exp(t3_106)
@@ -100,30 +98,36 @@ def flash_attention(q_13: pl.Tensor, k_16: pl.Tensor, v_19: pl.Tensor):
                 oiUpdate_117 = pl.add(q3_114, q2_116)
                 oiUpdate_120 = pl.assemble(oi_update, oiUpdate_117, offset=[0, 0])
 
-                # Nested if in else branch
+                # Nested staged if in else branch
                 if i == 15:
-                    attn_124 = pl.div(oiUpdate_120, liUpdate_113)
-                    attn_125 = pl.yield_(attn_124)
+                    attn_125 = pl.div(oiUpdate_120, liUpdate_113)
                 else:
-                    attn_125 = pl.yield_(attn_update)
+                    attn_125 = attn_update
 
-                miUpdate_126, liUpdate_127, attn_128, oiUpdate_129 = pl.yield_(
-                    miUpdate_103, liUpdate_113, attn_125, oiUpdate_120
-                )
-
-            # For loop yield (updates iter_args for next iteration)
-            mi_final, li_final, attn_final, oi_final = pl.yield_(
-                miUpdate_126, liUpdate_127, attn_128, oiUpdate_129
-            )
-    return attn_final
+                mi_update = miUpdate_103
+                li_update = liUpdate_113
+                attn_update = attn_125
+                oi_update = oiUpdate_120
+        o_20[:] = attn_update
+    return o_20
 
 
 if __name__ == "__main__":
-    # The body currently fails IR verification at pipeline_input due to a
-    # pre-existing IfStmt yield/return_vars structural mismatch in the original
-    # @pl.function example (which only ever called print() and never went
-    # through the pass pipeline).  See KNOWN_ISSUES.md for the tracking entry.
-    # Until that is fixed, this entry only verifies that the JIT decorator
-    # wraps and the Python parser accepts the source -- it does NOT execute.
-    print(flash_attention)
-    print("SKIPPED: flash_attention body fails IR verification (see KNOWN_ISSUES.md)")
+    import torch
+    from pypto.runtime import RunConfig
+
+    torch.manual_seed(0)
+    q = torch.randn(64, 128, dtype=torch.float16)
+    k = torch.randn(1024, 128, dtype=torch.float16)
+    v = torch.randn(1024, 128, dtype=torch.float16)
+    o = torch.zeros(64, 128, dtype=torch.float32)
+
+    flash_attention(q, k, v, o, config=RunConfig(platform="a2a3sim"))
+
+    # Golden reference: full softmax(Q K^T / sqrt(d)) V in fp32.
+    scores = torch.matmul(q.float(), k.float().transpose(0, 1)) / (128.0**0.5)
+    expected = torch.matmul(torch.softmax(scores, dim=-1), v.float())
+    assert torch.allclose(o, expected, rtol=2e-2, atol=2e-2), (
+        f"validation failed: max diff = {(o - expected).abs().max().item()}"
+    )
+    print("OK")

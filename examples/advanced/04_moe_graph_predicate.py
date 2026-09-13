@@ -39,8 +39,8 @@ statically; beyond that it is yours to honour. This example keeps the counts an
 input so the routing is visible in the assertions, and does not model the router.
 
 Concepts introduced:
-  - `@pl.jit.graph`: a recordable orchestration fragment, recorded once and
-    replayed per layer
+  - `@pl.jit.graph`: a recordable orchestration fragment, recorded once
+    and replayed per layer
   - `predicate=` on `pl.spmd`: run-time gating without a branch
   - `pl.unroll`: the expert loop expands at compile time, so each expert's weight
     offset is a per-node constant — a `pl.range` induction variable is not
@@ -123,10 +123,15 @@ def moe_block(
 ):
     """One recorded block: every expert enumerated, each one gated.
 
+    A `@pl.jit.graph` fragment is the jit spelling of a recordable region: the
+    callee lane traces it as a Graph function and joins it (with the
+    `expert_ffn` it dispatches) into the entry's program, so the recording
+    covers the whole block.
+
     ``pl.unroll`` rather than ``pl.range``: the loop expands at compile time, so
     each expert's ``e * D`` offset is a literal in the IR — a per-node constant,
-    identical on every replay. A ``pl.range`` induction variable is local to the
-    region and the call site cannot reproduce it, which `LegalizeGraphBoundary`
+    identical on every replay. A ``pl.range`` induction variable is local to
+    the region and the call site cannot reproduce it, which `LegalizeGraphBoundary`
     rejects.
 
     ``pl.spmd`` is the form that carries a predicate in a ``@pl.jit`` function,

@@ -47,8 +47,8 @@ Kernels (one representative per distinct pattern):
   tile_assemble_loop_col_broadcast   -- Vec->Vec: loop with column broadcast (no slice)
   tile_assemble_double_loop_broadcast -- Vec->Vec: nested loops, quadrant broadcast
 
-Note: ``__main__`` runs ``lower`` (full pass pipeline, no code generation or
-device execution) for each kernel. The per-mode hardware semantics of TINSERT
+Note: ``__main__`` runs ``compile_for_test`` (full pass pipeline, no code
+generation or device execution) for each kernel. The per-mode hardware semantics of TINSERT
 (Acc->Mat NZ vs. Vec->Vec ND_VEC) are best validated on device via
 ``tests/st/runtime/ops/test_assemble.py`` rather than against a torch reference.
 
@@ -58,6 +58,8 @@ Next: examples/models/01_ffn.py
 
 import pypto.language as pl
 import torch
+from pypto import backend
+from pypto.backend import BackendType
 
 
 @pl.jit
@@ -166,8 +168,13 @@ def tile_assemble_double_loop_broadcast(
 
 
 if __name__ == "__main__":
-    # Smoke test each kernel via lower (no torch reference --
-    # tile.assemble's per-mode hardware semantics are best validated on device).
+    # Tile-layout selection for the Mat/Acc (L1/L0C) cases queries the
+    # backend; set it once for this process (compile_for_test has no
+    # backend_type kwarg — it is the pass pipeline only).
+    backend.set_backend_type(BackendType.Ascend910B)
+    # Smoke test each kernel via compile_for_test (the pass pipeline only --
+    # no torch reference, no codegen, no device: tile.assemble's per-mode
+    # hardware semantics are best validated on device).
     cases = [
         (
             "acc_mat",
@@ -226,6 +233,6 @@ if __name__ == "__main__":
         ),
     ]
     for name, fn, args in cases:
-        prog = fn.lower(*args)
+        prog = fn.compile_for_test(*args)
         print(f"{name}: {len(prog.functions)} fn(s)")
     print("OK")

@@ -29,6 +29,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from examples.utils.phase_fence_dep_compression import (  # noqa: E402
+    build_chained_snapshot_manual_dummy_phase_fence,
     build_chained_snapshot_phase_fence,
 )
 
@@ -328,6 +329,30 @@ class TestPhaseFenceDepCompressionCodegen:
             "for (int64_t a_phase =",
             "set_dependencies(",
             "for (int64_t b_phase =",
+        )
+
+    def test_chained_snapshot_manual_dummy_example_emits_per_loop_barriers(self):
+        branches = 4
+        code = _compile_program(build_chained_snapshot_manual_dummy_phase_fence(branches=branches))
+        # The user-written task_dummy(deps=[carried tids]) barriers survive as
+        # one dummy-task submission per phase loop, with branch-sized fan-in
+        # from the carried tids array; real tasks depend only on the dummy
+        # TaskId, never on the full array.
+        for barrier in ("params_phase_fence_barrier_0", "params_phase_fence_barrier_1"):
+            assert f"TaskId {barrier}_deps[{branches}];" in code, code
+            assert f"rt_submit_dummy_task({barrier});" in code, code
+        assert code.count("rt_submit_dummy_task(") == 2, code
+        assert not re.search(rf"TaskId params_t\d+_deps\[{branches}\];", code), code
+        assert re.findall(
+            r"if \(deps\w*\.is_valid\(\)\) params_t\d+_deps\[\w+_count\+\+\] = deps\w*;",
+            code,
+        ), code
+        _assert_ordered(
+            code,
+            "for (int64_t a_phase =",
+            "rt_submit_dummy_task(params_phase_fence_barrier_0)",
+            "for (int64_t b_phase =",
+            "rt_submit_dummy_task(params_phase_fence_barrier_1)",
         )
 
     def test_sibling_producer_consumer_loops_emit_invariant_phase_fence(self):

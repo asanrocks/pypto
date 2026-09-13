@@ -304,7 +304,7 @@ def build_paged_attention_spmd_program(
             mi_batch: pl.InOut[pl.Tensor[[batch_q_tile, 1], pl.FP32]],
             li_batch: pl.InOut[pl.Tensor[[batch_q_tile, 1], pl.FP32]],
             oi_batch: pl.InOut[pl.Tensor[[batch_q_tile, head_dim], pl.FP32]],
-            is_first: pl.Scalar[pl.INDEX],
+            is_first: pl.Scalar[pl.BOOL],
             batch_count: pl.Scalar[pl.INDEX],
         ) -> tuple[
             pl.Tensor[[batch_q_tile, 1], pl.FP32],
@@ -314,7 +314,7 @@ def build_paged_attention_spmd_program(
             """Online softmax accumulator update (VECTOR)."""
             spmd_idx = pl.tile.get_block_idx()
             spmd_block_num = pl.tile.get_block_num()
-            if is_first != 0:
+            if is_first:
                 for b in pl.range(spmd_idx, batch_count, spmd_block_num):
                     mij_tile = pl.load(
                         mij_batch,
@@ -469,11 +469,11 @@ def build_paged_attention_spmd_program(
             scale_value: pl.Scalar[pl.FP32] = pl.tensor.read(scale, [0])
             zero_bn_cfg: pl.Scalar[pl.INT64] = pl.const(0, pl.INT64)
             if batch_cfg == 0:
-                max_bn_cfg: pl.Scalar[pl.INT64] = pl.yield_(zero_bn_cfg)
+                max_bn_cfg: pl.Scalar[pl.INT64] = zero_bn_cfg
             else:
                 first_seq = pl.tensor.read(context_lens, [0])
                 first_bn_cfg: pl.Scalar[pl.INT64] = (first_seq + block_size_cfg - 1) // block_size_cfg
-                max_bn_cfg: pl.Scalar[pl.INT64] = pl.yield_(first_bn_cfg)
+                max_bn_cfg: pl.Scalar[pl.INT64] = first_bn_cfg
             for b in pl.range(1, batch_cfg):
                 cur_seq_b = pl.tensor.read(context_lens, [b])
                 bn_b = (cur_seq_b + block_size_cfg - 1) // block_size_cfg
@@ -543,9 +543,9 @@ def build_paged_attention_spmd_program(
                         )
 
                     if bn == 0:
-                        is_first = pl.yield_(1)
+                        is_first = pl.const(True, pl.BOOL)
                     else:
-                        is_first = pl.yield_(0)
+                        is_first = pl.const(False, pl.BOOL)
 
                     with pl.cluster():
                         with pl.spmd(core_num=4):

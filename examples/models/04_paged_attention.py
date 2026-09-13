@@ -30,7 +30,10 @@ Shared InCore kernels (module-level @pl.function):
   kernel_init_inplace, kernel_qk_matmul, kernel_softmax_prepare,
   kernel_pv_matmul, kernel_online_update
 
-These can be imported and reused by other @pl.program definitions.
+These can be imported and reused by other @pl.program definitions: bind
+them as locals of the program's builder function so the orchestration
+method reaches them through closure capture (a bare module-global name
+is not a callable callee in the program-method lane).
 """
 
 import argparse
@@ -256,14 +259,25 @@ def build_paged_attention_program(
     out_rows = batch * num_heads
     block_table_flat_size = batch * max_num_blocks_per_req
 
+    # Capture the module-level kernels as builder locals so the orchestration
+    # method reaches them through closure capture: the program lane adapts
+    # captured standalone functions into callable callees, while a bare
+    # module-global name would reach the traced body as a raw ir.Function.
+    _init = kernel_init_inplace
+    _qk = kernel_qk_matmul
+    _sm = kernel_softmax_prepare
+    _pv = kernel_pv_matmul
+    _upd = kernel_online_update
+
     @pl.program
     class PagedAttentionProgram:
         """Paged attention program with CUBE and VECTOR kernels (online softmax).
 
         InCore kernels (kernel_init_inplace, kernel_qk_matmul,
         kernel_softmax_prepare, kernel_pv_matmul, kernel_online_update) are
-        defined at module level and automatically added to this program when
-        called from the orchestration function.
+        defined at module level and captured as builder locals; the program
+        build adapts each captured function into a callable callee and adds
+        it to the program when it is called from the orchestration function.
         """
 
         # ── Orchestration function ──────────────────────────────────────────
@@ -309,7 +323,7 @@ def build_paged_attention_program(
                     mi_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
 
                     # Initialize accumulators via shared module-level InCore kernel
-                    oi, li_update, mi_update = kernel_init_inplace(oi_buf, li_buf, mi_buf)
+                    oi, li_update, mi_update = _init(oi_buf, li_buf, mi_buf)
 
                     for bn in pl.range(bn_this_batch):
                         # Query view: row offset = b_idx * num_heads + q_idx * q_tile
@@ -327,7 +341,7 @@ def build_paged_attention_program(
                         sij_buf = pl.create_tensor([q_tile, block_size_cfg], dtype=pl.FP32)
 
                         # QK matmul (CUBE) via shared module-level InCore kernel
-                        sij = kernel_qk_matmul(qi, kj, sij_buf)
+                        sij = _qk(qi, kj, sij_buf)
                         sij_valid = pl.slice(sij, [q_tile, valid_len], [0, 0])
 
                         pij_f16_buf = pl.create_tensor([q_tile, block_size_cfg], dtype=pl.BF16)
@@ -335,7 +349,7 @@ def build_paged_attention_program(
                         li_sm_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
 
                         # Softmax prepare (VECTOR) via shared module-level InCore kernel
-                        pij_f16, mi, li = kernel_softmax_prepare(
+                        pij_f16, mi, li = _sm(
                             sij_valid,
                             1.0,
                             pij_f16_buf,
@@ -345,22 +359,22 @@ def build_paged_attention_program(
 
                         oi_tmp_buf = pl.create_tensor([q_tile, head_dim_cfg], dtype=pl.FP32)
                         # PV matmul (CUBE) via shared module-level InCore kernel
-                        oi_tmp = kernel_pv_matmul(pij_f16, vj, oi_tmp_buf)
+                        oi_tmp = _pv(pij_f16, vj, oi_tmp_buf)
 
                         # Conditional flags
                         if bn == 0:
-                            is_first = pl.yield_(1)
+                            is_first = pl.const(True, pl.BOOL)
                         else:
-                            is_first = pl.yield_(0)
+                            is_first = pl.const(False, pl.BOOL)
                         if bn == bn_this_batch - 1:
-                            is_last = pl.yield_(1)
+                            is_last = pl.const(True, pl.BOOL)
                         else:
-                            is_last = pl.yield_(0)
+                            is_last = pl.const(False, pl.BOOL)
 
                         # Output view: same row offset as query view
                         out_view_buf = pl.slice(out, [q_tile, head_dim_cfg], [cur_offset, 0])
                         # Online softmax update via shared module-level InCore kernel
-                        mi_update, li_update, oi, _out_view = kernel_online_update(
+                        mi_update, li_update, oi, _out_view = _upd(
                             mi, li, oi_tmp, mi_update, li_update, oi, out_view_buf, is_first, is_last
                         )
 
@@ -388,6 +402,13 @@ def build_paged_attention_unaligned_program(
     key_cache_rows = batch * max_num_blocks_per_req * block_size
     out_rows = batch * num_heads
     block_table_flat_size = batch * max_num_blocks_per_req
+
+    # Builder-local captures — see build_paged_attention_program.
+    _init = kernel_init_inplace
+    _qk = kernel_qk_matmul
+    _sm_unaligned = kernel_softmax_prepare_unaligned
+    _pv = kernel_pv_matmul
+    _upd = kernel_online_update
 
     @pl.program
     class PagedAttentionUnalignedProgram:
@@ -420,7 +441,7 @@ def build_paged_attention_unaligned_program(
                     oi_buf = pl.create_tensor([q_tile, head_dim_cfg], dtype=pl.FP32)
                     li_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
                     mi_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
-                    oi, li_update, mi_update = kernel_init_inplace(oi_buf, li_buf, mi_buf)
+                    oi, li_update, mi_update = _init(oi_buf, li_buf, mi_buf)
 
                     for bn in pl.range(bn_this_batch):
                         qi = pl.slice(query, [q_tile, head_dim_cfg], [cur_offset, 0])
@@ -432,14 +453,14 @@ def build_paged_attention_unaligned_program(
                         vj = pl.slice(value_cache, [block_size_cfg, head_dim_cfg], [kv_block_row, 0])
 
                         sij_buf = pl.create_tensor([q_tile, block_size_cfg], dtype=pl.FP32)
-                        sij = kernel_qk_matmul(qi, kj, sij_buf)
+                        sij = _qk(qi, kj, sij_buf)
 
                         # Unaligned: pass full sij + valid_len to kernel_softmax_prepare_unaligned
                         # (no pl.slice — kernel handles padding via set_validshape + fillpad)
                         pij_f16_buf = pl.create_tensor([q_tile, block_size_cfg], dtype=pl.BF16)
                         mi_sm_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
                         li_sm_buf = pl.create_tensor([q_tile, 1], dtype=pl.FP32)
-                        pij_f16, mi, li = kernel_softmax_prepare_unaligned(
+                        pij_f16, mi, li = _sm_unaligned(
                             sij,
                             1.0,
                             valid_len,
@@ -449,19 +470,19 @@ def build_paged_attention_unaligned_program(
                         )
 
                         oi_tmp_buf = pl.create_tensor([q_tile, head_dim_cfg], dtype=pl.FP32)
-                        oi_tmp = kernel_pv_matmul(pij_f16, vj, oi_tmp_buf)
+                        oi_tmp = _pv(pij_f16, vj, oi_tmp_buf)
 
                         if bn == 0:
-                            is_first = pl.yield_(1)
+                            is_first = pl.const(True, pl.BOOL)
                         else:
-                            is_first = pl.yield_(0)
+                            is_first = pl.const(False, pl.BOOL)
                         if bn == bn_this_batch - 1:
-                            is_last = pl.yield_(1)
+                            is_last = pl.const(True, pl.BOOL)
                         else:
-                            is_last = pl.yield_(0)
+                            is_last = pl.const(False, pl.BOOL)
 
                         out_view_buf = pl.slice(out, [q_tile, head_dim_cfg], [cur_offset, 0])
-                        mi_update, li_update, oi, _out_view = kernel_online_update(
+                        mi_update, li_update, oi, _out_view = _upd(
                             mi, li, oi_tmp, mi_update, li_update, oi, out_view_buf, is_first, is_last
                         )
 

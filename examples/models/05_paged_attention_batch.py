@@ -241,8 +241,8 @@ def BuildBatchPagedAttentionProgram(
             li_batch: pl.InOut[pl.Tensor[[batch_q_tile, 1], pl.FP32]],
             oi_batch: pl.InOut[pl.Tensor[[batch_q_tile, head_dim], pl.FP32]],
             out_tensor: pl.Out[pl.Tensor[[out_rows, head_dim], pl.FP32]],
-            is_first: pl.Scalar[pl.INT64],
-            is_last: pl.Scalar[pl.INT64],
+            is_first: pl.Scalar[pl.BOOL],
+            is_last: pl.Scalar[pl.BOOL],
             batch_count: pl.Scalar[pl.INT64],
             q_offset: pl.Scalar[pl.INT64],
             num_heads_param: pl.Scalar[pl.INT64],
@@ -261,7 +261,7 @@ def BuildBatchPagedAttentionProgram(
             for b in pl.range(batch_count):
                 dst_row = b * num_heads_param + q_offset
 
-                if is_first != 0:
+                if is_first:
                     mij_tile = pl.load(
                         mij_batch,
                         [b * q_tile, 0],
@@ -285,7 +285,7 @@ def BuildBatchPagedAttentionProgram(
                     li_batch = pl.store(lij_tile, [b * q_tile, 0], li_batch, [q_tile, 1])
                     oi_batch = pl.store(oi_new_tile, [b * q_tile, 0], oi_batch, [q_tile, head_dim])
 
-                    if is_last != 0:
+                    if is_last:
                         dst_tile = pl.row_expand_div(oi_new_tile, lij_tile)
                         out_tensor = pl.store(dst_tile, [dst_row, 0], out_tensor, [q_tile, head_dim])
                 else:
@@ -351,7 +351,7 @@ def BuildBatchPagedAttentionProgram(
                     oi_new_scaled = pl.row_expand_mul(oi_new_tile, beta_dn)
                     oi_updated = pl.add(oi_scaled, oi_new_scaled)
 
-                    if is_last != 0:
+                    if is_last:
                         dst_tile = pl.row_expand_div(oi_updated, li_updated_dn)
                         out_tensor = pl.store(dst_tile, [dst_row, 0], out_tensor, [q_tile, head_dim])
                     else:
@@ -399,9 +399,9 @@ def BuildBatchPagedAttentionProgram(
             q_loop_cfg = (num_heads_cfg + q_tile - 1) // q_tile
 
             # Compute max_bn across all batches (mirrors C++ max_bn loop).
-            # A loop carry may be seeded straight from a literal; codegen emits
-            # the constant as the carry's initializer.
-            max_bn: pl.Scalar[pl.INT64] = 0
+            # The loop carry is seeded from a typed constant; the rebind below
+            # derives the carry (guide §4.1/§4.2).
+            max_bn = pl.const(0, pl.INT64)
             for b in pl.range(batch_cfg):
                 cur_seq_b = pl.tensor.read(context_lens, [b])
                 bn_b = (cur_seq_b + block_size_cfg - 1) // block_size_cfg
@@ -461,13 +461,13 @@ def BuildBatchPagedAttentionProgram(
 
                     # Conditional flags (mirrors C++ is_first/is_last)
                     if bn == 0:
-                        is_first = pl.yield_(1)
+                        is_first = pl.const(True, pl.BOOL)
                     else:
-                        is_first = pl.yield_(0)
+                        is_first = pl.const(False, pl.BOOL)
                     if bn == max_bn - 1:
-                        is_last = pl.yield_(1)
+                        is_last = pl.const(True, pl.BOOL)
                     else:
-                        is_last = pl.yield_(0)
+                        is_last = pl.const(False, pl.BOOL)
 
                     # Stage 4: Online update (FUNC_ONLINE_UPDATE, AIV / VECTOR)
                     mi_batch, li_batch, oi_batch, out = self.KernelOnlineUpdate(

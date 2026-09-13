@@ -22,6 +22,8 @@ Run with::
 """
 
 import pypto.language as pl
+from pypto import backend
+from pypto.backend import BackendType
 
 from .config import (
     BATCH,
@@ -113,9 +115,14 @@ def qwen3_decode(  # noqa: PLR0913 — model signature is intrinsic
 
 
 if __name__ == "__main__":
-    # Minimal smoke test: build TensorMeta-shaped inputs and call ``lower`` to
-    # run the full pass pipeline (no code generation or device execution).
+    # Minimal smoke test: build TensorMeta-shaped inputs and call
+    # ``compile_for_test`` to run the full pass pipeline (no code generation
+    # or device execution).
     import torch
+
+    # The pass pipeline queries the backend for tile layouts; set it once
+    # for this process (the ut oracle's conftest does the same per test).
+    backend.set_backend_type(BackendType.Ascend910B)
 
     args = [
         torch.empty([BATCH, HIDDEN], dtype=torch.bfloat16),  # hidden_states
@@ -135,7 +142,7 @@ if __name__ == "__main__":
         torch.empty([INTERMEDIATE, HIDDEN], dtype=torch.bfloat16),  # w_down
         torch.empty([BATCH, HIDDEN], dtype=torch.bfloat16),  # out
     ]
-    post_pass = qwen3_decode.lower(*args)
+    post_pass = qwen3_decode.compile_for_test(*args)
     print(f"Lowered program has {len(post_pass.functions)} function(s):")
     for fn in post_pass.functions.values():
         print(f"  {fn.name}: {fn.func_type}")
