@@ -428,7 +428,88 @@ red anchor, therefore no anchor-rule `F*` task and no frontend edit.
 
 F-ids continue `docs/review-r10.md` §4's series (last F11, from R6).
 
-## 13. Round ledger
+## 13. R8 verdicts — binding & assignment
+
+Both sides read before verdicting: the parser's `parse_assignment`
+(`ast_parser.py:1834`), `parse_annotated_assignment` (`:1530`),
+`_assign_or_let` (`:1774`), `_parse_subscript_assignment` (`:2209`),
+`_parse_array_subscript_assignment` (`:2402`),
+`_build_assemble_offsets_and_extents` (`:2442`), and the
+`_parse_typed_constant` interceptor (`:9349`); the tracing lane's
+`Sema.bind`/`_bind_impl`/`_bind_dispatch`/`_default_bind`
+(`semantics.py:874`, `:892`, `:947`, `:1166`) + `_rebind_changes_type`
+(`:1226`) + `PtoFrame.rt_bind`/`resolve_staged_local` (`:1697`, `:1268`),
+`Tensor.__setitem__`/`Tile.__setitem__`/`Array.__setitem__`
+(`typing/tensor.py:309`, `typing/tile.py:247`, `typing/array.py:140`),
+`subscript_write_offsets` (`typing/_subscript.py:286`), the tuple-unpack
+`_EmitState`/`_structural_projection` (`typing/_emit.py`), and
+`typing/const.py`.
+
+**Regime first.** Straight-line binds and subscript writes are asserted
+**raw**: both lanes emit the identical `LetStmt`/`AssignStmt` chain with no
+pass state. Every staged anchor (a rebind inside a staged loop, the
+`pl.const` accumulator, a subscript write inside a loop) is asserted **raw
+*and* post-`canonicalize()`**: raw holds because neither lane emits
+`iter_arg` for a plain loop (the loop-carried value is the self-referential
+`AssignStmt` update), and canonical is the staged-flow regime proper. The
+one exception is the type-changing rebind inside a loop — raw-equal, but its
+canonical half is red on **both** lanes (F14).
+
+| Variant | Regime | Verdict |
+| --- | --- | --- |
+| tensor subscript write, partial / bare / full-axis (`k_tensor_write_*`) | raw | equivalent |
+| tile subscript write (`k_tile_write`) | raw | equivalent |
+| array write, const and staged index (`k_array_write_*`) | raw | equivalent |
+| subscript write inside a staged `for` (`k_tensor_write_in_loop`) | raw + canonical | equivalent |
+| scalar-index rank-reducing write (`out[0, :] = src`) | n/a | **needs-decision** — tracing rejects loudly, parser accepts (`_build_assemble_offsets_and_extents` + `_lift_subscript_write_source_rank`); the tracing docstring records the omission but no design doc/manifest intends it. No shared spelling, so no anchor. Pin: `test_scalar_index_write_has_no_shared_spelling`. |
+| same-type rebind in a staged `for` / `while` (`k_rebind_in_for`, `k_rebind_in_while`) | raw + canonical | equivalent |
+| type-changing rebind, straight-line (`k_typechange_rebind`) | raw | equivalent |
+| type-changing rebind inside a staged loop (`k_typechange_rebind_in_loop`) | raw equivalent; canonical **red** | **bug — F14** |
+| rebind of a parameter name (`k_param_name_rebind`) | raw | equivalent |
+| typed staged init: bare literal / demotion inside staged flow | n/a | **intended divergence** — `docs/design/01-language.md` §4 lines 146–178 (*'a host literal cannot initialize staged state that must survive a control-flow join… the guard is symmetric: staged-ness is stable while staged control flow is open'*) + §7 lines 302–305. Tracing is loud; the parser has no host world in a body and accepts. Pinned by `test_typed_staged_init_bare_literal_rejected_by_tracing` / `test_typed_staged_init_demotion_rejected_by_tracing`. |
+| defs / store-target first-encounter order (`k_defs_store_order`) | raw | equivalent (frontend emission order). The cited `136a0f457` is a C++ **pass** determinism fix (`inline_functions_pass` / `scope_outline_utils` iterated pointer-keyed containers whose hash order follows ASLR) — out of the frontend comparison's regime (the harness runs neither outlining nor a pointer-keyed walk). Its IR contract is pinned by `tests/ut/ir/transforms/test_outline_incore_scopes.py` (the store-target walk is encounter-ordered) and by the inline-regime anchors in `test_inline.py`; the frontend residue (statement emission order) is the anchor. |
+| `pl.const` straight-line (`k_const_straightline`) | raw | equivalent |
+| `pl.const` staged init accumulator (`k_const_loop_init`) | raw + canonical | equivalent |
+| tuple unpack of a multi-result op (`k_tuple_unpack_gather`) | raw | equivalent — both name the shared node once as a `_tuple_tmp` `Let` and bind `TupleGetItemExpr` projections; the temp *name* differs (`_tuple_tmp` vs `_tuple_tmp_1`) and auto-mapping ignores it |
+| parameter world: `pl.Scalar[pl.INT32]` param (`k_scalar_param`) | raw | equivalent |
+| parameter world: plain `int` param | n/a | both lanes reject — no accepted spelling; pin `test_host_param_world_rejected_by_both_lanes` |
+| `pl.runtime` | n/a | **out of scope — no shared spelling**: it is the jit **entry-call** marker for a runtime scalar (`typing/_runtime_scalar.py`), never kernel source. In a body tracing cannot unwrap it (annotation-only) and the parser reports `Unknown operation 'pl.runtime'`. Entry-call world pinned by `tests/ut/jit/test_param_worlds.py`. Pin: `test_runtime_marker_has_no_kernel_body_spelling`. |
+
+22 new anchors in `test_binding_assignment.py` (conformance-directory call
+sites 147 → 169), all green; the suite's 23 tests pass. The one red
+canonical regime (F14) is pinned by an explicit `pytest.raises` test rather
+than kept as a red anchor, recorded below without a frontend edit, alongside
+three no-shared-spelling/divergence pins.
+
+### R8 no-anchor finding
+
+1. **F14 — a type-changing rebind inside a staged loop emits a
+   loop-body-local fresh `let`, so the post-loop name resolves to a Var
+   defined inside the loop.** `k_typechange_rebind_in_loop`
+   (`a = load; for: a = reshape(a, [1,4096]); a = reshape(a, [64,64]);
+   store(a)`) traces and parses to the byte-identical body — the first
+   reshape starts a fresh `let` (type change), the second another; the
+   post-loop `store(a)` then names the second body-local. `ConvertToSSA`
+   builds the loop `init_values` from a free variable
+   (`init_values=(a__FREE_VAR,)`) and its post verification rejects the IR
+   (`SSAVerify: 'a' used outside its defining scope`; `UseAfterDefCheck:
+   'a' used before definition`). Both frontends (parser `_assign_or_let`,
+   tracing `Sema._default_bind`) produce it identically — a *shared* §7
+   relaxed-reassignment hole, not a parity divergence; the same-type
+   rebind path assigns through and canonicalizes fine, and the
+   straight-line type change canonicalizes fine. Red check:
+   `canonicalize(function_trace(k_typechange_rebind_in_loop))` (under the
+   unit-test verification context) raises the `ConvertToSSA`
+   post-verification error; `function_parser` of the same kernel raises it
+   identically. Pinned by
+   `test_typechange_rebind_in_loop_shared_free_var`. Owner undecided
+   (needs-decision on the layer): make the frontend rebind loop-carried
+   (an `AssignStmt` to the pre-loop Var with a fresh typed Var, or a loud
+   rejection of a type-changing rebind inside staged control flow), or
+   make the SSA pass's scope handling reject/repair it. Frontend-only fixes
+   are the migration's rule. F-ids continue from F13.
+
+## 14. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
@@ -437,3 +518,4 @@ F-ids continue `docs/review-r10.md` §4's series (last F11, from R6).
 | 1 | R5 `if` / `else` / `elif` | worker session | done | *(this commit)* | 13 new anchors in `test_if.py` (suite 7 → 20 call sites; 70 → 83 across `test_*.py`), all green. **No `F*` task**: no red anchor. One intended divergence pinned (host predicate dispatch). |
 | 1 | R6 `for` + iterators | worker session | done | *(this commit)* | 28 new anchors in `test_for.py` (suite 7 → 35 call sites; 83 → 111 across `test_*.py`), all green — all four iterator kinds, the 1/2/3-arg and computed bound forms, stage pinning, `attrs=`, the INT64/INDEX for-syntax bound, nesting. No red anchor. Target forms are parser-only or rejected by both (pinned): no shared spelling. Four no-anchor acceptance divergences recorded, one filed as **F11** (`attrs=` non-string key → `std::bad_cast`). |
 | 1 | R7 `break` / `continue` | worker session | done | *(this commit)* | new suite `test_break_continue.py`: 36 anchors (18 kernels × raw + canonical; conformance-directory call sites 111 → 147), all green — nesting/target selection, the deferred staged exit ordering, exits inside `while`, post-transfer collection, innermost-kind gating, `pl.pipeline`, `pl.spmd`-nested. No red anchor, so no anchor-rule `F*`. Two no-anchor divergences recorded and filed: **F12** (tracing accepts a transfer in a top-level `pl.spmd` / `pl.split_aiv` region and emits an unparseable `break`), **F13** (the parser silently drops a loop `else` suite that tracing rejects loudly). |
+| 1 | R8 binding & assignment | worker session | done | *(this commit)* | new suite `test_binding_assignment.py`: 22 anchors (conformance-directory call sites 147 → 169), all green — subscript write (tensor/tile/array, bare/partial/full-axis/in-loop), same-type staged rebind, type-changing rebind, param-name rebind, defs/store order, `pl.const` staged init, tuple unpack, the `pl.Scalar` param world. One red canonical regime filed as **F14** (a type-changing rebind inside a staged loop yields a free variable in the SSA loop init on *both* lanes — a shared §7 hole, not a parity divergence), pinned by an explicit `pytest.raises` test. Three no-shared-spelling/divergence pins: scalar-index rank-reducing write (**needs-decision**), the typed-staged-init guard (**intended divergence**, `docs/design/01-language.md` §4), `pl.runtime` (jit-entry-only, out of scope). |

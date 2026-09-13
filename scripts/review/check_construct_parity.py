@@ -88,7 +88,7 @@ CONSTRUCTS = (
         "binding / assignment",
         r"_parse_subscript_assignment|_parse_array_subscript_assignment",
         r"^bind$|_YieldingConstruct",
-        "test_subscript_read.py",
+        "test_binding_assignment.py",
     ),
     Construct(
         "returns / exits",
