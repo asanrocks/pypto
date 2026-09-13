@@ -60,6 +60,14 @@ class IRBuilder:
         # ``begin_scope``/``end_scope`` keep it balanced; it observes no C++
         # state (the C++ LIFO remains the source of truth).
         self._scope_kinds: list[ir.ScopeKind] = []
+        # Per-open-scope MANUAL flag (``Runtime`` scopes only; ``False``
+        # otherwise). The runtime forbids a MANUAL scope nested in another
+        # MANUAL one and an AUTO scope nested in a MANUAL one, so a
+        # trace-protocol object must be able to ask "is a MANUAL scope open
+        # above me?" before it opens its own. Mirrors the AST parser's
+        # ``_manual_scope_depth`` (tracked here because the open-scope stack
+        # is the builder's, and an in-trace expansion borrows it).
+        self._scope_manuals: list[bool] = []
         # Per-open-scope user-declared ``pl.split(...)`` mode (``None`` unless
         # the scope is an InCore opened with an explicit ``split=``). Mirrors
         # the AST parser's ``_incore_user_split``: a ``pl.split_aiv`` region
@@ -249,11 +257,13 @@ class IRBuilder:
             attrs_list,
         )
         self._scope_kinds.append(scope_kind)  # append only on C++ success (the mirror stays balanced)
+        self._scope_manuals.append(bool(manual) if scope_kind is ir.ScopeKind.Runtime else False)
         self._incore_user_splits.append(split if scope_kind is ir.ScopeKind.InCore else None)
 
     def end_scope(self, span: ir.Span | None = None) -> ir.ScopeStmt:
         if self._scope_kinds:
             self._scope_kinds.pop()
+            self._scope_manuals.pop()
             self._incore_user_splits.pop()
         return self._builder.end_scope(span if span is not None else ir.Span.unknown())
 
@@ -265,6 +275,17 @@ class IRBuilder:
         synthesized InCore wrapper unless already inside a CORE_GROUP InCore
         scope (mirrors the AST parser's ``_is_inside_scope``)."""
         return scope_kind in self._scope_kinds
+
+    def is_inside_manual_scope(self) -> bool:
+        """Whether the current build position is nested inside an open MANUAL
+        runtime scope (``RuntimeScopeStmt(manual=True)``).
+
+        A read over the Python-side mirror (``_scope_manuals``); the runtime
+        forbids a MANUAL scope nested in another MANUAL one and an AUTO scope
+        nested in a MANUAL one, so the trace-protocol scope descriptors gate on
+        this before ``begin_scope``. The AST parser tracks the same fact as
+        ``_manual_scope_depth``."""
+        return any(self._scope_manuals)
 
     def enclosing_user_split(self) -> ir.SplitMode | None:
         """The user-declared ``pl.split(...)`` mode of any open InCore scope.

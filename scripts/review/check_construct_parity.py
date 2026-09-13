@@ -100,7 +100,7 @@ CONSTRUCTS = (
         "generic scopes",
         r"_parse_scope|_parse_manual_scope|_parse_legacy_scope|_parse_graph_scope",
         r"^scope$|^manual_scope$|^graph$|^cluster$",
-        None,
+        "test_generic_scopes.py",
     ),
     Construct("spmd", r"_parse_spmd", r"^spmd$", "test_spmd_with_form.py"),
     Construct("split_aiv", r"_parse_split_aiv_for_loop", r"^split_aiv$", None),

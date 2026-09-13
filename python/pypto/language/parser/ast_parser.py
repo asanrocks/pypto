@@ -4204,18 +4204,32 @@ class ASTParser:
                     span=self.span_tracker.get_span(stmt),
                     hint=f"Use 'with pl.{func_attr}():'",
                 )
+            dumps_kw: ast.keyword | None = None
             for kw in context_expr.keywords:
                 if kw.arg == "name_hint":
                     name_hint = self._parse_scope_name_hint(kw.value, f"pl.{func_attr}()")
+                elif kw.arg == "dumps":
+                    if dumps_kw is not None:
+                        raise ParserSyntaxError(
+                            f"pl.{func_attr}() got multiple values for argument 'dumps'",
+                            span=self.span_tracker.get_span(kw),
+                        )
+                    dumps_kw = kw
                 else:
                     raise ParserSyntaxError(
                         f"pl.{func_attr}() got unexpected keyword argument '{kw.arg}'",
                         span=self.span_tracker.get_span(stmt),
-                        hint="Supported keyword: 'name_hint'. For SPMD dispatch, use pl.spmd(4):",
+                        hint="Supported keywords: 'name_hint' and 'dumps'. "
+                        "For SPMD dispatch, use pl.spmd(4):",
                     )
             scope_kind = scope_kind_map[func_attr]
             span = self.span_tracker.get_span(stmt)
-            self._parse_scope_body(stmt, scope_kind, span, name_hint=name_hint)
+            # ``dumps=`` is the cluster scope's print -> reparse surface for a
+            # ``dump_vars`` attr; ``_parse_scope_body`` merges the sticky set on
+            # top. Mirrors the ``pl.graph`` path above.
+            dump_vars = self._parse_at_dumps_kwarg(dumps_kw, f"pl.{func_attr}") if dumps_kw else []
+            attrs = [("dump_vars", dump_vars)] if dump_vars else None
+            self._parse_scope_body(stmt, scope_kind, span, name_hint=name_hint, attrs=attrs)
             return
         self._parse_spmd_scope(stmt, context_expr, scope_kind_map, optional_vars=optional_vars)
 
@@ -5526,12 +5540,22 @@ class ASTParser:
                 span=span,
                 hint="Use 'with pl.graph(\"decoder_layer\"):'",
             )
-        if context_expr.keywords:
-            unexpected = context_expr.keywords[0].arg or "**kwargs"
+        dumps_kw: ast.keyword | None = None
+        for kw in context_expr.keywords:
+            if kw.arg == "dumps":
+                if dumps_kw is not None:
+                    raise ParserSyntaxError(
+                        "pl.graph() got multiple values for argument 'dumps'",
+                        span=self.span_tracker.get_span(kw),
+                    )
+                dumps_kw = kw
+                continue
+            unexpected = kw.arg or "**kwargs"
             raise ParserSyntaxError(
                 f"pl.graph() got unexpected keyword argument '{unexpected}'",
                 span=span,
-                hint="pl.graph() takes only the region name: 'with pl.graph(\"decoder_layer\"):'",
+                hint="pl.graph() takes the region name plus an optional dumps=[...] list: "
+                "'with pl.graph(\"decoder_layer\", dumps=[t]):'",
             )
 
         name = self._parse_scope_name_hint(context_expr.args[0], "pl.graph()")
@@ -5542,7 +5566,13 @@ class ASTParser:
                 hint="The name becomes the recorded graph's symbol: 'with pl.graph(\"decoder_layer\"):'",
             )
 
-        self._parse_scope_body(stmt, ir.ScopeKind.Graph, span, name_hint=name)
+        # ``dumps=`` is the explicit spelling of a scope-level selective-dump
+        # set — the print -> reparse surface for a ``dump_vars`` attr (the
+        # tracing ``pl.dump_tag`` marker is forward-sticky and attaches no IR
+        # statement). ``_parse_scope_body`` merges the sticky set on top.
+        dump_vars = self._parse_at_dumps_kwarg(dumps_kw, "pl.graph") if dumps_kw else []
+        attrs = [("dump_vars", dump_vars)] if dump_vars else None
+        self._parse_scope_body(stmt, ir.ScopeKind.Graph, span, name_hint=name, attrs=attrs)
 
     def _parse_at_scope(
         self, stmt: ast.With, context_expr: ast.Call, optional_vars: "ast.expr | None" = None
@@ -5934,8 +5964,12 @@ class ASTParser:
             resolved.append(var)
         return resolved
 
-    def _parse_at_dumps_kwarg(self, kw: "ast.keyword") -> list[ir.Var]:
+    def _parse_at_dumps_kwarg(self, kw: "ast.keyword", owner: str = "pl.at") -> list[ir.Var]:
         """Resolve ``pl.at(dumps=[t1, t2])`` entries to outer-scope tensor Vars.
+
+        ``owner`` names the construct in the diagnostics (``pl.graph`` /
+        ``pl.cluster`` take the same kwarg — the scope-side selective-dump
+        surface, and their only printed surface for a ``dump_vars`` attr).
 
         Mirrors :meth:`_parse_at_no_dep_args_kwarg`: each entry must be a bare
         Name resolving to a Tensor-typed Var. ``dumps=`` is the explicit
@@ -5952,7 +5986,7 @@ class ASTParser:
         """
         if not isinstance(kw.value, (ast.List, ast.Tuple)):
             raise ParserTypeError(
-                "pl.at(dumps=...) must be a list literal of tensor names",
+                f"{owner}(dumps=...) must be a list literal of tensor names",
                 span=self.span_tracker.get_span(kw),
                 hint="Use `dumps=[t1, t2]` with bare tensor names visible to the enclosing function.",
             )
@@ -5962,7 +5996,7 @@ class ASTParser:
         for elt in kw.value.elts:
             if not isinstance(elt, ast.Name):
                 raise ParserTypeError(
-                    "pl.at(dumps=[...]) entries must be bare tensor names",
+                    f"{owner}(dumps=[...]) entries must be bare tensor names",
                     span=self.span_tracker.get_span(elt),
                     hint="Use `dumps=[t]` where `t` is a tensor variable visible "
                     "to the enclosing function scope.",
@@ -5970,19 +6004,19 @@ class ASTParser:
             var = self.scope_manager.lookup_var(elt.id)
             if var is None:
                 raise ParserTypeError(
-                    f"pl.at(dumps=[...]) references unknown name '{elt.id}'",
+                    f"{owner}(dumps=[...]) references unknown name '{elt.id}'",
                     span=self.span_tracker.get_span(elt),
                     hint="Each entry must resolve to a tensor visible in the enclosing function scope.",
                 )
             if not isinstance(var.type, ir.TensorType):
                 raise ParserTypeError(
-                    f"pl.at(dumps=[...]) entry '{elt.id}' is not a tensor (got type {var.type})",
+                    f"{owner}(dumps=[...]) entry '{elt.id}' is not a tensor (got type {var.type})",
                     span=self.span_tracker.get_span(elt),
                     hint="Only tensors can be selectively dumped.",
                 )
             if id(var) in seen:
                 raise ParserTypeError(
-                    f"pl.at(dumps=[...]) lists '{elt.id}' more than once",
+                    f"{owner}(dumps=[...]) lists '{elt.id}' more than once",
                     span=self.span_tracker.get_span(elt),
                     hint="Each tensor may appear at most once in `dumps=`.",
                 )

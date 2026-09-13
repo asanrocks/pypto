@@ -837,7 +837,207 @@ trailing-return/early-return contract is already covered by
 
 F-ids continue from F14.
 
-## 15. Round ledger
+## 15. R10 verdicts — generic scopes (scope / manual_scope / graph / cluster)
+
+Both sides read before verdicting: the parser's `_parse_scope`
+(`ast_parser.py:4064`, the `mode=` kwarg), `_parse_manual_scope` (`:4090`),
+`_emit_runtime_scope` (`:4101`, the manual-depth / AUTO-opt-in gates),
+`_parse_legacy_scope` (`:4141`, `pl.cluster`), `_parse_scope_body` (`:5365`,
+the single `builder.scope(...)` injection point), `_parse_graph_scope`
+(`:5421`) and `_parse_scope_name_hint` (`:4039`); the tracing lane's rewriter
+row `_with_row` (`rewriter.py:1485`) → `Sema.create_with_construct`
+(`semantics.py:1548`) → `PtoWithConstruct` (`tracer/constructs.py:576`), the
+four descriptors in `constructs/scopes.py` (`scope` `:222`, `graph` `:309`,
+`manual_scope` `:448`, `cluster` `:536`), and the shared
+`IRBuilder.begin_scope`/`end_scope` (`ir/builder.py:222`, `:254`).
+
+**Regime first.** A scope is a transparent region on both lanes — neither
+frontend emits `iter_arg`/`return_var` for it — so every straight-line scope
+anchor is asserted **raw** and lands green. Anchors whose scope body contains
+staged control flow, or which sit inside staged control flow, are asserted
+**raw *and* post-`canonicalize()`**; raw holds because the region is
+transparent (the loop-carried value is the self-referential `AssignStmt`
+update on both sides) and canonical is the staged-flow regime proper. One
+variant is raw-only: a scope *inside* a loop whose rebinding is loop-carried
+(`k_manual_in_loop`) hits a printer gap in the canonical shape (F22, below) —
+the frontends agree (verified with the roundtrip instrument bypassed) but
+the post-SSA text cannot be re-parsed, so the canonical half is pinned rather
+than asserted through the harness.
+
+| Variant | Regime | Verdict |
+| --- | --- | --- |
+| `with pl.scope(mode=pl.ScopeMode.MANUAL):` straight-line (`k_scope_manual`) | raw | equivalent |
+| statements around the scope (`k_scope_manual_fence`) | raw | equivalent |
+| manual `pl.scope` wrapping a staged `for` (`k_scope_manual_around_loop`) | raw + canonical | equivalent |
+| `with pl.scope():` under `auto_scope=False` (`ScopeAutoOff`, program) | raw | equivalent |
+| `with pl.scope(mode=pl.ScopeMode.AUTO):` under `auto_scope=False` (`ScopeAutoOffExplicit`, program) | raw | equivalent |
+| bare `pl.manual_scope()` (`k_manual_scope`) | raw | equivalent |
+| scope body-local used after the scope (`k_manual_leak`) | raw | equivalent |
+| rebind of an outer local inside the scope (`k_manual_shadow`) | raw | equivalent |
+| `pl.manual_scope` wrapping a staged `for` (`k_manual_around_loop`) | raw + canonical | equivalent |
+| `pl.manual_scope` inside a staged `for` (`k_manual_in_loop`) | raw | equivalent (canonical pinned — **F22**) |
+| scope inside one branch of a staged `if`, divergent bind (`k_manual_cond_bind`) | raw + canonical | equivalent |
+| staged `if` inside the scope (`k_manual_nested_if`) | raw + canonical | equivalent |
+| early return inside the scope (`k_return_in_manual`) | raw + canonical | equivalent |
+| scope in an Orchestration entry / in an InCore body (`ManualInOrch`, `ManualInInCore`, program) | raw | equivalent (neither lane enforces the docstring's placement rule) |
+| bare `with pl.graph("decoder"):` (`k_graph`) | raw | equivalent |
+| graph region inside a staged `for` (`k_graph_in_loop`) | raw + canonical | equivalent |
+| cluster region inside a graph region (`GraphThenCluster`, program) | raw | equivalent |
+| bare `pl.cluster()` / `pl.cluster(name_hint="grp")` (`k_cluster`, `k_cluster_named`) | raw | equivalent |
+| cluster nested in a cluster (`k_cluster_nested`) | raw | equivalent |
+| cluster wrapping a staged `for` (`k_cluster_around_loop`) | raw + canonical | equivalent |
+| manual scope inside a cluster (`k_manual_in_cluster`) | raw | equivalent |
+| cluster in an Orchestration entry (`ClusterInOrch`, program) | raw | equivalent |
+| `pl.dump_tag(t)` before a `pl.graph` region (`GraphDumpTag`) | raw | equivalent (**F18**, fixed by C1) |
+| scope-level `dump_vars` print -> parse (`GraphDumpTag` / `GraphDumpTagCluster`) | n/a (both lanes drop it) | **bug — F39, fixed** (filed by C1; the printer now emits the attr as a `dumps=[...]` kwarg on `pl.graph` / `pl.cluster` and both lanes' parser rebuilds it) |
+| `pl.dump_tag(t)` before a `pl.cluster` region | raw | equivalent (the tracing cluster hook merges the sticky set) |
+| `pl.graph("")`; graph nested in graph / in `pl.at` / in `pl.cluster` / in a device-side body; `as` target on any generic scope | n/a (both lanes reject) | out of scope — no accepted spelling (pinned: `test_graph_placement_rejected_by_both_lanes`, `test_graph_in_device_body_rejected_by_both_lanes`, `test_graph_empty_name_rejected_by_both_lanes`, `test_scope_as_target_rejected_by_both_lanes`) |
+| `pl.scope(mode=1)` / `mode="MANUAL"` | n/a (parser rejects, tracing accepts) | **accepted divergence — F19** (R2: tracing may be a superset; no fix) |
+| manual scope in a manual scope; AUTO scope in a manual scope under `auto_scope=False` | n/a (both lanes reject) | equivalent (**F20**, fixed by C2; rejection pins `test_nested_manual_scope_rejected_by_both_lanes`, `test_auto_scope_in_manual_rejected_by_both_lanes`) |
+| non-identifier `pl.graph` name / `pl.cluster(name_hint=...)` | n/a (parser rejects, tracing accepts) | **accepted divergence — F21** (R2: tracing may be a superset; no fix) |
+| `pl.graph(name="x")`; `pl.scope(pl.ScopeMode.MANUAL)` (positional) | n/a (parser rejects) | **needs-decision** — tracing-lenient spellings, same IR, no doc decides (pinned) |
+| `pl.cluster(name_hint=1)` | n/a (both lanes reject) | **needs-decision** — tracing's rejection surfaces from nanobind, not the frontend (pinned) |
+
+31 anchors in the new `test_generic_scopes.py` (25 function-level
+`conformance(...)` call sites, 6 `program_conformance(...)`), plus the
+no-shared-spelling pins in the same suite (37 test functions, **45 collected
+tests**). Conformance-directory call sites 195 → 226;
+conformance-directory tests 310 → 355; all green. No red anchor is kept — every
+red finding is pinned instead.
+
+### R10 findings (all frontends left alone)
+
+1. **F18 — a `pl.graph` region drops the forward-sticky `dump_vars`.**
+   `pl.dump_tag(t)` before a graph region: the parser's `_parse_scope_body`
+   merges the tagged set for every non-Runtime kind
+   (`_merge_forward_sticky_dump`, `ast_parser.py:5313`), while the tracing
+   `graph.__trace_enter__` calls `begin_scope` with no `attrs` at all
+   (`constructs/scopes.py:419`); the cluster hook *does* merge
+   (`:575`), and that anchor is green. Red check:
+   `test_graph_scope_drops_sticky_dump_vars` — the parsed graph scope carries
+   `dump_vars`, the traced one has no attrs, `assert_structural_equal` raises
+   on the attr dict. Caveat recorded with the pin: the parser's own attr is
+   not print-stable either (`parse(as_python())` drops it), and
+   `scope_outline_utils` consumes `dump_vars` only on the *dispatch* paths,
+   not in `OutlineGraphScopes` — so the parser-side attachment may be the
+   over-eager half. **State: fixed by C1** — the ratified decision rules
+   (`docs/fix-construct-parity.md` §5) classify this as an R4 subset
+   violation, so the tracing `graph.__trace_enter__` now merges the
+   forward-sticky set at scope entry exactly like the cluster hook; the
+   pin is rewritten into the anchor `test_graph_dump_tag_anchor`. The
+   print-instability caveat is real and symmetric (both lanes drop the attr)
+   and is filed as **F39**, not fixed here.
+2. **F19 — a non-enum `mode=` silently selects AUTO on the tracing lane.**
+   `pl.scope(mode=1)` / `pl.scope(mode="MANUAL")` pass the `scope` ctor
+   unchanged (`constructs/scopes.py:255`), then
+   `manual=(self.mode == ScopeMode.MANUAL)` (`:273`) is False and the AUTO
+   gate (`:269`) passes because `self.mode == ScopeMode.AUTO` is False too —
+   a hand-placed **AUTO** scope in a default `auto_scope=True` body, the
+   exact spelling the parser rejects and the tracing frontend is supposed to
+   gate on `auto_scope=False`. Red check:
+   `test_scope_mode_is_not_validated_by_tracing` — the traced scope has
+   `manual is False` while `function_parser` raises `Expected
+   pl.ScopeMode.<name>`, and the printed text fails to re-parse
+   (`requires @pl.function(auto_scope=False)`).
+3. **F20 — the manual-depth rules are parser-only.** The parser tracks
+   `_manual_scope_depth` (`ast_parser.py:4112`/`:4133`) and rejects
+   manual-in-manual, and rejects AUTO-inside-MANUAL under
+   `auto_scope=False`; the tracing `scope` / `manual_scope` hooks have no
+   counter, so both spellings are accepted and emit nested
+   `RuntimeScopeStmt(manual=True)` whose printed text fails to re-parse.
+   Red checks: `test_nested_manual_scope_has_no_shared_spelling`,
+   `test_auto_scope_in_manual_has_no_shared_spelling`. **State: fixed by
+   C2** — ratified as an R4 subset violation (`docs/fix-construct-parity.md`
+   §4/§5), so the tracing lane moves. The `IRBuilder` now mirrors the MANUAL
+   flag of each open scope (`_scope_manuals`, the tracing counterpart of the
+   parser's `_manual_scope_depth`) and the `scope` / `manual_scope` hooks
+   gate on `ctx.is_inside_manual_scope()` before `begin_scope`, with the
+   parser's messages and hints verbatim. The pins are rewritten into
+   `test_nested_manual_scope_rejected_by_both_lanes` and
+   `test_auto_scope_in_manual_rejected_by_both_lanes`; the complement the
+   gate must not over-reach (`AUTO` then `MANUAL` under `auto_scope=False`,
+   legal because only the enclosing scope's *manual* flag counts) is anchored
+   by `test_manual_scope_inside_auto_scope_anchor`.
+4. **F21 — the name-hint validation is parser-only.**
+   `_parse_scope_name_hint` (`ast_parser.py:4039`) requires a non-keyword
+   identifier; the tracing `graph` ctor checks only `str` + non-empty and
+   `cluster` checks nothing, so `pl.graph("has space")` /
+   `pl.cluster(name_hint="has space")` reach the IR and the printed form
+   fails to re-parse. Red check:
+   `test_scope_name_hint_validation_is_parser_only`.
+5. **F22 — the printer loses the yield assignment LHS inside a manual
+   runtime scope.** After `convert_to_ssa`, a loop-carried value updated
+   inside a manual scope yields *inside* the scope body (graph/cluster place
+   the yield outside — a pass-side difference, not a frontend one), and
+   `IRPythonPrinter::VisitStmtBody` special-cases only
+   `rscope && !rscope->manual_` (`src/ir/transforms/python_printer.cpp:2659`),
+   so the text is a bare `pl.yield_(...)` that the parser rejects (`Loop with
+   init_values requires an assignment-form pl.yield_(...)`). Red check:
+   `test_scope_in_loop_canonical_is_printer_gap` — with the
+   RoundtripInstrument bypassed (`passes.PassContext([],
+   VerificationLevel.NONE)`) both lanes' canonical IR is structurally equal,
+   which localizes the gap to the printer. Printer-side; needs-decision on
+   the layer.
+
+6. **F39 — a scope-level `dump_vars` attr is not print-stable** (filed by C1
+   while fixing F18). `pl.dump_tag` is a trace-time marker that emits no IR
+   statement, and neither `pl.graph` nor `pl.cluster` accepted a `dumps=`
+   kwarg, so `parse(as_python())` dropped the attr off both scope kinds. Both
+   lanes lost it identically, so it is a printer/parser-coverage hole, not a
+   parity divergence. Pin: `test_scope_dump_vars_is_not_print_stable`.
+   **State: fixed** (fix-campaign task F39). The printer's graph / cluster
+   visitors now call `PrintScopeDumpAttr` (`python_printer.cpp`: the same
+   emitter `pl.at` scopes use), and `pl.graph` / `pl.cluster` take `dumps=`
+   on both lanes (`ast_parser.py`'s `_parse_at_dumps_kwarg` gained an `owner`
+   parameter; `constructs/scopes.py`'s graph/cluster hooks merge the explicit
+   list with the forward-sticky set through the shared
+   `_explicit_dump_attrs`). The pin is rewritten into
+   `test_scope_dump_vars_roundtrip_anchor` plus the explicit-surface anchor
+   `test_explicit_scope_dumps_anchor`.
+
+Frontend-side gaps 2–4 share one diagnostic home
+(`constructs/scopes.py`'s four descriptors) but are recorded separately
+because they are separate rules; F18 (the round's only anchor red) was fixed
+by C1 and F20 by C2 under the ratified R4 ruling, while findings 2 and 4
+(F19, F21) are R2-legal acceptance divergences per
+`docs/fix-construct-parity.md` §5 and take no fix.
+
+### Discovered tasks
+
+- **F18 — a `pl.graph` region drops the forward-sticky `dump_vars` the
+  parser attaches** (finding 1). Red check and pin as above. **Fixed by
+  C1** in the fix campaign (`docs/fix-construct-parity.md` §6): the
+  tracing lane now matches the parser's GraphScopeStmt attrs; the pin
+  became the anchor `test_graph_dump_tag_anchor`.
+- **F39 — a scope-level `dump_vars` attr has no printed surface** (finding
+  6; filed by C1). Pin as above. Printer/parser-coverage, both lanes — not
+  a parity item. **State: fixed** (fix-campaign task F39): the printer
+  emits the attr as a `dumps=[...]` kwarg on `pl.graph` / `pl.cluster` and
+  both lanes accept the spelling, so print -> reparse is a fixpoint. The
+  pin became `test_scope_dump_vars_roundtrip_anchor` +
+  `test_explicit_scope_dumps_anchor`.
+- **F19 — `pl.scope(mode=<non-enum>)` silently selects AUTO in a default
+  `auto_scope=True` body** (finding 2). Red check and pin as above.
+  Frontend-only.
+- **F20 — the tracing generic-scope descriptors do not track manual-scope
+  nesting** (manual-in-manual; AUTO-in-manual under `auto_scope=False`)
+  (finding 3). Red checks and pins as above. Frontend-only. **Fixed by
+  C2** in the fix campaign (`docs/fix-construct-parity.md` §6): the
+  tracing hooks now gate on the builder's open-scope manual mirror; the
+  pins became the rejection pairs
+  `test_nested_manual_scope_rejected_by_both_lanes` /
+  `test_auto_scope_in_manual_rejected_by_both_lanes`, with the complement
+  anchored as `test_manual_scope_inside_auto_scope_anchor`.
+- **F21 — the tracing `graph`/`cluster` descriptors do not validate the
+  region name / `name_hint` as an identifier** (finding 4). Red check and
+  pin as above. Frontend-only.
+- **F22 — the Python printer drops the `var = pl.yield_(...)` assignment LHS
+  when the yield sits inside a manual `RuntimeScopeStmt` body** (finding 5).
+  Red check and pin as above. Printer-side.
+
+F-ids continue from F17.
+
+## 16. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
@@ -848,3 +1048,4 @@ F-ids continue from F14.
 | 1 | R7 `break` / `continue` | worker session | done | *(this commit)* | new suite `test_break_continue.py`: 36 anchors (18 kernels × raw + canonical; conformance-directory call sites 111 → 147), all green — nesting/target selection, the deferred staged exit ordering, exits inside `while`, post-transfer collection, innermost-kind gating, `pl.pipeline`, `pl.spmd`-nested. No red anchor, so no anchor-rule `F*`. Two no-anchor divergences recorded and filed: **F12** (tracing accepts a transfer in a top-level `pl.spmd` / `pl.split_aiv` region and emits an unparseable `break`), **F13** (the parser silently drops a loop `else` suite that tracing rejects loudly). |
 | 1 | R8 binding & assignment | worker session | done | *(this commit)* | new suite `test_binding_assignment.py`: 22 anchors (conformance-directory call sites 147 → 169), all green — subscript write (tensor/tile/array, bare/partial/full-axis/in-loop), same-type staged rebind, type-changing rebind, param-name rebind, defs/store order, `pl.const` staged init, tuple unpack, the `pl.Scalar` param world. One red canonical regime filed as **F14** (a type-changing rebind inside a staged loop yields a free variable in the SSA loop init on *both* lanes — a shared §7 hole, not a parity divergence), pinned by an explicit `pytest.raises` test. Three no-shared-spelling/divergence pins: scalar-index rank-reducing write (**needs-decision**), the typed-staged-init guard (**intended divergence**, `docs/design/01-language.md` §4), `pl.runtime` (jit-entry-only, out of scope). |
 | 1 | R9 returns / exits | worker session | done | *(this commit)* | new suite `test_return_exit.py`: 19 anchors (12 kernels; conformance-directory call sites 169 → 188; conformance-dir tests 288 → 310), all green — the trailing single-return contract (multi-value, scalar, bare, void), returns inside `elif`/branch/loop/`pl.spmd`/`pl.at` (raw + canonical), plus the `@pl.expand` no-spelling witness and the declared-`->` intended divergence. Three red findings filed and pinned: **F15** (a statement after a function-level `return` is dropped by tracing, collected by the parser), **F16** (an inline callee's multi-value trailing return: pass splice multi-value vs parser `MakeTuple`), **F17** (the parser's inline expansion silently drops an early return under staged control flow that both tracing entrances reject loudly). Two needs-decision no-anchor divergences: host-valued return elements dropped by tracing; `return [a, b]` MakeTuple-vs-multi-value dialect collision. `scripts/review/check_construct_parity.py`'s construct map now points `returns / exits` at the new suite. |
+| 2 | R10 generic scopes (`scope` / `manual_scope` / `graph` / `cluster`) | worker session | done | *(this commit)* | new suite `test_generic_scopes.py`: 31 anchors (25 function-level + 6 program-level) + rejection/divergence pins (conformance-directory call sites 195 → 226; conformance-dir tests 310 → 355), all green — the four descriptors straight-line, inside/around staged control flow, the `auto_scope=False` AUTO spellings, scope leak/shadow/return/cond-bind semantics, cluster/graph nesting, placement rules, `as`-target rejection. Five findings filed and pinned: **F18** (a `pl.graph` region drops the forward-sticky `dump_vars` the parser attaches — the round's only red anchor), **F19** (`pl.scope(mode=<non-enum>)` silently selects AUTO), **F20** (no manual-scope nesting tracking on the tracing side), **F21** (graph/cluster name-hint identifier validation is parser-only), **F22** (the printer drops the yield LHS inside a manual runtime scope). Two needs-decision acceptance-only gaps (`pl.graph(name=...)` keyword, positional `pl.scope(MODE)`), one diagnostic-quality note (non-string `name_hint` fails in nanobind). `scripts/review/check_construct_parity.py`'s construct map now points `generic scopes` at the new suite (7 of 16 constructs now anchorless, down from 10). |

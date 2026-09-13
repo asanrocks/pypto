@@ -183,6 +183,26 @@ def _buffer_cache_policy(decls: list[tuple[_ir.Var, int]], var: _ir.Var, policy:
         )
 
 
+def _explicit_dump_attrs(dumps: list[Tensor] | None, owner: str) -> list[tuple[str, object]]:
+    """Build the ``dump_vars`` attr list from an explicit ``dumps=`` kwarg.
+
+    The mirror of the AST parser's ``_parse_at_dumps_kwarg`` attrs arm, shared
+    by the scope kinds whose only printed surface for a ``dump_vars`` attr is
+    this kwarg (``pl.graph`` / ``pl.cluster``; ``pl.at`` collects its own and
+    also takes ``no_dep_args=``). Entries must be staged (outer-scope) facade
+    values; ``unwrap`` yields the Var the parser's name lookup would resolve.
+    Returns ``[]`` for an empty list so callers treat it as a no-op.
+    """
+    if not dumps:
+        return []
+    for t in dumps:
+        if not hasattr(t, "unwrap"):
+            raise TypeError(
+                f"{owner}(dumps=[...]) entries must be staged (outer-scope) values, got {t!r}"
+            )
+    return [("dump_vars", [t.unwrap() for t in dumps])]
+
+
 def _merge_sticky_dump_vars(
     attrs: list[tuple[str, object]] | None,
     tagged: list[_ir.Var],
@@ -223,6 +243,21 @@ class ScopeMode(Enum):
     MANUAL = 1
 
 
+def _reject_nested_manual_scope(ctx: TraceContext) -> None:
+    """Reject a MANUAL runtime scope opened inside another MANUAL one.
+
+    The runtime forbids the nesting, so the tracing lane enforces it where the
+    parser does: at the scope's opening. The parser counts
+    ``_manual_scope_depth``; here the open-scope mirror answers the same
+    question, which also covers an in-trace expansion whose body opens a manual
+    scope (it borrows the parent builder, so it sees the enclosing scope)."""
+    if ctx.is_inside_manual_scope():
+        raise ParserSyntaxError(
+            "a manual scope may not be nested inside another manual scope",
+            hint="Flatten the nested manual scope into the enclosing one, or move it outside.",
+        )
+
+
 class scope:
     """Context manager marking a PTO runtime scope (``SIMPLER_SCOPE``) region.
 
@@ -252,6 +287,8 @@ class scope:
         (in the default ``auto_scope=True`` the compiler owns AUTO placement).
       - ``mode=MANUAL`` is allowed in either mode (it is a dependency-semantics
         choice, not ring tuning).
+      - A MANUAL scope may not nest inside another MANUAL scope (runtime
+        forbids).
       - AUTO scope may not nest inside a MANUAL scope (runtime forbids).
     """
 
@@ -273,6 +310,13 @@ class scope:
         if self.mode == ScopeMode.AUTO and ctx.auto_scope_enabled():
             raise ParserSyntaxError(
                 "a hand-placed AUTO 'with pl.scope()' requires @pl.function(auto_scope=False)"
+            )
+        if self.mode == ScopeMode.MANUAL:
+            _reject_nested_manual_scope(ctx)
+        elif self.mode == ScopeMode.AUTO and ctx.is_inside_manual_scope():
+            raise ParserSyntaxError(
+                "an AUTO scope may not be nested inside a manual scope",
+                hint="The runtime forbids AUTO scope nested in MANUAL scope; move it outside.",
             )
         ctx.builder.begin_scope(_ir.ScopeKind.Runtime, manual=(self.mode == ScopeMode.MANUAL))
         self._begun = True
@@ -330,6 +374,10 @@ class graph:
         name: Region name. Must be a valid Python identifier; it becomes the
             outlined function's name and hence the runtime's graph key, so keep
             it stable across edits.
+        dumps: Optional list of outer-scope tensors to mark for selective tensor
+            dump. The graph scope's ``dump_vars`` surface — symmetric with
+            ``pl.at(dumps=...)`` and the print -> reparse spelling for a set
+            ``pl.dump_tag`` attached at scope entry.
 
     Returns:
         Context manager for the Graph scope.
@@ -354,7 +402,7 @@ class graph:
         }
     )
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, dumps: list[Tensor] | None = None) -> None:
         # The ctor pins its user boundary to one non-empty string literal: the
         # name is the graph key, so no path auto-generates one (an auto name
         # would silently change whenever an unrelated region was added).
@@ -371,6 +419,9 @@ class graph:
                 "recorded graph's symbol: 'with pl.graph(\"decoder_layer\"):'"
             )
         self.name = name
+        # Explicit selective-dump targets — the scope-level ``dumps=`` surface
+        # and the print -> reparse spelling for a ``dump_vars`` attr.
+        self.dumps = dumps
         self._begun: bool = False  # whether open fired (never-begun no-op for auto-unwind)
 
     def __trace_enter__(
@@ -383,7 +434,9 @@ class graph:
         producer TaskId. Placement rejections mirror the AST parser's: a Graph
         region records a topology of task launches, so it must sit around the
         dispatches, never inside a device scope, inside another Graph, or in a
-        device-side kernel body."""
+        device-side kernel body. The forward-sticky ``pl.dump_tag`` set merges
+        onto the scope at entry, mirroring the cluster hook and the parser's
+        ``_parse_scope_body`` merge."""
         if as_name is not None:
             raise TypeError(
                 "with pl.graph(...) as ...: is not supported — a Graph scope captures no producer TaskId"
@@ -420,7 +473,13 @@ class graph:
                 hint="The host_build_graph runtime cannot record a graph inside a graph. Mark "
                 "either the outer region or the inner one, not both.",
             )
-        ctx.builder.begin_scope(_ir.ScopeKind.Graph, name_hint=self.name)
+        ctx.builder.begin_scope(
+            _ir.ScopeKind.Graph,
+            name_hint=self.name,
+            attrs=_merge_sticky_dump_vars(
+                _explicit_dump_attrs(self.dumps, "pl.graph"), ctx.sticky_dump_vars()
+            ),
+        )
         self._begun = True
 
     def __trace_exit__(self, ctx: TraceContext) -> None:
@@ -499,11 +558,13 @@ class manual_scope:
 
         This mirrors ``scope.__trace_enter__`` with ``manual=True``; the
         printed ``with pl.scope(mode=MANUAL):`` form uses the same protocol
-        object."""
+        object. The MANUAL-in-MANUAL rejection is the same runtime rule the
+        parser enforces through ``_manual_scope_depth``."""
         if as_name is not None:
             raise TypeError(
                 "with pl.manual_scope() as ...: is not supported — a runtime scope captures no value"
             )
+        _reject_nested_manual_scope(ctx)
         ctx.builder.begin_scope(_ir.ScopeKind.Runtime, manual=True)
         self._begun = True
 
@@ -546,6 +607,9 @@ class cluster:
 
     Args:
         name_hint: Optional name hint for the outlined function.
+        dumps: Optional list of outer-scope tensors to mark for selective tensor
+            dump — the cluster scope's ``dump_vars`` surface and its print ->
+            reparse spelling (symmetric with ``pl.at(dumps=...)``).
 
     Returns:
         Context manager for Cluster scope
@@ -556,8 +620,11 @@ class cluster:
         ...         y = pl.add(x, x)
     """
 
-    def __init__(self, *, name_hint: str = "") -> None:
+    def __init__(self, *, name_hint: str = "", dumps: list[Tensor] | None = None) -> None:
         self.name_hint = name_hint
+        # Explicit selective-dump targets — the scope-level ``dumps=`` surface
+        # and the print -> reparse spelling for a ``dump_vars`` attr (F39).
+        self.dumps = dumps
         self._begun: bool = False  # whether open fired (never-begun no-op for auto-unwind)
 
     def __trace_enter__(
@@ -576,7 +643,9 @@ class cluster:
         ctx.builder.begin_scope(
             _ir.ScopeKind.Cluster,
             name_hint=self.name_hint,
-            attrs=_merge_sticky_dump_vars(None, ctx.sticky_dump_vars()),
+            attrs=_merge_sticky_dump_vars(
+                _explicit_dump_attrs(self.dumps, "pl.cluster"), ctx.sticky_dump_vars()
+            ),
         )
         self._begun = True
 

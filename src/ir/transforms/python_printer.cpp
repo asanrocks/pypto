@@ -448,10 +448,12 @@ class IRPythonPrinter : public IRVisitor {
 
   // Emit a comma-prefixed kwarg ``, <kwarg_name>=[v1, v2, ...]`` from the
   // list-of-VarPtr attr keyed by ``attr_key`` on ``op``. Skips null entries so
-  // the rendered Python stays syntactically valid. Returns false when the attr
-  // is absent or every entry is null. Shared by the two scope-attr printers
-  // below so the null-filter rule lives in one place.
-  bool PrintScopeVarListKwarg(const ScopeStmtPtr& op, const char* attr_key, const char* kwarg_name);
+  // the rendered Python stays syntactically valid. ``first`` suppresses the
+  // comma for a caller whose scope header has no preceding kwarg. Returns false
+  // when the attr is absent or every entry is null. Shared by the two
+  // scope-attr printers below so the null-filter rule lives in one place.
+  bool PrintScopeVarListKwarg(const ScopeStmtPtr& op, const char* attr_key, const char* kwarg_name,
+                              bool first = false);
 
   // Emit ``no_dep_args=[t1, t2]`` if the scope carries ``kAttrArgDirOverrideVars``;
   // returns true when something was printed. Common to InCore/Hierarchy scope
@@ -480,8 +482,9 @@ class IRPythonPrinter : public IRVisitor {
   // dump list is the carrier from ``pl.dump_tag`` / an explicit ``dumps=`` to
   // the outliner (which translates it into the synthesised dispatch's
   // ``kAttrDumpVars``), so it must survive a print/reparse roundtrip while the
-  // scope still exists.
-  bool PrintScopeDumpAttr(const ScopeStmtPtr& op);
+  // scope still exists. ``first`` drops the leading comma for a caller whose
+  // scope header has no preceding kwarg (the bare ``pl.cluster(...)`` form).
+  bool PrintScopeDumpAttr(const ScopeStmtPtr& op, bool first = false);
 
   // Emit ``allow_early_resolve=True`` if the scope carries the
   // ``allow_early_resolve`` attr; returns true when printed. The outliner reads
@@ -2092,12 +2095,13 @@ void IRPythonPrinter::VisitStmt_(const WhileStmtPtr& op) {
 // so the roundtrip parser can recover it. Returns true when something was
 // printed.
 // Emit a comma-prefixed kwarg ``, <name>=[v1, v2, ...]`` from the list-of-VarPtr
-// attr ``key`` on ``op``. Null entries are skipped so the rendered Python is
+// attr ``key`` on ``op`` (``first`` drops the comma for a header with no
+// preceding kwarg). Null entries are skipped so the rendered Python is
 // always syntactically valid (e.g. ``deps=[t1, t3]`` rather than ``deps=[t1, , t3]``)
 // — some transforms intentionally leave null slots in dep-edge lists.
 // Returns false (no output) when the attr is missing or every entry is null.
 bool IRPythonPrinter::PrintScopeVarListKwarg(const ScopeStmtPtr& op, const char* attr_key,
-                                             const char* kwarg_name) {
+                                             const char* kwarg_name, bool first) {
   for (const auto& [k, v] : op->attrs_) {
     if (k != attr_key) continue;
     const auto* vars = std::any_cast<std::vector<VarPtr>>(&v);
@@ -2108,7 +2112,7 @@ bool IRPythonPrinter::PrintScopeVarListKwarg(const ScopeStmtPtr& op, const char*
       if (var) non_null.push_back(var.get());
     }
     if (non_null.empty()) continue;
-    stream_ << ", " << kwarg_name << "=[";
+    stream_ << (first ? "" : ", ") << kwarg_name << "=[";
     for (size_t i = 0; i < non_null.size(); ++i) {
       if (i > 0) stream_ << ", ";
       stream_ << GetVarName(non_null[i]);
@@ -2165,8 +2169,8 @@ void IRPythonPrinter::PrintScopeOptimizations(SplitMode split, const ScopeStmtPt
   stream_ << "]";
 }
 
-bool IRPythonPrinter::PrintScopeDumpAttr(const ScopeStmtPtr& op) {
-  return PrintScopeVarListKwarg(op, kAttrDumpVars, "dumps");
+bool IRPythonPrinter::PrintScopeDumpAttr(const ScopeStmtPtr& op, bool first) {
+  return PrintScopeVarListKwarg(op, kAttrDumpVars, "dumps", first);
 }
 
 bool IRPythonPrinter::PrintScopeAllowEarlyResolveAttr(const ScopeStmtPtr& op) {
@@ -2287,9 +2291,17 @@ void IRPythonPrinter::VisitStmt_(const InCoreScopeStmtPtr& op) {
 
 void IRPythonPrinter::VisitStmt_(const ClusterScopeStmtPtr& op) {
   stream_ << "with " << prefix_ << ".cluster(";
+  bool first = true;
   if (!op->name_hint_.empty()) {
     stream_ << "name_hint=\"" << op->name_hint_ << "\"";
+    first = false;
   }
+  // A scope-level selective-dump set (``pl.dump_tag`` attaches it to every
+  // non-runtime scope) has no other printed surface; ``pl.cluster(dumps=...)``
+  // is the round-trip spelling, mirroring ``pl.at``. Dropping it would make
+  // print -> reparse lossy (F39). ``first`` keeps the bare ``pl.cluster(...)``
+  // form comma-free.
+  PrintScopeDumpAttr(op, first);
   stream_ << "):\n";
   IncreaseIndent();
   PrintStmtBlock(op->body_);
@@ -2299,7 +2311,10 @@ void IRPythonPrinter::VisitStmt_(const ClusterScopeStmtPtr& op) {
 void IRPythonPrinter::VisitStmt_(const GraphScopeStmtPtr& op) {
   // ``name_hint_`` is the region name the user wrote; the parser requires it,
   // so it is printed positionally rather than as an optional keyword.
-  stream_ << "with " << prefix_ << ".graph(\"" << op->name_hint_ << "\"):\n";
+  stream_ << "with " << prefix_ << ".graph(\"" << op->name_hint_ << "\"";
+  // Same selective-dump surface as the cluster scope above (F39).
+  PrintScopeDumpAttr(op);
+  stream_ << "):\n";
   IncreaseIndent();
   PrintStmtBlock(op->body_);
   DecreaseIndent();

@@ -347,6 +347,14 @@ class TraceContext:
         """Whether the innermost region is an InCore region."""
         return self.is_inside_scope(ir.ScopeKind.InCore)
 
+    def is_inside_manual_scope(self) -> bool:
+        """Whether the build position is nested inside an open MANUAL runtime
+        scope — the ambient fact behind the runtime's nesting rules (a MANUAL
+        scope may not nest in another MANUAL one, an AUTO scope may not nest in
+        a MANUAL one). The parser tracks the same fact as
+        ``_manual_scope_depth``."""
+        return self.builder.is_inside_manual_scope()
+
     def function_type(self) -> ir.FunctionType:
         """The active function's ``FunctionType`` (its body's kind)."""
         return self._frame._sema._function_type

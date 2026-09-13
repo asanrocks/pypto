@@ -205,7 +205,10 @@ def orch(self, q: pl.Tensor[...], k_cache: pl.Tensor[...], out: pl.Out[...]):
 **Explicit kwarg (`dumps=[...]`)** — `pl.submit(...)` and `pl.at(...)` accept a
 `dumps=[...]` kwarg (symmetric with `deps=[...]`) listing the tensors to dump
 at that one task launch. Each entry must be a tensor argument of that submit /
-a tensor captured by that scope:
+a tensor captured by that scope. `pl.graph(...)` and `pl.cluster(...)` take the
+same kwarg as the explicit spelling of their scope-level `dump_vars` carrier —
+which is also the printed surface a `pl.dump_tag` before the region round-trips
+through, since the marker itself emits no statement:
 
 ```python
 with pl.manual_scope():
@@ -252,6 +255,7 @@ the pass's fixpoint.
 | `pl.dump_tag(t)` as a standalone statement in an Orchestration or Inline body | Supported (declarative marker; affects every subsequent consuming dispatch). |
 | `dumps=[arg]` on `pl.submit(...)` | Supported — explicit submit-side surface (symmetric with `deps=`); each entry must be a positional arg of the submit. |
 | `dumps=[t]` on `pl.at(...)` | Supported — explicit scope-side surface (symmetric with `deps=`); each entry must be a tensor captured by the scope body. |
+| `dumps=[t]` on `pl.graph(...)` / `pl.cluster(...)` | Supported — the explicit spelling of the scope-level `dump_vars` carrier, and the printed surface for a tag a `pl.dump_tag` attached to the region (the marker emits no statement). Each entry must be a tensor visible to the enclosing function. |
 | `dumps=` on a plain `self.kernel(...)` call | Not supported — raises `ParserTypeError`. A plain call is fire-and-forget; declare the target with `pl.dump_tag(t)` or submit it with `pl.submit(..., dumps=[...])`. |
 | Tag consumed by an outline-synthesised dispatch (`@pl.jit` / `with pl.at(level=...)` / tensor-op style) | Supported — the tag rides a scope-level `dump_vars` carrier (`dumps=`) and the outliner maps it onto the synthesised dispatch arg. |
 | `pl.dump_tag(t)` inside a `@pl.function(type=pl.FunctionType.InCore/AIC/AIV/Group)` body | Not supported — raises `ParserSyntaxError` at parse time. Dump filtering is applied by orchestration codegen at the kernel-call site; kernel-body functions have no corresponding call-site arg to attach the marker to. Place `pl.dump_tag` in the enclosing `Orchestration` (or `Inline`) function instead. |
