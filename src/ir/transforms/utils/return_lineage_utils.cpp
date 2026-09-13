@@ -142,9 +142,14 @@ TraceContext& Ctx() {
 std::vector<std::optional<size_t>> ReturnedParamIndicesImpl(const FunctionPtr& func,
                                                             const ProgramPtr& program);
 
-// Trace a body var back to a param; nullptr when untraceable.
+// Trace a body var back to a param; nullptr when untraceable. When
+// @p fresh_create_stop is non-null and the walk instead ends at a fresh
+// `tensor.create` allocation, that var is recorded there before returning
+// nullptr — the caller-side contract of TraceVar is unchanged, and
+// TraceToBackingBuffer is the consumer that cares.
 const Var* TraceVar(const Var* var, const BodyIndexCollector& index, const ParamIndexMap& param_indices,
-                    const ProgramPtr& program, std::unordered_set<const Var*>& visited) {
+                    const ProgramPtr& program, std::unordered_set<const Var*>& visited,
+                    const Var** fresh_create_stop = nullptr) {
   while (var) {
     if (!visited.insert(var).second) return nullptr;
     if (param_indices.count(var)) return var;
@@ -235,6 +240,12 @@ const Var* TraceVar(const Var* var, const BodyIndexCollector& index, const Param
         if (!arg_var) return nullptr;
         var = arg_var.get();
         continue;
+      }
+      // A fresh allocation is a buffer in its own right: the param walk ends
+      // here (nullptr), but the var itself names where the data lives, so
+      // record it for TraceToBackingBuffer.
+      if (fresh_create_stop != nullptr && op_name == "tensor.create") {
+        *fresh_create_stop = var;
       }
       return nullptr;
     }
@@ -508,6 +519,29 @@ VarPtr TraceToParam(const VarPtr& var, const StmtPtr& body, const std::vector<Va
   if (!root) return nullptr;
   auto param_it = param_indices.find(root);
   return param_it == param_indices.end() ? nullptr : params[param_it->second];
+}
+
+std::optional<BackingBuffer> TraceToBackingBuffer(const VarPtr& var, const StmtPtr& body,
+                                                  const std::vector<VarPtr>& params,
+                                                  const ProgramPtr& program) {
+  if (!var || !body) return std::nullopt;
+  BodyIndexCollector index;
+  index.VisitStmt(body);
+  auto param_indices = IndexParams(params);
+  std::unordered_set<const Var*> visited;
+  const Var* fresh_create = nullptr;
+  const Var* root = TraceVar(var.get(), index, param_indices, program, visited, &fresh_create);
+  if (root != nullptr) {
+    auto param_it = param_indices.find(root);
+    if (param_it == param_indices.end()) return std::nullopt;
+    return BackingBuffer{params[param_it->second], true};
+  }
+  if (fresh_create != nullptr) {
+    auto def_it = index.var_def.find(fresh_create);
+    if (def_it == index.var_def.end()) return std::nullopt;
+    return BackingBuffer{def_it->second->var_, false};
+  }
+  return std::nullopt;
 }
 
 }  // namespace return_lineage

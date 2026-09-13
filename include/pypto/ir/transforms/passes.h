@@ -895,6 +895,26 @@ Pass FlattenCallExpr();
 Pass NormalizeStmtStructure();
 
 /**
+ * @brief Give a dispatch entry's return values a host-visible output buffer
+ *
+ * A dispatch entry is an Orchestration function no other function calls — the
+ * root of the call graph, invoked directly by the host. Each tensor return of
+ * such an entry that does not already write back an Out/InOut param is traced
+ * to its backing buffer; when that buffer is a fresh top-level
+ * `tensor.create` (the internal allocation `ConvertTensorToTileOps` synthesizes
+ * for a callee's appended Out arg, or a user `pl.create_tensor`), the create
+ * is deleted and the buffer is appended to the entry's params as an Out param,
+ * so codegen binds it to an external `orch_args` slot like a declared output.
+ * Returns that trace to no buffer are rejected loudly (the pre-fix behavior
+ * was a silent `()` handed to the host).
+ *
+ * Requirements:
+ * - Input IR must have InCore scopes outlined and tile ops (the internal
+ *   call-site allocations exist)
+ */
+Pass MaterializeEntryReturns();
+
+/**
  * @brief Normalize return tuple order in InCore functions
  *
  * Reorders ReturnStmt::value_ so that return[i] corresponds to the i-th

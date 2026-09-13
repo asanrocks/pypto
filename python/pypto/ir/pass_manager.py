@@ -213,6 +213,14 @@ class PassManager:
             # right after SplitVectorKernel finalizes split on tpops and before
             # SkewCrossCorePipeline clones tpop/tfree pairs (so clones carry split).
             passes.stamp_tfree_split,
+            # Give each dispatch entry's return-style outputs a host-visible buffer:
+            # promote the fresh tensor.create that holds the value into an appended
+            # Out param, so codegen binds it to an external orch_args slot and the
+            # artifact's dispatch metadata can auto-allocate it. Runs after
+            # ConvertTensorToTileOps (the internal call-site allocations exist) and
+            # before NormalizeReturnOrder (whose return canonicalization then sees
+            # the final param set).
+            passes.materialize_entry_returns,
             passes.normalize_return_order,
             passes.skew_cross_core_pipeline,
             # LowerPipelineToSlots multi-buffers what it can via MemRef slots (one

@@ -115,6 +115,29 @@ std::vector<std::optional<size_t>> TraceToParamIndicesForOutlining(const std::ve
 VarPtr TraceToParam(const VarPtr& var, const StmtPtr& body, const std::vector<VarPtr>& params,
                     const ProgramPtr& program);
 
+/// Where a traced var's data physically lives.
+struct BackingBuffer {
+  VarPtr var;
+  /// True when @p var is one of the traced param set (a host-supplied buffer);
+  /// false when it is a fresh ``tensor.create`` local the body allocated.
+  bool is_param;
+};
+
+/// Trace @p var to the buffer that holds its data, param or fresh allocation.
+///
+/// Same walk as TraceToParam, but where that walk discards a lineage that ends
+/// at a non-param, this one reports the terminal buffer: one of @p params, or
+/// the ``tensor.create`` local the value was allocated into. This is the
+/// return-style counterpart of the param writeback trace — a caller that must
+/// hand the value to a host needs to know which buffer to export, not just
+/// whether it happens to be a param. Everything else (computed views, opaque
+/// ops, unresolvable callees) stays untraceable.
+///
+/// @return the buffer, or nullopt when the walk cannot identify one.
+std::optional<BackingBuffer> TraceToBackingBuffer(const VarPtr& var, const StmtPtr& body,
+                                                  const std::vector<VarPtr>& params,
+                                                  const ProgramPtr& program);
+
 }  // namespace return_lineage
 }  // namespace ir
 }  // namespace pypto

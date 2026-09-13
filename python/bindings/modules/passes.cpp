@@ -412,6 +412,14 @@ void BindPass(nb::module_& m) {
              "sides share the same MemRef root and produce identical TileBufSignatures,\n"
              "removing the reshape Call so PTO codegen can stay 1:1.");
 
+  passes.def("materialize_entry_returns", &pass::MaterializeEntryReturns,
+             "Create the dispatch-entry return materialization pass\n\n"
+             "Appends an Out param to each dispatch entry (an Orchestration function\n"
+             "nothing else calls) for every tensor return that does not already write\n"
+             "back an Out/InOut param, promoting the fresh tensor.create buffer that\n"
+             "holds the value and deleting its allocation. Runs after\n"
+             "ConvertTensorToTileOps and before NormalizeReturnOrder.");
+
   passes.def("normalize_return_order", &pass::NormalizeReturnOrder,
              "Create a return order normalization pass\n\n"
              "Reorders return tuple values in InCore functions so that return[i]\n"

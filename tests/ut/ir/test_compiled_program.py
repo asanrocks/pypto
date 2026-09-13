@@ -397,6 +397,71 @@ class TestCompiledProgramCall:
         with pytest.raises(TypeError, match="expects 3 .* or 2"):
             cp(a)  # 1 arg is neither 3 nor 2
 
+    def test_partial_in_place_returns_only_omitted_outputs(self, tmp_path):
+        """A mixed kernel (declared Out params plus a materialized return)
+        accepts its declared signature: the supplied buffers bind positionally,
+        the omitted trailing outputs are auto-allocated and returned.
+
+        Gap F8: ``MaterializeEntryReturns`` appends an Out param for the
+        returned tensor, so a kernel written ``def k(a, b, o: pl.Out) -> ...``
+        with a non-Out return compiles to four params — the legacy three-arg
+        call must keep working instead of failing arity validation.
+        """
+        span = ir.Span.unknown()
+        tensor_type = ir.TensorType([128, 128], DataType.FP32)
+        params = [
+            (ir.Var("a", tensor_type, span), ir.ParamDirection.In),
+            (ir.Var("b", tensor_type, span), ir.ParamDirection.In),
+            (ir.Var("o", tensor_type, span), ir.ParamDirection.Out),
+            (ir.Var("ret0__out", tensor_type, span), ir.ParamDirection.Out),
+        ]
+        body = ir.SeqStmts([], span)
+        orch = ir.Function("orch_mixed", params, [tensor_type], body, span, ir.FunctionType.Orchestration)
+        cp = CompiledProgram(ir.Program([orch], "MixedProgram", span), str(tmp_path))
+
+        a = torch.randn(128, 128)
+        b = torch.randn(128, 128)
+        o = torch.zeros(128, 128)
+
+        # Declared signature (a, b, o): o binds in place, ret0__out is allocated.
+        with patch("pypto.runtime.runner._execute_compiled") as mock_exec:
+            returned = cp(a, b, o)
+        coerced = mock_exec.call_args.args[1]
+        assert len(coerced) == 4
+        assert coerced[0] is a and coerced[1] is b and coerced[2] is o
+        assert isinstance(returned, torch.Tensor) and returned.shape == (128, 128)
+        assert coerced[3] is returned
+
+        # Inputs only: both outputs allocated and returned.
+        with patch("pypto.runtime.runner._execute_compiled"):
+            both = cp(a, b)
+        assert isinstance(both, tuple) and len(both) == 2
+        assert all(isinstance(t, torch.Tensor) for t in both)
+
+        # Full in-place: every buffer supplied, nothing returned.
+        with patch("pypto.runtime.runner._execute_compiled"):
+            assert cp(a, b, o, torch.zeros(128, 128)) is None
+
+    def test_partial_prefix_must_omit_only_outputs(self, tmp_path):
+        """A prefix that strands a non-Out param is an arity error, not a
+        silently mis-bound partial call."""
+        span = ir.Span.unknown()
+        tensor_type = ir.TensorType([128, 128], DataType.FP32)
+        params = [
+            (ir.Var("a", tensor_type, span), ir.ParamDirection.In),
+            (ir.Var("b", tensor_type, span), ir.ParamDirection.In),
+            (ir.Var("c", tensor_type, span), ir.ParamDirection.In),
+            (ir.Var("o", tensor_type, span), ir.ParamDirection.Out),
+        ]
+        body = ir.SeqStmts([], span)
+        orch = ir.Function("orch_stranded", params, [tensor_type], body, span, ir.FunctionType.Orchestration)
+        cp = CompiledProgram(ir.Program([orch], "StrandedProgram", span), str(tmp_path))
+
+        # params[2:] is [c (In), o (Out)] — not all Out, so 2 args is neither
+        # in-place (4) nor return-style (3 non-Out params). Loud TypeError.
+        with pytest.raises(TypeError, match="expects 4 .* or 3"):
+            cp(torch.randn(128, 128), torch.zeros(128, 128))
+
     def test_no_orchestration_multi_func_call_raises(self, tmp_path):
         prog = _make_program_without_orchestration()
         cp = CompiledProgram(prog, str(tmp_path))

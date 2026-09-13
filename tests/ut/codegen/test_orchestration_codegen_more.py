@@ -1289,7 +1289,14 @@ class TestOrchestrationMore:
         assert "Tensor& out =" not in code
 
     def test_repeated_auto_output_buffers_get_unique_names(self):
-        """Repeated auto-generated output buffers should keep distinct emitted names."""
+        """Repeated auto-generated output buffers should keep distinct emitted names.
+
+        Three chained calls: the two intermediate results stay internal
+        (``ret0__out`` / ``ret0__out_1`` — the unique-naming regression this
+        test guards), while the returned one is materialized as the entry's
+        appended Out param (gap F8) and binds to the external ``orch_args``
+        slot instead of a third internal allocation.
+        """
 
         backend.reset_for_testing()
         backend.set_backend_type(BackendType.Ascend910B)
@@ -1313,16 +1320,17 @@ class TestOrchestrationMore:
             ) -> pl.Tensor[[64], pl.FP32]:
                 first: pl.Tensor[[64], pl.FP32] = self.kernel_add(x, y)
                 second: pl.Tensor[[64], pl.FP32] = self.kernel_add(first, y)
-                return second
+                third: pl.Tensor[[64], pl.FP32] = self.kernel_add(second, y)
+                return third
 
         pm = PassManager.get_strategy(OptimizationStrategy.Default)
         transformed = pm.run_passes(RepeatedAutoOutputProgram)
 
         code = _generate_orch_code(transformed)
 
+        # The two internal intermediates keep distinct emitted names.
         assert code.count("TensorCreateInfo ret0__out_ci(") == 1
         assert code.count("TensorCreateInfo ret0__out_1_ci(") == 1
-        assert "alloc_tensors(ret0__out_ci, ret0__out_1_ci)" in code
         # Each ret0__out{,_1} is the unique writer of its local root in this scope
         # and has no sequential ancestor, so DeriveCallDirections keeps both as
         # OutputExisting (→ add_output) rather than promoting to InOut.
@@ -1330,10 +1338,18 @@ class TestOrchestrationMore:
         assert "params_t1.add_output(ret0__out_1)" in code
         # ``first`` is kernel_add's in-place output buffer ret0__out, so it
         # remaps to ret0__out (no ``const Tensor& first = ...`` alias is created);
-        # the second call reads that buffer directly.
+        # the next call reads that buffer directly. Same for ``second``.
         assert "params_t1.add_input(ret0__out)" in code
+        assert "params_t2.add_input(ret0__out_1)" in code
         assert "const Tensor& first" not in code
         assert "const Tensor& second" not in code
+        assert "const Tensor& third" not in code
+        # The returned buffer is the entry's appended Out param: the host passes
+        # one more tensor and the final task writes it in place.
+        assert ".expected_arg_count = 3" in code
+        assert "orch_args.tensor(2)" in code
+        assert "params_t2.add_output(ext_ret0)" in code
+        assert code.count("TensorCreateInfo") == 2
 
     def test_unused_alias_not_emitted(self):
         """Alias for a kernel result that is never consumed downstream should be omitted."""

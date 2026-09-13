@@ -397,6 +397,12 @@ inline const PassProperties kAllocateMemoryAddrProperties{
 
 // -- Return order normalization pass ------------------------------------------
 
+// MaterializeEntryReturns runs before NormalizeReturnOrder and only extends
+// dispatch-entry signatures (appended Out params) and the ReturnStmt values that
+// reference them; every property NormalizeReturnOrder requires still holds after it.
+inline const PassProperties kMaterializeEntryReturnsProperties{
+    .required = {IRProperty::SplitIncoreOrch, IRProperty::IncoreTileOps}};
+
 inline const PassProperties kNormalizeReturnOrderProperties{
     .required = {IRProperty::SplitIncoreOrch, IRProperty::IncoreTileOps},
     .produced = {IRProperty::ReturnParamsExplicit}};

@@ -47,6 +47,7 @@ TENSOR_OPTIMIZATION_PASSES = [
     "InjectGMPipeBuffer",
     "SplitVectorKernel",
     "StampTfreeSplit",
+    "MaterializeEntryReturns",
     "NormalizeReturnOrder",
     "SkewCrossCorePipeline",
     "LowerPipelineToSlots",
