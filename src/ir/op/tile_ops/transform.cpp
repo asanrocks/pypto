@@ -698,6 +698,14 @@ REGISTER_OP("tile.assemble")
     // the result, so the prior content is read. Tile-local, hence no channel.
     .set_arg_effect(0, ArgEffect::ReadWrite)
     .set_output_memory_inherit_input()
+    // The source's legal space is the *target's* resolved space: pto.subview +
+    // pto.tmov (the same-config lowering) requires the source to already live
+    // where the target does, so InferTileMemorySpace must bridge a cube-produced
+    // (Acc) source into a Vec target with a tile.move — the cross-core
+    // tpush/tpop boundary ExpandMixedKernel then folds. The one exception is the
+    // converting Acc->Mat writeback (FIXPIPE / pto.tinsert), which the op itself
+    // implements, so an Acc source stays legal against a Mat target.
+    .set_input_memory_matches_arg(/*source*/ 1, /*target*/ 0, /*allow_acc_when_mat=*/true)
     .f_deduce_type([](const std::vector<ExprPtr>& args,
                       const std::vector<std::pair<std::string, std::any>>& kwargs) {
       return DeduceTileAssembleType(args, kwargs);

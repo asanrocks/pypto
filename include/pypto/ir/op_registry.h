@@ -84,6 +84,23 @@ struct OpMemorySpaceSpec {
   /// Empty vector at position i = any memory space accepted for arg i.
   std::vector<std::vector<MemorySpace>> input_constraints;
 
+  /// A dynamic input-space constraint: the constrained arg must live in the
+  /// same memory space as the space-source arg, once InferTileMemorySpace
+  /// resolves it. Unlike `input_constraints`, the legal set cannot be named at
+  /// registration time because it depends on another operand's placement —
+  /// `tile.assemble` is the motivating op: its source has to cross to whatever
+  /// space the target lives in, except that the op itself implements the
+  /// converting Acc -> Mat writeback (FIXPIPE), so an Acc source is legal
+  /// whenever the target resolved to Mat.
+  struct InputSpaceMatchesArg {
+    size_t constrained_arg;   ///< the arg whose space is constrained
+    size_t space_source_arg;  ///< the arg whose resolved space is the requirement
+    /// An Acc operand is additionally allowed when the requirement is Mat
+    /// (the op's own Acc -> Mat converting path).
+    bool allow_acc_when_mat;
+  };
+  std::optional<InputSpaceMatchesArg> input_matches_arg;
+
   /// Resolves output memory space from the Call's kwargs.
   /// Returns nullopt when the space cannot be resolved from kwargs alone — either
   /// because the op inherits from its input (see `output_inherits_input`) or
@@ -672,6 +689,26 @@ class OpRegistryEntry {
     }
     spec.input_constraints[arg_index] = std::move(allowed);
     return *this;
+  }
+
+  /// Set a dynamic input constraint: the arg at `arg_index` must share the
+  /// memory space the arg at `space_source_arg` resolves to (see
+  /// `OpMemorySpaceSpec::InputSpaceMatchesArg`). Evaluated by
+  /// InferTileMemorySpace against the resolved spaces; an unresolved
+  /// requirement constrains nothing yet.
+  inline OpRegistryEntry& set_input_memory_matches_arg(size_t arg_index, size_t space_source_arg,
+                                                       bool allow_acc_when_mat = false) {
+    EnsureMemorySpec();
+    auto& spec = *memory_spec_;  // NOLINT(bugprone-unchecked-optional-access)
+    spec.input_matches_arg =
+        OpMemorySpaceSpec::InputSpaceMatchesArg{arg_index, space_source_arg, allow_acc_when_mat};
+    return *this;
+  }
+
+  /// Returns the dynamic matches-arg input constraint, or nullopt.
+  [[nodiscard]] std::optional<OpMemorySpaceSpec::InputSpaceMatchesArg> GetInputSpaceMatchesArg() const {
+    if (!memory_spec_.has_value()) return std::nullopt;
+    return memory_spec_->input_matches_arg;
   }
 
   /// Mark this op as not needing a memory spec (e.g., returns MemRefType, not TileType).

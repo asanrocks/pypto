@@ -4820,5 +4820,145 @@ for n in pl.range(0, 2, 1):
         assert self._line_index(printed, "lhs_left", "tile.move") > loop
 
 
+class TestInferTileMemorySpaceAssembleSource:
+    """``tile.assemble``'s source is constrained to the *target's* resolved space
+    (a dynamic matches-arg constraint; the converting Acc->Mat writeback is the
+    one exemption). These tests pin the bridge, the exemption, and the loud
+    rejection — the fix for gap K3 / task F7 in ``docs/gap-fixes-todo.md``."""
+
+    def test_acc_source_into_vec_target_gets_bridge(self):
+        """A cube-produced (Acc) source assembled into a Vec target gets an
+        explicit Acc->Vec ``tile.move`` ahead of the assemble, and the assemble
+        consumes the moved tile.
+
+        Before the fix no constraint existed, so no move was queued and the
+        mixed-kernel expansion silently dropped the consumerless matmul from the
+        cube lane (the misleading ``pto.subview`` blayout mismatch of K3).
+        """
+
+        @pl.program
+        class Before:
+            @pl.function(type=pl.FunctionType.InCore)
+            def kernel(
+                self,
+                a: pl.Tensor[[32, 32], pl.FP32],
+                b: pl.Tensor[[32, 32], pl.FP32],
+                out: pl.Out[pl.Tensor[[32, 32], pl.FP32]],
+            ) -> pl.Tensor[[32, 32], pl.FP32]:
+                a_m = pl.load(a, [0, 0], [32, 32], target_memory=pl.MemorySpace.Mat)
+                b_m = pl.load(b, [0, 0], [32, 32], target_memory=pl.MemorySpace.Mat)
+                a_l = pl.move(a_m, target_memory=pl.MemorySpace.Left)
+                b_r = pl.move(b_m, target_memory=pl.MemorySpace.Right)
+                prod = pl.matmul(a_l, b_r)  # Acc
+                acc = pl.tile.create([32, 32], dtype=pl.FP32)  # Vec
+                acc_1 = pl.tile.assemble(acc, prod, [0, 0])
+                out = pl.store(acc_1, [0, 0], out)
+                return out
+
+        @pl.program
+        class Expected:
+            @pl.function(type=pl.FunctionType.InCore)
+            def kernel(
+                self,
+                a: pl.Tensor[[32, 32], pl.FP32],
+                b: pl.Tensor[[32, 32], pl.FP32],
+                out: pl.Out[pl.Tensor[[32, 32], pl.FP32]],
+            ) -> pl.Tensor[[32, 32], pl.FP32]:
+                a_m: pl.Tile[[32, 32], pl.FP32, pl.Mem.Mat] = pl.load(
+                    a, [0, 0], [32, 32], target_memory=pl.Mem.Mat
+                )
+                b_m: pl.Tile[[32, 32], pl.FP32, pl.Mem.Mat] = pl.load(
+                    b, [0, 0], [32, 32], target_memory=pl.Mem.Mat
+                )
+                a_l: pl.Tile[[32, 32], pl.FP32, pl.Mem.Left] = pl.move(a_m, target_memory=pl.MemorySpace.Left)
+                b_r: pl.Tile[[32, 32], pl.FP32, pl.Mem.Right] = pl.move(
+                    b_m, target_memory=pl.MemorySpace.Right
+                )
+                prod: pl.Tile[[32, 32], pl.FP32, pl.Mem.Acc] = pl.matmul(a_l, b_r)
+                acc: pl.Tile[[32, 32], pl.FP32, pl.Mem.Vec] = pl.tile.create(
+                    [32, 32], dtype=pl.FP32, target_memory=pl.Mem.Vec
+                )
+                prod_Vec: pl.Tile[[32, 32], pl.FP32, pl.Mem.Vec] = pl.move(
+                    prod,
+                    target_memory=pl.MemorySpace.Vec,
+                    blayout=pl.TileLayout.row_major,
+                    slayout=pl.TileLayout.none_box,
+                )
+                acc_1: pl.Tile[[32, 32], pl.FP32, pl.Mem.Vec] = pl.tile.assemble(acc, prod_Vec, [0, 0])
+                out: pl.Tensor[[32, 32], pl.FP32] = pl.store(acc_1, [0, 0], out)
+                return out
+
+        After = passes.infer_tile_memory_space()(Before)
+        ir.assert_structural_equal(After, Expected)
+
+    def test_acc_source_into_mat_target_stays_unbridged(self):
+        """The converting Acc->Mat writeback (FIXPIPE) is the exemption: an Acc
+        source against a Mat target keeps the assemble as the data path, with no
+        ``tile.move`` inserted between the matmul and the assemble.
+        """
+        # A backend is needed so the Mat tile.create carries the implicit NZ
+        # TileView, matching the tile.assemble result type (same reason as the
+        # iter-arg inheritance tests above).
+        backend.set_backend_type(BackendType.Ascend910B)
+
+        @pl.program
+        class Before:
+            @pl.function(type=pl.FunctionType.InCore)
+            def kernel(
+                self,
+                a: pl.Tensor[[32, 32], pl.FP32],
+                b: pl.Tensor[[32, 32], pl.FP32],
+                out: pl.Out[pl.Tensor[[32, 32], pl.FP32]],
+            ) -> pl.Tensor[[32, 32], pl.FP32]:
+                a_m = pl.load(a, [0, 0], [32, 32], target_memory=pl.MemorySpace.Mat)
+                b_m = pl.load(b, [0, 0], [32, 32], target_memory=pl.MemorySpace.Mat)
+                a_l = pl.move(a_m, target_memory=pl.MemorySpace.Left)
+                b_r = pl.move(b_m, target_memory=pl.MemorySpace.Right)
+                prod = pl.matmul(a_l, b_r)  # Acc
+                scratch = pl.tile.create([32, 32], dtype=pl.FP32, target_memory=pl.MemorySpace.Mat)
+                scratch_1 = pl.tile.assemble(scratch, prod, [0, 0])
+                out = pl.store(pl.move(scratch_1, target_memory=pl.MemorySpace.Vec), [0, 0], out)
+                return out
+
+        printed = ir.python_print(passes.infer_tile_memory_space()(Before))
+        matmul_line = next(i for i, line in enumerate(printed.splitlines()) if "tile.matmul(" in line)
+        assemble_lines = [
+            (i, line) for i, line in enumerate(printed.splitlines()) if "tile.assemble(" in line
+        ]
+        assert assemble_lines, "expected tile.assemble in the lowered body"
+        for i, line in assemble_lines:
+            assert i > matmul_line
+            assert ", prod," in line, (
+                "an Acc->Mat assemble must keep its Acc source (the FIXPIPE "
+                f"writeback is the data path): {line.strip()}"
+            )
+        assert "tile.move(prod" not in printed, (
+            "no bridging tile.move may be inserted for an Acc source against a Mat-target assemble"
+        )
+
+    def test_vec_source_into_acc_target_is_loud(self):
+        """An assemble whose target resolved to Acc cannot be bridged from any
+        copyable space, so the mismatch is rejected here — naming the pattern —
+        instead of surfacing as a backend layout error.
+        """
+
+        @pl.program
+        class Before:
+            @pl.function(type=pl.FunctionType.InCore)
+            def kernel(
+                self,
+                a: pl.Tensor[[32, 32], pl.FP32],
+                out: pl.Out[pl.Tensor[[32, 32], pl.FP32]],
+            ) -> pl.Tensor[[32, 32], pl.FP32]:
+                acc = pl.tile.create([32, 32], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc)
+                v = pl.load(a, [0, 0], [32, 32])  # Vec
+                acc_1 = pl.tile.assemble(acc, v, [0, 0])
+                out = pl.store(acc_1, [0, 0], out)
+                return out
+
+        with pytest.raises(ValueError, match="tile.assemble"):
+            passes.infer_tile_memory_space()(Before)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

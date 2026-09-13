@@ -339,6 +339,11 @@ def assemble(
 ) -> Call:
     """Write source tile data into target tile at specified offset.
 
+    The source must live in the target's memory space — ``InferTileMemorySpace``
+    bridges a cube-produced (``Acc``) source into a ``Vec`` target with an
+    explicit ``tile.move`` — except for the converting ``Acc`` → ``Mat``
+    writeback (FIXPIPE), which this op implements itself.
+
     Args:
         target: Target tile (TileType)
         source: Source tile to write (TileType)

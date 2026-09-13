@@ -63,6 +63,62 @@ const std::vector<std::vector<MemorySpace>>* GetInputConstraints(const std::stri
   return &spec_opt->input_constraints;
 }
 
+/// The allowed memory spaces for argument `arg_index` of `call` under the
+/// dynamic matches-arg constraint (OpMemorySpaceSpec::InputSpaceMatchesArg),
+/// evaluated against the resolved spaces. `var_memory` is the pass's
+/// resolved-space map (null for annotation-only callers such as the property
+/// verifier); the space-source operand's own TileType annotation is the
+/// fallback. Nullopt when the op declares no matches-arg constraint for this
+/// arg, or the requirement itself is unresolved — the same skip the static
+/// path takes for an operand absent from var_memory_.
+std::optional<std::vector<MemorySpace>> ResolveMatchesArgConstraint(
+    const CallPtr& call, size_t arg_index, const std::map<VarPtr, MemorySpace>* var_memory) {
+  auto& registry = OpRegistry::GetInstance();
+  if (!registry.IsRegistered(call->op_->name_)) return std::nullopt;
+  const auto& matches = registry.GetEntry(call->op_->name_).GetInputSpaceMatchesArg();
+  if (!matches.has_value() || matches->constrained_arg != arg_index) return std::nullopt;
+  if (call->args_.size() <= matches->space_source_arg) return std::nullopt;
+
+  // AsVarLike: the requirement operand may be a loop-carried IterArg (the
+  // flash-attention accumulator), and As<Var> does not match IterArg.
+  auto requirement = AsVarLike(call->args_[matches->space_source_arg]);
+  if (!requirement) return std::nullopt;
+
+  std::optional<MemorySpace> space;
+  if (var_memory != nullptr) {
+    if (auto it = var_memory->find(requirement); it != var_memory->end()) {
+      space = it->second;
+    }
+  }
+  if (!space.has_value()) {
+    if (auto tile_type = As<TileType>(requirement->GetType())) space = tile_type->memory_space_;
+  }
+  if (!space.has_value()) return std::nullopt;
+
+  std::vector<MemorySpace> allowed{*space};
+  if (matches->allow_acc_when_mat && *space == MemorySpace::Mat) {
+    allowed.push_back(MemorySpace::Acc);
+  }
+  return allowed;
+}
+
+/// The space a bridging tile.move must land in for argument `arg_index` of
+/// `call`: the first allowed space of whichever constraint applies — the static
+/// registry constraint when one is registered for the arg, else the dynamic
+/// matches-arg constraint. Nullopt when the arg is unconstrained.
+std::optional<MemorySpace> RequiredSpaceForArg(const CallPtr& call, size_t arg_index,
+                                               const std::map<VarPtr, MemorySpace>* var_memory) {
+  if (const auto* constraints = GetInputConstraints(call->op_->name_)) {
+    if (arg_index < constraints->size() && !(*constraints)[arg_index].empty()) {
+      return (*constraints)[arg_index][0];
+    }
+  }
+  if (auto allowed = ResolveMatchesArgConstraint(call, arg_index, var_memory)) {
+    return allowed->front();
+  }
+  return std::nullopt;
+}
+
 // Prefer the non-Vec space when two demands collide on the same var. Vec acts as
 // the permissive default, so a specialized demand (Mat, Left, Right, Acc) wins.
 bool ShouldOverrideDemand(MemorySpace existing, MemorySpace incoming) {
@@ -576,12 +632,22 @@ class MoveCollector : public IRVisitor {
   std::set<MoveKey, MoveKeyLess> needed_moves_;
 
   void CheckInputConstraints(const CallPtr& call) {
-    const auto* constraints = GetInputConstraints(call->op_->name_);
-    if (!constraints) return;
-
-    for (size_t i = 0; i < constraints->size() && i < call->args_.size(); ++i) {
-      const auto& allowed_spaces = (*constraints)[i];
-      if (allowed_spaces.empty()) continue;
+    for (size_t i = 0; i < call->args_.size(); ++i) {
+      // Static registry constraint first; the dynamic matches-arg constraint
+      // (e.g. tile.assemble's source-vs-target, see
+      // ResolveMatchesArgConstraint) applies only where no static one is
+      // registered for the arg.
+      std::optional<std::vector<MemorySpace>> allowed_opt;
+      bool matches_arg_constraint = false;
+      if (const auto* constraints = GetInputConstraints(call->op_->name_);
+          constraints && i < constraints->size() && !(*constraints)[i].empty()) {
+        allowed_opt = (*constraints)[i];
+      } else if (auto dyn = ResolveMatchesArgConstraint(call, i, &var_memory_)) {
+        allowed_opt = std::move(dyn);
+        matches_arg_constraint = true;
+      }
+      if (!allowed_opt.has_value()) continue;
+      const auto& allowed_spaces = *allowed_opt;
 
       // AsVarLike: a loop-carried operand is an IterArg, which As<Var> skips.
       // Skipping it queues no tile.move, so the op keeps an operand in a space
@@ -597,18 +663,37 @@ class MoveCollector : public IRVisitor {
       if (!allowed) {
         // Guard only the destination, not the specific src -> dst pair. A space
         // with no inbound edge anywhere (Acc) can never be reached by a move,
-        // so requesting one is a Phase 1 placement bug. Which *pairs* a given
-        // target implements is PTOAS's `TMovOp::verify`, and PyPTO has no
-        // faithful copy of it: `SoC::GetMemoryGraph()` models the memory
-        // hierarchy for `FindMemPath`, not tmov legality, and omits edges this
-        // pipeline emits and PTOAS accepts (`Acc -> Vec` on Ascend910B). A
-        // per-pair check here would reject working kernels.
-        INTERNAL_CHECK_SPAN(IsTileMoveEverPossibleInto(allowed_spaces[0]), call->span_)
-            << "Internal error: InferTileMemorySpace wants a tile.move into "
-            << MemorySpaceToString(allowed_spaces[0]) << " memory for argument " << i << " of "
-            << call->op_->name_
-            << ", but no target implements any move into it. Phase 1 should "
-               "have placed the producer there directly.";
+        // so requesting one is a Phase 1 placement bug for a static constraint.
+        // Which *pairs* a given target implements is PTOAS's `TMovOp::verify`,
+        // and PyPTO has no faithful copy of it: `SoC::GetMemoryGraph()` models
+        // the memory hierarchy for `FindMemPath`, not tmov legality, and omits
+        // edges this pipeline emits and PTOAS accepts (`Acc -> Vec` on
+        // Ascend910B). A per-pair check here would reject working kernels.
+        if (!IsTileMoveEverPossibleInto(allowed_spaces[0])) {
+          if (matches_arg_constraint) {
+            // The requirement is the *target's own* resolved space, chosen by
+            // the user's program rather than placed by Phase 1, so an
+            // unbridged mismatch here is a user error -- name the pattern
+            // instead of the internal-error text.
+            CHECK_SPAN(false, call->span_)
+                << "The operator " << call->op_->name_ << " requires its source to live in "
+                << MemorySpaceToString(allowed_spaces[0])
+                << " memory -- the space of its target -- "
+                   "but it is in "
+                << MemorySpaceToString(it->second) << ". No target has any data path into "
+                << MemorySpaceToString(allowed_spaces[0])
+                << " memory -- only the matrix unit writes it -- so the compiler cannot insert a "
+                   "copy to bridge them. Produce the source in "
+                << MemorySpaceToString(allowed_spaces[0])
+                << " memory, or assemble into a target in a space a copy can reach.";
+          }
+          INTERNAL_CHECK_SPAN(false, call->span_)
+              << "Internal error: InferTileMemorySpace wants a tile.move into "
+              << MemorySpaceToString(allowed_spaces[0]) << " memory for argument " << i << " of "
+              << call->op_->name_
+              << ", but no target implements any move into it. Phase 1 should "
+                 "have placed the producer there directly.";
+        }
         needed_moves_.insert({var, allowed_spaces[0]});
       }
     }
@@ -761,8 +846,6 @@ class TileMemorySpaceMutator : public IRMutator {
   }
 
   ExprPtr VisitExpr_(const CallPtr& op) override {
-    const auto* constraints = GetInputConstraints(op->op_->name_);
-
     std::vector<ExprPtr> new_args;
     CallArgReplacements arg_replacements;
     bool changed = false;
@@ -770,11 +853,13 @@ class TileMemorySpaceMutator : public IRMutator {
 
     for (size_t i = 0; i < op->args_.size(); ++i) {
       bool substituted = false;
-      if (constraints && i < constraints->size() && !(*constraints)[i].empty()) {
-        // AsVarLike so the substitution keys match the ones Phase 2 recorded and
-        // InsertMovesForConsumer created, IterArg operands included.
+      // RequiredSpaceForArg covers both the static registry constraints and the
+      // dynamic matches-arg constraint (tile.assemble's source-vs-target), so a
+      // bridged operand is substituted on the same key InsertMovesForConsumer
+      // created — IterArg operands included via AsVarLike.
+      if (auto required = RequiredSpaceForArg(op, i, &var_memory_)) {
         if (auto var = AsVarLike(op->args_[i])) {
-          MoveKey key = {var, (*constraints)[i][0]};
+          MoveKey key = {var, *required};
           auto move_it = created_moves_.find(key);
           if (move_it != created_moves_.end()) {
             new_args.push_back(move_it->second);
@@ -989,8 +1074,10 @@ class TileMemorySpaceMutator : public IRMutator {
     }
     if (!call) return;
 
-    const auto* constraints = GetInputConstraints(call->op_->name_);
-    if (!constraints) return;
+    // No static-constraint early-out here: an arg with no static constraint may
+    // still carry the dynamic matches-arg constraint, so every arg is asked
+    // individually (RequiredSpaceForArg returns nullopt for the unconstrained
+    // ones and the loop body skips them).
 
     // Look up backend layout spec so tile.move carries the correct layout for the consumer.
     // This avoids a later ResolveBackendOpLayouts repair pass needing to insert tile.reshape.
@@ -999,14 +1086,16 @@ class TileMemorySpaceMutator : public IRMutator {
       layout_spec = backend::GetBackend()->GetTileLayoutSpec(call->op_->name_);
     }
 
-    for (size_t i = 0; i < constraints->size() && i < call->args_.size(); ++i) {
-      if ((*constraints)[i].empty()) continue;
+    for (size_t i = 0; i < call->args_.size(); ++i) {
+      auto required_opt = RequiredSpaceForArg(call, i, &var_memory_);
+      if (!required_opt.has_value()) continue;
+      const MemorySpace required = *required_opt;
       // AsVarLike: must match the key Phase 2 recorded for an IterArg operand,
       // otherwise the needed move is never emitted.
       auto var = AsVarLike(call->args_[i]);
       if (!var) continue;
 
-      MoveKey key = {var, (*constraints)[i][0]};
+      MoveKey key = {var, required};
       if (needed_moves_.count(key) == 0 || created_moves_.count(key) > 0) {
         continue;
       }
@@ -1242,12 +1331,21 @@ class TileMemoryInferredVerifier : public IRVisitor {
   std::string func_name_;
 
   void VerifyInputConstraints(const CallPtr& call) {
-    const auto* constraints = GetInputConstraints(call->op_->name_);
-    if (!constraints) return;
-
-    for (size_t i = 0; i < constraints->size() && i < call->args_.size(); ++i) {
-      const auto& allowed_spaces = (*constraints)[i];
-      if (allowed_spaces.empty()) continue;
+    for (size_t i = 0; i < call->args_.size(); ++i) {
+      // Static registry constraint first; the dynamic matches-arg constraint is
+      // evaluated annotation-only (the pass has run by the time this verifies),
+      // so a mismatch the pass could not repair — e.g. a tile.assemble whose
+      // target space no copy can bridge — is reported instead of surfacing as
+      // a misleading codegen layout error.
+      std::optional<std::vector<MemorySpace>> allowed_opt;
+      if (const auto* constraints = GetInputConstraints(call->op_->name_);
+          constraints && i < constraints->size() && !(*constraints)[i].empty()) {
+        allowed_opt = (*constraints)[i];
+      } else if (auto dyn = ResolveMatchesArgConstraint(call, i, nullptr)) {
+        allowed_opt = std::move(dyn);
+      }
+      if (!allowed_opt.has_value()) continue;
+      const auto& allowed_spaces = *allowed_opt;
 
       // AsVarLike for the same reason the pass itself uses it: verifying a
       // narrower set of operands than the pass places is how a violated
