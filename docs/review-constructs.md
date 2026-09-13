@@ -153,9 +153,48 @@ Additions for this campaign:
 4. **Wave 1 only, or authorise wave 2 too?** Wave 1 is 5 sessions, comparable to
    the migration review's round 1.
 
-## 10. Round ledger
+## 10. R5 verdicts — `if` / `else` / `elif`
+
+Both sides read before verdicting: the parser's `parse_if_statement`
+(`ast_parser.py:3629`, whose `orelse[0] is ast.If` case is a recursive
+`parse_if_statement` inside the else scope) and the tracer's `_if_row`
+rewriter (`rewriter.py:1216`: `eval_if` / `eval_then` / `eval_else` /
+`eval_else_active` rows, an elif nested under the else-active guard) +
+`interpreter.eval_if`/`eval_else`/`_merge_branch_locals` (`interpreter.py:733`,
+`:759`, `:797`) + `PtoIfConstruct` (`constructs.py:210`).
+
+**Regime first.** Every anchored spelling below is **raw**-equal: plain
+syntax leaks locals on both sides (no `pl.yield_`, so no `return_var`/phi is
+built by either frontend; the chain nests structurally on both sides).
+`canonical=True` is asserted *as well* wherever the IR carries staged
+control flow (the redundant stronger form — raw equality already implies it
+for deterministic passes). The one variant that cannot be an anchor is the
+host predicate: same source, deliberately different IR (`docs/design/01-language.md`
+§5), so the anchor rule does not apply and a shape-pinning test replaces it.
+
+| Variant | Regime | Verdict |
+| --- | --- | --- |
+| `if` / `else`, per-branch locals (existing `k_merge`, `k_else_passthrough`, `k_nested`) | raw + canonical | equivalent (pre-existing anchors, unchanged) |
+| `if` / `else` / `elif` chain with trailing `else` (`k_elif_chain`) | raw + canonical | equivalent |
+| `if` / `elif` chain with no `else` (`k_elif_no_else`) | raw + canonical | equivalent |
+| `if` / `elif` / `else` chain nested in a staged `while` (`k_elif_in_while`) | raw + canonical | equivalent |
+| `if` / `else` nested in a staged `while` (`k_if_else_in_while`) | raw + canonical | equivalent |
+| `if` / `else` nested in the for-form `pl.spmd` body (`k_if_in_spmd_for`) | raw + canonical | equivalent |
+| `if` / `else` nested in the with-form `pl.spmd` body (`KIfInSpmdWith`, program-level) | raw + program-canonical | equivalent |
+| empty then-branch (`pass`) (`k_pass_then_branch`) | raw | equivalent |
+| host predicate (`gate = 4; if gate > 2:`) | n/a (no anchor possible) | **intended divergence** — `docs/design/01-language.md` §5 line 201 (*'Value-directed staging uses the kind of the predicate or iterable'*) + line 226 (*'A host predicate (plain Python int/bool) → host if: one path only'*) + §11 line 595 (*'host predicate → one path, passes through'*). Tracing emits no `IfStmt` (taken path only); the parser stages every `if` with a constant condition. Pinned by `test_host_predicate_dispatch_divergence`. |
+| explicit-yield `if` (`pl.intrin.carry`/`yield_`/`leak` vs `a = pl.yield_`) | n/a | **out of scope — no shared spelling**: the assembly channel is tracing-owned (`pl.intrin.carry`/`leak`; the parser reports `Unknown operation 'pl.intrin'`), the result spelling is parser/round-trip-owned (`a = pl.yield_(...)`; tracing's `_YieldMarker` has no `unwrap`). Dialect boundary per `docs/design/01-language.md` §14 line 671. |
+
+No red anchor, therefore no `F*` task and no frontend edit. The three
+gap hypotheses in section 5's R5 row were all confirmed (elif chains,
+host-vs-staged dispatch, nesting in `while`/`spmd`) — the two anchoring
+surprises were that the elif chain is raw-equal (not merely
+post-canonical) and that `pl.spmd` nesting needs no new regime.
+
+## 11. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
 | 0 | seed this tracker | — (orchestrator) | done | `d60a4b303` | plan, contract, evidence base |
 | 0 | parity inventory oracle | — (orchestrator) | done | *(this commit)* | `scripts/review/check_construct_parity.py`; 0 stale, 10/16 constructs without anchors, 4 unclaimed structural parser handlers, 17 unclaimed public tracing entries. The gap table in section 5 is now data, not hypothesis |
+| 1 | R5 `if` / `else` / `elif` | worker session | done | *(this commit)* | 13 new anchors in `test_if.py` (suite 7 → 20 call sites; 70 → 83 across `test_*.py`), all green. **No `F*` task**: no red anchor. One intended divergence pinned (host predicate dispatch). |
