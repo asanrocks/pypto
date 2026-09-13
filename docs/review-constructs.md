@@ -63,23 +63,36 @@ compared end to end.**
 `test_call`, `test_extern`, `test_inline`, `test_staged_host_join`,
 `test_submit_collect`. That is not automatically a coverage hole — they may
 assert through a different entry point (a `bind`/program helper, or a targeted
-negative assertion). Establishing which is which is Round 0's first job, and the
-reason the gap list below is a **hypothesis** rather than a worklist.
-
-Coverage is thin in specific places, not absent.
+negative assertion). **Resolved in Round 0:** the anchor count is per *suite*,
+and `test_call`/`test_extern`/`test_inline` exercise calls through a different
+helper, so the per-construct table below (not the per-suite count) is the
+worklist. Coverage is thin in specific places, not absent.
 
 ## 4. Round 0 — the parity inventory oracle
 
 `scripts/review/check_construct_parity.py` (report-only, not wired into
-`./scripts/gate`):
+`./scripts/gate`). It holds a hand-maintained construct map and *verifies* it
+against the tree, reporting STALE for any map pattern that matches nothing, so
+the map cannot silently rot into passing. Three outputs: the per-construct
+coverage table; unclaimed parser handlers, bucketed into the out-of-scope
+op/value surface and the structural remainder; unclaimed public tracing entries.
 
-- enumerates parser structural handlers, tracing construct entries, and the
-  anchors that exist per construct;
-- prints the **uncovered and thin** set, which becomes each task's worklist.
+**Round 0 output at seed time:** 0 stale map entries; **10 of 16 constructs have
+no anchor suite**; **4 unclaimed structural parser handlers** —
+`_handle_at_optimizations_kw`, `_parse_and_validate_core_num`,
+`_parse_pld_category_op`, `_parse_range_keyword` (the other 26 unclaimed
+handlers are the op/value surface, out of scope by section 8); **17 unclaimed
+public tracing entries**.
 
-Same discipline as round 0 of the migration review: **the agent judges; it never
-enumerates.** An earlier round proved a model can drop a file from a 21-item
-`rg -l` list on the easiest task in the campaign.
+Anchors per construct: `while` 16, `binding / assignment` 12, `at family` 10,
+`if / else / elif` 7, `for + iterators` 7, `spmd` 4 — and **0** for
+`break / continue`, `returns / exits`, `generic scopes`, `split_aiv`,
+`submit / spmd_submit`, `with-form scopes`, `intrin surface`,
+`statement handlers`, `func attrs / optimizations`, `calls`.
+
+The discipline is the same as round 0 of the migration review: **the agent
+judges; it never enumerates.** An earlier round proved a model can drop a file
+from a 21-item `rg -l` list on the easiest task in the campaign.
 
 ## 5. Wave 1 — structural core (answers the question directly)
 
@@ -144,5 +157,5 @@ Additions for this campaign:
 
 | Round | Task | Model | State | Commit | Result |
 | --- | --- | --- | --- | --- | --- |
-| 0 | seed this tracker | — (orchestrator) | pending | | |
-| 0 | parity inventory oracle | — (orchestrator) | pending | | |
+| 0 | seed this tracker | — (orchestrator) | done | `d60a4b303` | plan, contract, evidence base |
+| 0 | parity inventory oracle | — (orchestrator) | done | *(this commit)* | `scripts/review/check_construct_parity.py`; 0 stale, 10/16 constructs without anchors, 4 unclaimed structural parser handlers, 17 unclaimed public tracing entries. The gap table in section 5 is now data, not hypothesis |
