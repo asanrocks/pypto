@@ -329,6 +329,20 @@ non-allowlisted usages"; the rows were reworded. Fix: exclude
 `scripts/review/`, or treat markdown table/prose lines as prose. Red check:
 `python3 scripts/review/check_deprecated_runtime.py` after any tracker edit
 (PASS = `88 allowlisted, 0 candidates`).
+- **F6 — `spec(examples)` bundles a pre-existing flash-attention algorithm fix and executable golden.** Found in R3: `b9cb6f04b` changes the online-softmax else branch from a fresh `mi_102` to the carried `mi_update`, removes the skip-only `__main__`, and adds simulator execution plus an fp32 golden. Those are correctness validation/fix work, not required to replace parser-era spellings. Red check: `git diff --unified=0 b9cb6f04b^ b9cb6f04b -- examples/models/03_flash_attention.py`. Owner: `examples/models/03_flash_attention.py`.
+- **F7 — `spec(st)` duplicates the return-style dispatch regression.** Found in R3: `d3bd63e67` adds `return_style_add` and its dispatch assertion even though `tests/ut/jit/test_return_style_dispatch.py` already owns the F8 pipeline/codegen/metadata regression; the ST addition belongs with the return-style fix if the hardware check is retained. Red check: `rg -n 'return_style_add|return-style' tests/ut/jit/test_return_style_dispatch.py tests/st/runtime/framework_and_models/test_jit.py`. Owners: `tests/st/runtime/framework_and_models/test_jit.py`, `tests/ut/jit/test_return_style_dispatch.py`.
+- **F8 — `spec(carry)` removes the gate budget from subprocess-backed auto-deps tests.** Found in R3: `236dbad47` deletes the two 60-second markers and their rationale from a file whose tests still spawn fresh interpreters, undoing `41cb2da7f`'s documented accommodation for the gate's 10-second timeout. Red check: `git diff --unified=0 41cb2da7f 236dbad47 -- tests/ut/ir/transforms/test_auto_derive_task_dependencies.py`. Owner: `tests/ut/ir/transforms/test_auto_derive_task_dependencies.py`.
+- **F9 — `spec(transmute)` deletes four flatten-pass span regressions.** Found in R3: `1e2c80e77` removes `test_rebuilt_op_keeps_the_rhs_call_span_not_the_statement_span`, `test_auxiliary_synthesized_statements_keep_the_assignment_span`, `test_delegated_lowering_statements_keep_the_assignment_span`, and `test_fused_batch_matmul_stores_keep_the_consumed_store_span` without a tracing replacement. Red check: `git diff --unified=0 1e2c80e77^ 1e2c80e77 -- tests/ut/ir/transforms/test_flatten_tile_nd_to_2d.py`. Owner: `tests/ut/ir/transforms/test_flatten_tile_nd_to_2d.py`.
+- **F10 — the R2 oracle cannot tell a modified comment from an added one.**
+  Found by orchestrator verification in round 1, so it predates F6–F9; it is
+  recorded last because the orchestrator's write of it was lost (see note in
+  round 2) and the next-free-id rule then applied. A comment-only hunk with no
+  `-` line is new prose explaining new code (25 lines / 8 files here:
+  `_metadata_program`, `defs_ordered`, new span assertions), not churn on an
+  upstream comment; it should be out of scope rather than allowlisted. Red
+  check: split the flagged set by presence of a removed line and assert the
+  addition-only part is empty. Owning file:
+  `scripts/review/check_comment_churn.py`.
 
 ## 5. Round ledger
 
@@ -336,11 +350,11 @@ non-allowlisted usages"; the rows were reworded. Fix: exclude
 | --- | --- | --- | --- | --- | --- |
 | 0 | seed tracker + oracles | — (orchestrator) | done | `1acbadcc8` | oracles frozen: R1 red 34, R2 red 167, R4 red 2 |
 | 0.1 | churn-oracle scope fix | — (orchestrator) | done | `cce8029da` | R2 red restored to the seed 167/38; the tooling had been auditing itself (`scripts/review/comment_churn_allowlist.txt` reported as churn) |
-| 0.2 | F5 fix: R1 oracle off markdown | — (orchestrator) | done | *(this commit)* | the tracker's own prose can no longer flip R1 red; markdown removed from the oracle's code set |
+| 0.2 | F5 fix: R1 oracle off markdown | — (orchestrator) | done | `07132dfb2` | the tracker's own prose can no longer flip R1 red; markdown removed from the oracle's code set. **Note:** that commit's message also claims it recorded the R2 verification block and filed F10 — the edit was lost to a failed multi-edit call, so only the oracle fix and ledger rows landed. Both are recorded now |
 | 1 | R1 | `opencode-go/deepseek-v4.1-flash:high` | done | `be0618dcf` | 34 → 0 candidates (oracle PASS); 7 files migrated, 1 allowlisted as `necessary`; F1 found. **Orchestrator-verified**: 240 touched tests pass, D10 justification confirmed verbatim, oracle edit narrows scope without weakening it |
 | 1 | R2 | `opencode-go/deepseek-v4.1-flash:high` | done | `27ab5aeff` | 167 → 0 flagged lines (oracle PASS; 133 lines in 28 files allowlisted with reasons, 32 lines restored, 2 reclassified by an oracle scope fix); F2–F4 found. **Orchestrator-verified**: 108 modified-upstream vs 25 pure-addition lines, samples confirm the reasons, F2/F3 confirmed real. **Escalated**: the `vocabulary` group rests on a doc the changeset itself added |
-| 1 | R3 | `openai/gpt-5.6-luna:max` | pending | | |
-| 1 | R4 | `opencode-go/deepseek-v4.1-flash:high` | done | *(this commit)* | R4 oracle 2 → 0 undocumented (PASS); the repo's user-manual gate 4 → 0 missing (the stronger reading: `pl.expand`, `pl.program_parser` were also undocumented in `docs/en/user/`); `cond`/`while_` removal confirmed intentional, one stale index row recorded |
+| 1 | R3 | `openai/gpt-5.6-luna:max` | done | `d9c8c471c` | 13 subject-matched `spec(` commits reviewed; four residual non-minimal units recorded as F6–F9. Historical `run-log` churn was removed by `f6e56bac7`. **Orchestrator-verified**: all three spot-checked red checks reproduce (4 span tests deleted by `1e2c80e77`, 2 `timeout(60)` budgets removed by `236dbad47`, the flash-attention term change in `b9cb6f04b`) |
+| 1 | R4 | `opencode-go/deepseek-v4.1-flash:high` | done | `a87fc0676` | 4 undocumented names, not the oracle's 2: the worker ran the repo's own `check_docs_symbol_coverage` gate (user-manual code spans), which also caught `pl.expand` and `pl.program_parser`; 247/247 now. **Orchestrator-verified**: gate exit 0, new sections present in en+zh, `cond`/`while_` removal documented in the migration guide, and the manual's only mentions teach the removal. Stale index rows recorded as needs-decision |
 
 **Convergence.** A round is clean when it introduces no new findings and
 commits only ledger updates, with every oracle green and `./scripts/gate`
@@ -350,6 +364,35 @@ on a one-line `rg`). Cap: 3 rounds, then escalate unresolved items to the human.
 
 **Cross-review.** Round *N*'s fix diff is reviewed in round *N+1* by the
 *other* model, against the commit range recorded here.
+
+### Round 2 plan (and round-1 lessons)
+
+Round 2 is the cross-review pass: each fix diff (`be0618dcf` R1, `27ab5aeff` R2,
+`a87fc0676` R4, plus the orchestrator commits) is reviewed by the *other* model
+against `1acbadcc8..HEAD`, with the tracker excluded from its own subject. Open
+items it must carry:
+
+- **F10** — refine the churn oracle (additions vs modifications), then re-run
+  R2; the addition-only allowlist entries should fall away on their own.
+- **The R2 `vocabulary` group** — escalate to the human; do not silently
+  accept the circular justification.
+- **F1, F2, F3, F6–F9** — fixes, each sized to the gate.
+
+Round-1 lessons worth keeping:
+
+1. **Script the enumeration; the model judges.** An agent dropped a file from a
+   21-item `rg -l` list — on the easiest task in the campaign. Every review
+   task must be handed a script-produced worklist, never asked to enumerate.
+2. **A worker will take the dangerous shortcut unless it is forbidden.** R2's
+   axis is one `git checkout origin/main -- <file>` away from reverting a
+   file's code along with its comments. The prompt now forbids wholesale
+   restores explicitly.
+3. **Verify your own writes, not your intent.** An orchestrator multi-edit call
+   failed atomically; the commit message still described the change as landed.
+   The tree, not the message, is the record: check the diff before committing.
+4. **Prefer the repo's own gate to a bespoke oracle.** R4's oracle found 2
+   undocumented names; `check_docs_symbol_coverage` found 4. Where a repo lint
+   already encodes the question, it is the authoritative reading.
 
 ## 6. Worker invocation
 
@@ -505,9 +548,66 @@ One entry per line was appended to `scripts/review/comment_churn_allowlist.txt`,
 grouped by reason; that file carries the one-word tag only, the argument lives
 in the tables above.
 
+#### Orchestrator verification (round 1)
+
+Independently checked: oracle green; the 32 restored lines are byte-identical to
+`origin/main`; `check_headers` reports 52 failures and **all 52 are inside the
+changeset** (F2 is real, not pre-existing drift); `ruff format --check` fails on
+14 files (F3 is real); the churn oracle's `#` fix is correct (`#include` is a
+preprocessor directive, not prose).
+
+Two caveats, both for round 2:
+
+- **Scope.** The oracle cannot distinguish a *modified* upstream comment from a
+  comment-only *addition*. The 133 allowlisted lines split **108 modified (22
+  files — the real R2 axis)** / **25 pure additions (8 files)**: new prose
+  explaining new code (`_metadata_program=` in `ir/compile.py`, `defs_ordered`
+  in `inline_functions_pass.cpp`). Leaving those alone is correct, but they are
+  not churn and should not need an allowlist entry. Filed as F10.
+- **The `vocabulary` group is escalated, not accepted.** Its five files are
+  justified by `docs/guide-comments.md`, a document the changeset itself added
+  and retained. That is circular: the changeset rewrote upstream comments *and*
+  supplied the prose authority that mandates the rewording. The representative
+  case (`tests/ut/codegen/test_orchestration_misc.py`: "alias is minted" →
+  "alias is created") is a pure vocabulary edit, on a hunk otherwise unrelated
+  to the reworded line. Not reverted — the convention doc is real and retained
+  at HEAD — but this is `needs-decision` for the human, not a clean
+  `necessary`.
+
 ### R3 non-minimal findings
 
-None recorded yet.
+No automatic oracle exists for this axis. The documented subject-only worklist
+is the count oracle.
+
+Before: **13 `spec(` commits**, from `git log --format='%h %s'
+origin/main..HEAD | rg '^[0-9a-f]+ spec\('`.
+After: **13 `spec(` commits**; the review changes only this tracker record.
+
+| Commit / minimal unit | Verdict | Decision |
+| --- | --- | --- |
+| `d3bd63e67` ST dialect rewrites | `necessary` | The carry/const rewrites, closure-callee captures, eager/lazy compile-for-test adapters, explicit tpop producers, and tracing-owned assertions are required for the ST suites to leave the parser-era lane. |
+| `d3bd63e67` `return_style_add` and its end-to-end dispatch test | `unnecessary` | This is a regression test for the pre-existing return-style dispatch fix (`f6109f786`), not an ST dialect rewrite. Recorded as F7. |
+| `b9cb6f04b` example dialect rewrites other than `03_flash_attention.py`'s algorithm hunk | `necessary` | The examples replace parser-era loop channels and `lower()`, state typed staged values, capture program callees, and adapt tracing execution. |
+| `b9cb6f04b` `examples/models/03_flash_attention.py` online-softmax correction and new simulator/golden `__main__` path | `unnecessary` | Replacing the fresh `mi_102` with carried `mi_update` changes pre-existing algorithm behavior, and the executable golden is new validation for that bug fix. The tracing carry/output spelling remains necessary. Recorded as F6. |
+| `57c9018da` fixture migrations | `necessary` | The parser-owned markers, tracing carries/consts, typed expected IR, and placement-specific fixture moves are required by the corresponding dialect contracts. |
+| `c71009928` placement and parser-owned fixture moves | `necessary` | Explicit `target_memory` and parser ownership of annotation-only `MemRef` fixtures are required authoring changes. |
+| `29c56ec43` direct SPMD assembly fixtures | `necessary` | The `pl.intrin.spmd_direct`/`spmd_direct_call` migration and its focused coverage state the assembly dialect's dispatch form. |
+| `f66b3bd09` typed staged constants and fixture migrations | `necessary` | The affected fixtures must use `pl.const` and staged predicates under tracing; the documentation hunks are out of scope under §2. |
+| `1e2c80e77` transmute fixture rewrites | `necessary` | Producer-side `pl.intrin.transmute` is the required replacement for annotation-only view restamping, with carry rewrites where those fixtures also use loop channels. |
+| `1e2c80e77` deletion of four `TestFlattenTileNdTo2DSpans` tests | `unnecessary` | The RHS-call, synthesized-statement, delegated-lowering, and fused-store span regressions are independent pass coverage and were deleted without a migration replacement. Recorded as F9. |
+| `236dbad47` carry fixture rewrites and tracing cycle/typing adaptations | `necessary` | These hunks replace `init_values`/implicit yields and make staged values type-sound or explicitly reject recursion, as required by the tracing contract. |
+| `236dbad47` removal of the two 60-second subprocess timeout overrides | `unnecessary` | `41cb2da7f` added the documented budget because these tests spawn a fresh interpreter; the subprocesses remain, and the spec commit gives no migration reason to remove the budget. Recorded as F8. |
+| `bdefaec5b` explicit tpop producer semantics and fixture migrations | `necessary` | The shape/dtype producer contract must be implemented in the wrappers, registry/codegen, and affected fixtures; the documentation hunks are out of scope under §2. |
+| `d54679982` tracing-jit and entrance oracle suites | `necessary` | These additions are the acceptance coverage for the tracing jit, entrance, parameter-world, submit, and variant-key contracts introduced by the migration. |
+| `edef64804` frontend ownership flip and contract suites | `necessary` | Unsuffixed tracing dispatch, permanent parser markers, gate pinning, strict xfail handling, layering checks, and frontend-equivalence coverage are migration infrastructure. The generated `run-log` addition was historical churn and was removed by `f6e56bac7`. |
+| `a8c4cc223` typed facade alignment | `necessary` | The direct attributes, honest heterogeneous namespaces, and inline ignores make the shared suites agree with the typed facade contract and typing gates. |
+| `02d3360cc` explicit parser markers and parser-corpus rewrites | `necessary` | The aliases, decorator recognition, and parser-suite marker substitutions pin parser ownership before unsuffixed markers switch to tracing. |
+| `edef64804`, `bdefaec5b`, `57c9018da` tracked `run-log` artifacts | `unnecessary` | They are generated gate output, not source or migration evidence. They were removed later by `f6e56bac7`, so no residual task is opened. |
+
+### R3 verdict notes
+
+The four accepted findings are historical scope decisions, not code changes in
+this review session. Their owning follow-ups are listed under Discovered tasks.
 
 ### R4 API documentation verdicts
 
