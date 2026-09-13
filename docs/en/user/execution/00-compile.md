@@ -33,7 +33,7 @@ B = torch.randn(128, 128, dtype=torch.float32)
 @pl.jit
 def add(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.add(a, b)
+        out[0:128, 0:128] = pl.add(a, b)
     return out
 
 
@@ -76,7 +76,7 @@ move. All are keyword-only — only `program` is positional.
 | `enable_pypto_l0c_double_buffer` | `None` | L0C double buffering |
 | `emit_source_loc` | `None` | Carry DSL source locations into the emitted `.pto` |
 | `dump_ptoas_passes` | `False` | Also dump ptoas's own pass IR |
-| `runtime` | `None` | Simpler runtime ABI to target — `TENSORMAP_AND_RINGBUFFER` or `HOST_BUILD_GRAPH` (what `@pl.jit.graph` needs — [Functions](../language/01-functions.md)); `None` inherits the active `PassContext`. The worker must match it |
+| `runtime` | `None` | Simpler runtime ABI to target — `TENSORMAP_AND_RINGBUFFER` or `HOST_BUILD_GRAPH` (what a Graph function needs — [Functions](../language/01-functions.md)); `None` inherits the active `PassContext`. The worker must match it |
 
 ### Pass dumps
 
@@ -103,7 +103,7 @@ want when the question is "which pass changed this".
 | `report/pipeline_profile.*` | Per-stage compile timing, when `profiling=True` |
 | `dfx_outputs/` | Written at *run* time by the DFX flags, not by compilation |
 
-### `JITFunction.compile`
+### The jit's `compile`
 
 `@pl.jit` normally fuses specialize + compile + dispatch into one `kernel(*args)` call.
 `compile(*sample_args)` stops after compilation and returns the `CompiledProgram` the JIT
@@ -115,11 +115,11 @@ directly needs: `chip_callable`, `runtime_name`, `runtime_config`, `output_dir`,
 Argument marshalling is not part of that surface — dispatch through
 [`ChipWorker`](01-run.md#explicit-dispatch), which does it for you.
 
-`lower(*args)` goes one step less far: it runs the passes and returns the `Program`,
-writing no artifacts — which also means no `passes_dump/`. It is the right form for
-[torch codegen](../tools/01-torch-codegen.md), which wants the IR itself; the
-[memory map](../tools/02-memory-map.md) reads a dump on disk and therefore needs
-`compile()`.
+`compile_for_test(*args)` goes one step less far: it runs the Default pass pipeline and
+returns the post-pass `ir.Program`, writing no artifacts — which also means no
+`passes_dump/`. It is the right form for [torch codegen](../tools/01-torch-codegen.md),
+which wants the IR itself; the [memory map](../tools/02-memory-map.md) reads a dump on
+disk and therefore needs `compile()`.
 
 ## Edge Cases
 
@@ -127,7 +127,7 @@ writing no artifacts — which also means no `passes_dump/`. It is the right for
 | ------- | ----- | --- |
 | **`TypeError: got an unexpected keyword argument`** | Compile option passed positionally to `compile()` | Put it in `config=RunConfig(...)` |
 | **Worker rejects the artifact** | `platform` at compile time differs from the worker's | Compile with the platform you will dispatch on |
-| **No `passes_dump/`** | `lower()` writes no artifacts; `dump_passes=False` | Use `compile()`, or pass `dump_passes=PassDumpLevel.EXPLICIT` |
+| **No `passes_dump/`** | `compile_for_test()` writes no artifacts; `dump_passes=False` | Use `compile()`, or pass `dump_passes=PassDumpLevel.EXPLICIT` |
 | **Memory map has nothing to draw** | `memory_planner=PTOAS` skips `AllocateMemoryAddr`, so the dump carries no offsets | Compare end to end instead |
 
 > **`verification_level` is a debugging lever, not a default to raise.** `BASIC` is the

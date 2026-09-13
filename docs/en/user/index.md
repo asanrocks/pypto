@@ -54,7 +54,7 @@ cross-rank overlap.
 | [Programming Model](03-programming-model.md) | Tensor / Tile / Block levels, control vs. execution plane, the pass pipeline, memory hierarchy, execution model |
 | [Language Guide](language/index.md) | The full language, one topic per page: types, functions, control flow, memory, scopes and tasks, directives |
 | [Operations](ops/index.md) | Choosing between the `pl.*`, `pl.tensor.*`, and `pl.tile.*` namespaces, plus the operator catalog |
-| [Compiling a Program](execution/00-compile.md) | `ir.compile()` and `JITFunction.compile()`, and inspecting the result |
+| [Compiling a Program](execution/00-compile.md) | `ir.compile()` and the jit's `compile()`, and inspecting the result |
 | [Running on Device](execution/01-run.md) | Resident device tensors, explicit dispatch, and the `RunConfig` fields that affect dispatch |
 | [Torch Codegen Debug Guide](tools/01-torch-codegen.md) | Generating a PyTorch reference implementation from the IR to isolate accuracy problems |
 | [Distributed Programming](distributed/index.md) | Symmetric-memory model, collectives, primitives, execution, and debugging for cross-rank programs |

@@ -14,7 +14,7 @@ PyPTO 程序里每个值都带有类型，说明它住在哪里、元素有多�
 
 **调用方可以怎么用它。** 参数方向 —— `In`（默认）、`pl.Out[...]`、`pl.InOut[...]` —— 是签名的一部分，不是约定。编译器从方向推导任务依赖，所以方向声明错了得到的是**一张错的依赖图**，而不是一个编译错误。
 
-Shape 默认是静态的，在解析期检查。`pl.dynamic()` 让某一维退出这种检查，代价是编译器本可以从这个维度推出的一切。
+Shape 默认是静态的，在 trace 时检查。`pl.dynamic()` 让某一维退出这种检查，代价是编译器本可以从这个维度推出的一切。
 
 ## Quickstart：读懂一个签名
 
@@ -22,6 +22,7 @@ Shape 默认是静态的，在解析期检查。`pl.dynamic()` 让某一维退�
 ```python
 import pypto.language as pl
 import torch
+from pypto import ir
 from pypto.runtime import RunConfig
 
 CFG = RunConfig(platform="__PLATFORM__")
@@ -49,11 +50,11 @@ def scale_rows(
 
 @pl.jit
 def apply_scale(
-    x: pl.Tensor[[64, 128], pl.FP16],
-    acc: pl.InOut[pl.Tensor[[64, 128], pl.FP32]],
-    out: pl.Out[pl.Tensor[[64, 128], pl.FP32]],
+    x: pl.Tensor,
+    acc: pl.InOut[pl.Tensor],
+    out: pl.Out[pl.Tensor],
 ):
-    acc, out = scale_rows(x, acc, out, 2.0)             # the dynamic axis binds to 64 here
+    acc, out = scale_rows(x, acc, out, pl.const(2.0, pl.FP32))   # the scalar crosses staged; shapes flow from the args
     return acc, out
 
 
@@ -76,6 +77,8 @@ torch.testing.assert_close(acc, acc_before + scaled, rtol=1e-2, atol=1e-2)  # In
 | `pl.Out[...]` | kernel 只写。在写入前读一个 `Out` 参数读到的是未定义内存 |
 | `pl.Scalar[pl.FP32]` | 单个值，不是缓冲区 |
 | `M = pl.dynamic("M")` | 该维编译期未知，每次启动时绑定 |
+
+入口刻意写成裸注解 —— lazy lane，这样本块才能用张量直接派发；`scale_rows` 的完整注解才是被阅读的对象。注意那个标量：`pl.Scalar[...]` 参数是**运行期参数**，所以值在调用跨越 trace 边界时必须是 staged 的 —— 即上面的 `pl.const(2.0, pl.FP32)`。在那里写裸的宿主 `2.0` 是一个响亮的世界检查错误，而不是静默烘入。
 
 ## Mechanics
 
@@ -153,7 +156,7 @@ view = pl.TensorView(stride=[1024, 1], layout=pl.TensorLayout.ND, valid_shape=[1
 
 ### 动态 shape
 
-`pl.dynamic(name)` 用来标注**编译时未知、且每次启动都可能不同**的轴 —— 随请求变化的 batch、解码过程中不断增长的序列长度。该维的尺寸成为运行期的值，因此一份编译产物服务这个轴的所有取值：动态维在 JIT 缓存 key 里折叠为 `None`，尺寸变化不会触发重编译。
+`pl.dynamic(name)` 用来标注**编译时未知、且每次启动都可能不同**的轴 —— 随请求变化的 batch、解码过程中不断增长的序列长度。该维的尺寸成为运行期的值，因此一份编译产物服务这个轴的所有取值。
 
 <!-- doctest: run -->
 ```python
@@ -172,14 +175,19 @@ def drive(x: pl.Tensor[[N, 64], pl.FP32], out: pl.Out[pl.Tensor[[N, 64], pl.FP32
     return rows(x, out)         # the entry is dynamic too, so both extents share it
 
 
-# Two extents through one program: the dynamic dim collapses to None in the JIT
-# cache key, so the second call is not a recompile.
+# Both kernels are fully annotated, so both are traced at decoration — the eager lane.
+# Compile the traced functions directly; the program must contain every callee.
+compiled = ir.compile(ir.Program([drive, rows], drive.name, drive.span), platform=CFG.platform)
+
+# Two extents through one artifact: N stays symbolic, so dispatch never recompiles.
 for extent in (TILE, 3 * TILE):
     x = torch.randn(extent, 64, dtype=torch.float32)
     out = torch.zeros(extent, 64, dtype=torch.float32)
-    drive(x, out, config=CFG)
+    compiled(x, out)
     torch.testing.assert_close(out[:TILE], x[:TILE] * 2.0, rtol=1e-4, atol=1e-4)
 ```
+
+dynamic 注解把 kernel 放到 **eager lane** 上：它在装饰时被 trace，编译产物把该维保持为符号 —— 一份产物服务所有 extent，上面这个循环派发的正是它。jit 自己的派发 lane 则是静态路线：裸注解的 kernel 用 torch 张量调用时，每个特化都会烘入实参形状，因此新的 extent 就是一次新的编译。维度确实每次启动都在变时才注解它；每种形状都值得自己的产物时则保持裸注解。
 
 入口必须保持 dynamic 才成立。给它一个具体形状会把程序钉死在一个 extent 上；而在 dynamic 形状的张量上做编排级运算（而不是交给 InCore kernel）会更早失败 —— 失败在 `InitMemRef`，它需要常量维。上面这个 kernel 搬的是固定的 `TILE`；要覆盖更大输入的全部，用 [控制流](02-control-flow.md) 里的分块循环。
 

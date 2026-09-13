@@ -25,8 +25,9 @@ so a `pl.cast` is required wherever the widths differ.
 dependencies from directions, so a mis-declared direction produces a wrong dependency
 graph rather than a compile error.
 
-Shapes are static by default and checked at parse time. `pl.dynamic()` opts a dimension
-out of that, at the cost of everything the compiler could have concluded from knowing it.
+Shapes are static by default and checked when the kernel is traced. `pl.dynamic()` opts a
+dimension out of that, at the cost of everything the compiler could have concluded from
+knowing it.
 
 ## Quickstart: reading a signature
 
@@ -34,6 +35,7 @@ out of that, at the cost of everything the compiler could have concluded from kn
 ```python
 import pypto.language as pl
 import torch
+from pypto import ir
 from pypto.runtime import RunConfig
 
 CFG = RunConfig(platform="__PLATFORM__")
@@ -61,11 +63,11 @@ def scale_rows(
 
 @pl.jit
 def apply_scale(
-    x: pl.Tensor[[64, 128], pl.FP16],
-    acc: pl.InOut[pl.Tensor[[64, 128], pl.FP32]],
-    out: pl.Out[pl.Tensor[[64, 128], pl.FP32]],
+    x: pl.Tensor,
+    acc: pl.InOut[pl.Tensor],
+    out: pl.Out[pl.Tensor],
 ):
-    acc, out = scale_rows(x, acc, out, 2.0)             # the dynamic axis binds to 64 here
+    acc, out = scale_rows(x, acc, out, pl.const(2.0, pl.FP32))   # the scalar crosses staged; shapes flow from the args
     return acc, out
 
 
@@ -88,6 +90,12 @@ torch.testing.assert_close(acc, acc_before + scaled, rtol=1e-2, atol=1e-2)  # In
 | `pl.Out[...]` | The kernel only writes it. Reading an `Out` parameter before writing it reads undefined memory |
 | `pl.Scalar[pl.FP32]` | A single value, not a buffer |
 | `M = pl.dynamic("M")` | The dimension is unknown at compile time and bound per launch |
+
+The entry is deliberately bare-annotated — the lazy lane, so the block can dispatch it
+with tensors; `scale_rows`'s full annotations are the subject being read. Note the scalar:
+a `pl.Scalar[...]` parameter is a **runtime parameter**, so the value must be staged when
+the call crosses the trace boundary — `pl.const(2.0, pl.FP32)` above. A bare host `2.0`
+there is a loud world-check error, not a silent bake.
 
 ## Mechanics
 
@@ -220,8 +228,7 @@ Vec-to-Mat-to-scale-memory path for the scale.
 `pl.dynamic(name)` marks an axis whose extent is **not known when the kernel is compiled
 and may differ from one launch to the next** — a batch that varies with the request, a
 sequence length that grows as decoding proceeds. The extent becomes a run-time value, so
-one compiled program serves every size that axis takes: dynamic dimensions collapse to
-`None` in the JIT cache key, and changing the extent does not trigger a recompile.
+one compiled program serves every size that axis takes.
 
 <!-- doctest: run -->
 ```python
@@ -240,14 +247,24 @@ def drive(x: pl.Tensor[[N, 64], pl.FP32], out: pl.Out[pl.Tensor[[N, 64], pl.FP32
     return rows(x, out)         # the entry is dynamic too, so both extents share it
 
 
-# Two extents through one program: the dynamic dim collapses to None in the JIT
-# cache key, so the second call is not a recompile.
+# Both kernels are fully annotated, so both are traced at decoration — the eager lane.
+# Compile the traced functions directly; the program must contain every callee.
+compiled = ir.compile(ir.Program([drive, rows], drive.name, drive.span), platform=CFG.platform)
+
+# Two extents through one artifact: N stays symbolic, so dispatch never recompiles.
 for extent in (TILE, 3 * TILE):
     x = torch.randn(extent, 64, dtype=torch.float32)
     out = torch.zeros(extent, 64, dtype=torch.float32)
-    drive(x, out, config=CFG)
+    compiled(x, out)
     torch.testing.assert_close(out[:TILE], x[:TILE] * 2.0, rtol=1e-4, atol=1e-4)
 ```
+
+The dynamic annotation puts the kernel on the **eager lane**: it is traced at decoration,
+and the compiled artifact keeps the dimension symbolic — one artifact serves every extent,
+which is what the loop above dispatches. The jit's own dispatch lane is the static route:
+a bare-annotated kernel called with torch tensors bakes the argument shapes into each
+specialization, so a new extent is a new compilation. Annotate the dimension when it
+genuinely varies per launch; leave it bare when each shape deserves its own artifact.
 
 The entry has to stay dynamic for that to hold. Giving it a concrete shape pins the program
 to one extent, and doing orchestration-level work on a dynamic-shaped tensor (rather than

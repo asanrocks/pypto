@@ -21,9 +21,10 @@ graph the compiler derives. Confusing these three is the root of most early
 misunderstandings, so it is worth reading the rest of this page with the distinction in
 mind.
 
-Nothing in a PyPTO program executes when Python runs it. Decorators parse source into
-IR; passes rewrite that IR; code generation emits device kernels and host orchestration;
-the runtime schedules them. Python is the authoring language, not the execution engine.
+A PyPTO program is ordinary Python, and the decorators **run** it: collecting IR is a side
+effect of executing the body through the tracing frontend. Passes rewrite that IR; code
+generation emits device kernels and host orchestration; the runtime schedules them.
+Python is the authoring language; the trace is the IR.
 
 ## Quickstart: the three levels in one program
 
@@ -36,17 +37,17 @@ import pypto.language as pl
 
 @pl.jit.incore
 def square_tensor(
-    x: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    x: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     # Tensor level: name the whole array. Placement and movement are the compiler's.
-    out[:] = pl.mul(x, x)
+    out[0:128, 0:128] = pl.mul(x, x)
     return out
 
 @pl.jit.incore
 def square_tile(
-    x: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    x: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     # Tile level: name the on-chip buffer, and move the data yourself.
     t = pl.load(x, [0, 0], [128, 128])
@@ -56,9 +57,9 @@ def square_tile(
 
 @pl.jit
 def levels(
-    x: pl.Tensor[[128, 128], pl.FP32],
-    out_t: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
-    out_k: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    x: pl.Tensor,
+    out_t: pl.Out[pl.Tensor],
+    out_k: pl.Out[pl.Tensor],
 ):
     # Control plane: no computation, just dispatch.
     out_t = square_tensor(x, out_t)
@@ -144,7 +145,7 @@ no `FunctionType.Host`; the level/role pair is how host-ness is expressed.)
 ### The compilation pipeline
 
 ```text
-Python DSL          @pl.jit / @pl.program parse source into IR
+Python DSL          @pl.jit / @pl.program trace the body into IR
      │
      ▼
 IR                  immutable tree, shared across the whole compilation
@@ -156,24 +157,25 @@ Pass pipeline       the default strategy, in order: inline, SSA, outline scopes,
 CodeGen             device kernels (.pto -> C++) + host orchestration C++
 ```
 
-Each stage is observable. `lower()` specializes the JIT function, runs the configured
-pass pipeline, and returns the post-pass `ir.Program`; call `program.as_python()` on that
-result to inspect the final lowered IR. By contrast, `CompiledProgram.program` retains
-the specialized pre-pass program, not the pass pipeline's output. When `compile()` is
-called with `dump_passes=`, it writes a snapshot after every pass; `lower()` never writes
-pass snapshots. The passes themselves are documented individually in
+Each stage is observable. `compile_for_test(*args)` runs the Default pass pipeline on the
+call-time specialization and returns the post-pass `ir.Program`; call `program.as_python()`
+on that result to inspect the final lowered IR. By contrast, `CompiledProgram.program`
+retains the specialized pre-pass program, not the pass pipeline's output. When `compile()`
+is called with `dump_passes=`, it writes a snapshot after every pass; `compile_for_test()`
+never writes pass snapshots. The passes themselves are documented individually in
 [Passes](../dev/passes/index.md), numbered in execution order.
 
-`lower()` performs no code generation and does not populate the compiled-program cache.
-Use `compile()` to verify code generation. (`@pl.jit` functions have no `as_python()` of
-their own; inspect the `lower()` result for post-pass IR, or
-`compiled.program.as_python()` for the specialized pre-pass IR retained after
-`compile()`.)
+`compile_for_test()` performs no code generation. Use `compile()` to verify code
+generation. (A lazy-lane `@pl.jit` function has no `as_python()` of its own; inspect the
+`compile_for_test()` result for post-pass IR, or `compiled.program.as_python()` for the
+specialized pre-pass IR retained after `compile()`. A fully annotated kernel is traced at
+decoration — the decorated name *is* the `ir.Function`, and `as_python()` works on it
+directly.)
 
 Two properties of the IR matter to you as a user:
 
 - **It is SSA.** Every binding is written once. Rebinding a name in Python source is
-  fine — the parser renames, and threads a value rebound inside a loop through that loop
+  fine — the SSA pass renames, and threads a value rebound inside a loop through that loop
   as a carried value. That is why `acc = pl.add(acc, ...)` inside `pl.range` works despite
   the IR having no mutation.
 - **It is immutable.** Passes build new IR rather than mutating it, which is what makes

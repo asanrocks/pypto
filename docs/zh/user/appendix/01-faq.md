@@ -5,7 +5,9 @@
 ## 写 kernel
 
 **为什么 kernel 跑了却什么都没写？**
-`out = pl.add(a, b)` 只是重新绑定了一个 Python 名字，并不写输出参数。要用 `out[:] = pl.add(a, b)`，它是 `pl.assemble` 的语法糖。这是最常见的第一个 bug，而且它**静默失败** —— 运行成功，输出全是零。见[语法](../language/06-syntax.md)。
+`out = pl.add(a, b)` 只是重新绑定了一个 Python 名字，并不写输出参数。要用带下标的写
+入 —— `out[:] = pl.add(a, b)` 盖住目标的每一个轴。它是 `pl.assemble` 的语法糖。这是最常见的第一个 bug，而且它
+**静默失败** —— 运行成功，输出全是零。见[语法](../language/06-syntax.md)。
 
 **为什么普通的 `range` 会被拒？**
 DSL 需要知道一个循环究竟是编译期展开、设备侧循环，还是并行派发。请用 `pl.range` / `pl.unroll` / `pl.parallel` / `pl.pipeline` / `pl.spmd`。见[控制流](../language/02-control-flow.md)。

@@ -8,8 +8,8 @@
 
 ## Concept
 
-PyPTO 的 kernel 是被**解析**而非被执行的 Python 源码。`@pl.jit` 读取被装饰函数的函数体，把它
-特化成 PyPTO IR；在你编译这份 IR 并派发它之前，什么都不会运行。
+PyPTO 的 kernel 是普通的 Python，由 `@pl.jit` **trace**：函数体在 trace 期作为 Python 执行，它执行的每个
+`pl.*` 操作都被记录为 IR。任何东西都不会碰设备 —— 你稍后再编译并派发这份 IR。
 
 本页完全停留在**张量级**：你命名整个数组、对它们施加算子，由编译器决定什么时候把什么放到片上。
 下面**没有任何 `pl.load` 或 `pl.store`**。Tile 级写法 —— 自己命名片上缓冲区、自己搬运数据 ——
@@ -45,32 +45,32 @@ B = torch.randn(128, 128, dtype=torch.float32)
 ```python
 @pl.jit
 def add(
-    a: pl.Tensor[[128, 128], pl.FP32],
-    b: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.add(a, b)
+        out[0:128, 0:128] = pl.add(a, b)
     return out
 
 
-compiled = add.compile()
+out = torch.zeros(128, 128, dtype=torch.float32)
+compiled = add.compile(A, B, out, config=CFG)
 print(f"Generated code in: {compiled.output_dir}")
 
-out = torch.zeros(128, 128, dtype=torch.float32)
 add(A, B, out, config=CFG)
 torch.testing.assert_close(out, A + B, rtol=1e-4, atol=1e-4)
 ```
 
 | 行 | 作用 |
 | -- | ---- |
-| `@pl.jit` | 首次编译时把函数体特化成一个 Orchestration 入口 |
-| `a: pl.Tensor[[128, 128], pl.FP32]` | DDR 中一个 128×128 的 FP32 数组。方向默认为 `In` |
-| `out: pl.Out[pl.Tensor[...]]` | **方向**：这个参数是被写的，不是被读的 |
+| `@pl.jit` | 把函数体 trace 成一个 Orchestration 入口；带张量的调用完成特化、编译、派发 |
+| `a: pl.Tensor` | 一个 DDR 张量。形状与 dtype 在调用时从实参读取；方向默认为 `In` |
+| `out: pl.Out[pl.Tensor]` | **方向**：这个参数是被写的，不是被读的 |
 | `with pl.at(level=pl.Level.CORE_GROUP)` | 标记片上代码块。算子只在这里面合法 |
-| `out = pl.add(a, b)` | 对整个张量做逐元素加。没有偏移、没有形状、没有数据搬运 |
+| `out[0:128, 0:128] = pl.add(a, b)` | 对整个张量做逐元素加，经显式切片写回。没有偏移、没有缓冲区、没有数据搬运 |
 | `return out` | 返回被写入的张量 |
-| `add.compile()` | 跑完流水线并返回一个 `CompiledProgram` |
+| `add.compile(A, B, out, config=CFG)` | 为这个特化跑完流水线并返回一个 `CompiledProgram` |
 
 注意这个 kernel 里**没有**什么：没有 tile 类型、没有 `pl.load`、没有 `pl.store`、没有内存空间。
 这些全由编译器的 `ConvertTensorToTileOps` pass 插入 —— 结果可以在
@@ -79,6 +79,10 @@ torch.testing.assert_close(out, A + B, rtol=1e-4, atol=1e-4)
 `pl.Out[...]` 是承重的而非装饰性的：它告诉编译器这块缓冲区会被写，进而决定运行时在调用前是否
 上传、调用后是否下载。每个张量参数都带方向 —— 默认 `In`，或显式的 `pl.Out[...]` /
 `pl.InOut[...]`。
+
+`add` 的参数刻意写成裸的 —— `pl.Tensor`，不带形状。这是 **lazy lane**：调用本身根据实参完成特化。
+完整注解的参数（`a: pl.Tensor[[128, 128], pl.FP32]`）则把形状钉在签名里；一个*每个*参数都带注解的
+kernel 只在装饰时 trace 一次 —— 见[编译](#编译)。
 
 > **为什么 `pl.at` 不是可选的。** 去掉那一行、其余不变，编译会在编排层 codegen 处失败：
 > *"Misplaced tensor op 'tensor.add' in Orchestration function (should be inside InCore
@@ -95,13 +99,13 @@ torch.testing.assert_close(out, A + B, rtol=1e-4, atol=1e-4)
 ```python
 @pl.jit
 def add_then_square(
-    a: pl.Tensor[[128, 128], pl.FP32],
-    b: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP):
         s = pl.add(a, b)
-        out[:] = pl.mul(s, s)
+        out[0:128, 0:128] = pl.mul(s, s)
     return out
 
 
@@ -110,8 +114,8 @@ add_then_square(A, B, out, config=CFG)
 torch.testing.assert_close(out, (A + B) * (A + B), rtol=1e-4, atol=1e-4)
 ```
 
-形状与 dtype 要**内联写在标注里**。模块级别名（`T = pl.Tensor[[128, 128], pl.FP32]`）**不行**：
-parser 把标注当源码文本读，解析不了别名，你会得到 *"Parameter 'a' missing type annotation"*。
+形状与 dtype 注解是普通的 Python 值，所以模块级别名（`T = pl.Tensor[[128, 128], pl.FP32]`，然后
+`a: T`）和任何名字一样可以解析 —— parser 时代“必须内联文本”的限制已经不在了。
 
 ### 循环
 
@@ -120,19 +124,19 @@ parser 把标注当源码文本读，解析不了别名，你会得到 *"Paramet
 ```python
 @pl.jit
 def accumulate(
-    a: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP):
         t = pl.add(a, a)
         for i in pl.range(3):
             t = pl.add(t, a)      # 跨迭代携带
-        out[:] = pl.mul(t, t)
+        out[0:128, 0:128] = pl.mul(t, t)
     return out
 ```
 
-重复绑定 `t` 看起来像就地修改，其实不是：IR 是 SSA 的，parser 给每次迭代的值起独立的名字，
-并把它作为携带值穿过循环。循环之后读 `t`，读到的是最后一次迭代的结果。
+重复绑定 `t` 看起来像就地修改，其实不是：IR 是 SSA 的，循环 pass 把每次迭代的值作为携带值穿过循环，
+并给每个值起独立的名字。循环之后读 `t`，读到的是最后一次迭代的结果。
 
 循环形态：
 
@@ -149,18 +153,18 @@ for i in pl.range(0, 100, 2): # 0, 2, 4, ... 98
 ```python
 @pl.jit.incore
 def add_kernel(
-    a: pl.Tensor[[128, 128], pl.FP32],
-    b: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
-    out[:] = pl.add(a, b)
+    out[0:128, 0:128] = pl.add(a, b)
     return out
 
 @pl.jit
 def add_program(
-    a: pl.Tensor[[128, 128], pl.FP32],
-    b: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     return add_kernel(a, b, out)      # 自动发现 —— 无需注册
 ```
@@ -187,7 +191,7 @@ add_program   (@pl.jit, Orchestration)  —— 控制面：派发
 ### 编译
 
 ```python
-compiled = add.compile()
+compiled = add.compile(A, B, out, config=CFG)
 print(f"Generated code in: {compiled.output_dir}")
 ```
 
@@ -209,34 +213,41 @@ passes_dump/   逐 pass 的 IR 快照
 
 `compile()` 从哪里取形状：
 
-| 签名写法 | 调用方式 |
-| -------- | -------- |
-| 完整标注 `pl.Tensor[[...], dtype]` | `kernel.compile()` —— 完全不带参数 |
-| 裸 `pl.Tensor` | `kernel.compile(a, b, out)`，传样例张量 |
+| 签名写法 | 何时 trace | 怎么编译 |
+| -------- | ---------- | -------- |
+| 裸 `pl.Tensor`（至少一个参数） | 调用时 —— lazy lane | `kernel.compile(a, b, out)`，传样例张量 |
+| 每个参数都完整注解 | 装饰时 —— eager lane | 装饰后的名字*就是* `ir.Function`；包进一个 program：`ir.compile(ir.Program([kernel], kernel.name, kernel.span), platform=...)` |
 
-样例张量只被读取形状与 dtype，内容从不被访问，所以 `torch.empty(...)` 就够了。
+样例张量只被读取形状与 dtype，内容从不被访问，所以 `torch.empty(...)` 就够了。eager lane 自己没有
+`compile()` —— 完整的 eager 路线见
+[设备上运行](00-getting_started.md#从签名编译无需样例张量)。
 
 > **`compile()` 的参数是 kernel 的，不是编译器的。** `compile(*args, **kwargs)` 绑定的是被装饰
 > 函数自己的参数。把 `ir.compile()` 的选项传到这里 —— 例如 `compile(skip_ptoas=True)` ——
 > 要么被当作意外的 kernel 参数拒绝，要么被**静默忽略**。编译侧选项要通过
 > `config=RunConfig(...)` 传，它的编译类开关会转发给 `ir.compile()`。
 
-只想检查一个 kernel、不产出代码时，`lower()` 会特化 JIT 函数、运行配置对应的 Pass 流水线，
-并返回 Pass 后的 `ir.Program`：
+只想检查一个 kernel、不产出代码时，就去读它的 IR。lazy lane —— 上面的 `add` —— 每次调用才
+trace，`compile_for_test(*sample_args)` 就是产出它 IR 的写法：跑默认 Pass 流水线并返回
+Pass 后的 `ir.Program`：
 
 ```python
 import torch
 
 x = torch.zeros((128, 128), dtype=torch.float32)
-program = add.lower(x, x, x)
+program = add.compile_for_test(x, x, x)
 ```
 
-它不会执行代码生成，也不会填充编译缓存。这让它很快，但也意味着它**抓不到** codegen 阶段的
+它不会执行代码生成，也不写产物。这让它很快，但也意味着它**抓不到** codegen 阶段的
 错误，比如上面那个 misplaced-tensor-op。需要验证代码生成时请使用 `compile()`。
+
+全注解的 kernel 在装饰时就 trace 完了，装饰后的名字*就是* `ir.Function` ——
+`print(kernel.as_python())` 不需要任何调用、任何样例张量，直接读到任何 pass 之前的 IR。
 
 ### 读 IR
 
-`JITFunction` 没有 `as_python()`。可以直接读取 `lower()` 返回的 `ir.Program`，也可以读取
+裸 `pl.Tensor` 的 kernel 自己没有 `as_python()` —— 在某次调用 trace 它之前 IR 并不存在。
+可以直接读取 `compile_for_test()` 返回的 `ir.Program`，也可以读取
 `compile()` 返回的 `CompiledProgram` 中保存的 `program`：
 
 ```python
@@ -270,18 +281,19 @@ assert torch.allclose(out, a + b, rtol=1e-5, atol=1e-5)
 
 ## 边界情况
 
-> **致命陷阱：** `@pl.jit` 是**解析**函数体，不是执行它。函数体里的 `print()` 或 `assert`
-> 在运行期永远不会执行，用调试器单步进去看到的是解析过程而不是计算过程。调试请读
+> **致命陷阱：** `@pl.jit` 函数体在 trace 期**作为 Python 执行** —— 它不是被解析的，也不在设备上
+> 运行。函数体里的 `print()` 或 `assert` 只在 kernel 被 trace 时运行一次（全注解 kernel 在装饰时，
+> 否则在首次调用时）—— 不会随每次启动运行。用调试器单步进去看到的是 trace，不是计算。调试请读
 > `compiled.program.as_python()`。
 
 | Symptom | Likely Cause | Fix |
 | ------- | ------------ | --- |
 | **`Misplaced tensor op ... should be inside InCore block`** | 算子直接写在 `@pl.jit` 函数体里 | 用 `with pl.at(level=pl.Level.CORE_GROUP):` 包起来，或移进 `@pl.jit.incore` 子函数 |
-| **`Parameter 'a' missing type annotation`** | 标注是通过模块级别名写的 | 在签名里内联写 `pl.Tensor[[...], dtype]` |
+| **`TypeError: 'ir.Function' object is not callable`**（或 `has no attribute 'compile'`） | 每个参数都带注解，kernel 在装饰时已 trace，名字就是 `ir.Function` | 用 `ir.compile(ir.Program([...]), ...)` 编译它，或让一个参数保持裸注解以获得调用/编译面 |
 | **`Cannot reassign 'out' with a different type`** | 表达式的 dtype 与声明的 `Out` dtype 不一致 | 让它们一致，或把结果绑到一个新名字上 |
 | **`got an unexpected keyword argument 'skip_ptoas'`** | 把 `ir.compile()` 的选项传给了 `compile()` | 编译选项通过 `config=RunConfig(...)` 传 |
 | **输出张量回来时没有变化** | 结果写进了未声明 `pl.Out[...]` 的参数 | 加上方向 |
-| **`lower()` 成功但 `compile()` 失败** | `lower()` 不执行代码生成 | 预期行为 —— 代码生成检查用 `compile()` |
+| **`compile_for_test()` 成功但 `compile()` 失败** | `compile_for_test()` 不执行代码生成 | 预期行为 —— 代码生成检查用 `compile()` |
 | **`AttributeError: as_python`** | 在 jit 函数上调用了它 | 它在 IR 上：`compiled.program.as_python()` |
 
 `PYPTO_PROG_BUILD_DIR` 是**运行时环境变量** —— `PYPTO_PROG_BUILD_DIR=/tmp/out python kernel.py`

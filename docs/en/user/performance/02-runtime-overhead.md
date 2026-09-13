@@ -52,7 +52,7 @@ with pl.at(
     optimizations=[pl.split(pl.SplitMode.UP_DOWN), pl.cross_core_slot(slot_num=2)],
 ):
     acc = pl.matmul(a, b, out_dtype=pl.FP32)   # cube (AIC)
-    out[:] = pl.add(acc, bias)                 # vector (AIV)
+    out[0:128, 0:128] = pl.add(acc, bias)                 # vector (AIV)
 ```
 
 `examples/advanced/03_mixed_kernel.py` runs this in three modes, and
@@ -193,9 +193,9 @@ waiting to surprise you:
 The third is the one to watch, because nothing can check it in general:
 
 - The operand's producer must be among this task's `deps=`, or the dispatch-point read can
-  see stale data — no diagnostic, just a decision made from an old value. The parser catches
-  it only where the producer is statically provable. Above, `gate` is a function parameter
-  with no producer at all, which is the trivially safe case.
+  see stale data — no diagnostic, just a decision made from an old value. Nothing checks
+  this. Above, `gate` is a function parameter with no producer at all, which is the
+  trivially safe case.
 
 **How to confirm:** the swimlane shows the predicated task retiring without occupying a core
 lane, and the graph keeps its shape — the node is still there, it just did not run.

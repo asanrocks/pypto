@@ -25,28 +25,34 @@ same buffer.
 
 ## Step 1: the edge you get for free
 
+<!-- doctest: setup -->
 ```python
 import pypto.language as pl
 import torch
 from pypto.runtime import RunConfig
 
+CFG = RunConfig(platform="__PLATFORM__")
+torch.manual_seed(0)
+```
+
+<!-- doctest: run -->
+```python
 @pl.jit
 def inferred(
-    x: pl.Tensor[[128, 128], pl.FP32],
-    scratch: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    x: pl.Tensor,
+    scratch: pl.Out[pl.Tensor],
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="stage1"):
-        scratch[:] = pl.add(x, x)       # writes scratch
+        scratch[0:128, 0:128] = pl.add(x, x)       # writes scratch
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="stage2"):
-        out[:] = pl.add(scratch, scratch)   # reads scratch
+        out[0:128, 0:128] = pl.add(scratch, scratch)   # reads scratch
     return scratch, out
 
-torch.manual_seed(0)
 x = torch.randn(128, 128)
 scratch = torch.zeros(128, 128)
 out = torch.zeros(128, 128)
-inferred(x, scratch, out, config=RunConfig(platform="a2a3sim"))
+inferred(x, scratch, out, config=CFG)
 assert torch.allclose(out, (x + x) + (x + x), rtol=1e-5, atol=1e-5)
 ```
 
@@ -67,9 +73,9 @@ Shown here on the *same* pair as step 1, so you can still check the result:
 
 ```python
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="stage1") as first:
-        scratch[:] = pl.add(x, x)
+        scratch[0:128, 0:128] = pl.add(x, x)
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="stage2", deps=[first]):
-        out[:] = pl.add(scratch, scratch)
+        out[0:128, 0:128] = pl.add(scratch, scratch)
 ```
 
 `as first` binds the region's TaskId; `deps=[first]` makes the consumer wait on it.

@@ -48,7 +48,7 @@ with pl.at(
     optimizations=[pl.split(pl.SplitMode.UP_DOWN), pl.cross_core_slot(slot_num=2)],
 ):
     acc = pl.matmul(a, b, out_dtype=pl.FP32)   # cube (AIC)
-    out[:] = pl.add(acc, bias)                 # vector (AIV)
+    out[0:128, 0:128] = pl.add(acc, bias)                 # vector (AIV)
 ```
 
 `examples/advanced/03_mixed_kernel.py` 用三种模式跑了这个例子，[教程](../tutorials/03-mixed-kernel.md) 里有逐步讲解。
@@ -145,7 +145,7 @@ for gate_value, expected in ((0, A * 2.0), (1, A * 2.0 + 1.0)):
 
 第三条才是要当心的，因为它在一般情况下无法被检查：
 
-- 操作数的生产者必须在本任务的 `deps=` 里，否则派发点读到的可能是陈旧数据 —— 没有任何提示，只是拿一个旧值做了决定。解析器只在生产者静态可证时才能抓到。上面的 `gate` 是函数参数，根本没有生产者，属于平凡安全的那种情况。
+- 操作数的生产者必须在本任务的 `deps=` 里，否则派发点读到的可能是陈旧数据 —— 没有任何提示，只是拿一个旧值做了决定。没有任何东西会检查这一点。上面的 `gate` 是函数参数，根本没有生产者，属于平凡安全的那种情况。
 
 **怎么确认：** 泳道图上那个带谓词的任务退休时没有占用任何核泳道，而图的形状不变 —— 节点还在，只是没有运行。
 

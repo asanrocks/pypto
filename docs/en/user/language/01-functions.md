@@ -7,10 +7,13 @@ functions call each other.
 
 ## Concept
 
-A decorator does not wrap your function — it **parses its source**. The body never
-executes as Python. That single fact explains most of what follows: why closure variables
-behave the way they do, why `pl.yield_` is meaningful only inside one, and why an error in a kernel body is reported at parse time with a line number
-rather than at call time with a traceback.
+A decorator does not wrap your function — it **traces its body**. The body executes as
+Python at trace time, and every `pl.*` operation it performs is recorded as IR; nothing
+touches a device. That single fact explains most of what follows: closure variables are
+read when the trace runs, an error in a kernel body surfaces at trace time with a line
+number rather than at dispatch time with a traceback, and a construct whose effect on the
+IR cannot be observed soundly (`try/except`, `global`, bare `yield`, …) is rejected up
+front.
 
 **`@pl.jit` is how you write PyPTO kernels.** Types come from the arguments at the first
 call, the function specializes, and sub-functions are discovered automatically — you call
@@ -35,7 +38,7 @@ def add_kernel(
     b: pl.Tensor[[128, 128], pl.FP32],
     out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
 ):
-    out[:] = pl.add(a, b)
+    out[0:128, 0:128] = pl.add(a, b)
     return out
 
 @pl.jit
@@ -55,8 +58,11 @@ def entry(
 | `add_kernel(a, b, out)` | A plain call; the decorator discovers the callee and wires it in |
 | `out: pl.Out[...]` | Declares the direction, which is how the compiler orders this task |
 
-To read the IR this becomes, call `entry.lower(*args)` for the post-pass `ir.Program`, or
-`entry.compile(*args)` and print `compiled.program.as_python()`.
+To read the IR this becomes, call `entry.as_python()` — with every parameter annotated,
+the kernel is traced at decoration and the decorated name already *is* the `ir.Function`.
+Compile-and-dispatch is the lazy lane's job (kernels with bare `pl.Tensor` parameters,
+where `entry.compile(*args)` and `entry(*args, config=...)` live) — see
+[Splitting compile from dispatch](#splitting-compile-from-dispatch).
 
 ## Mechanics
 
@@ -72,13 +78,26 @@ core levels:
 | `@pl.jit.incore` | `InCore` | A device kernel (accepts `level=` to target a specific hierarchy level) |
 | `@pl.jit.inline` | `Inline` | Helper spliced into every call site by `InlineFunctions` |
 | `@pl.jit.opaque` | `Opaque` | A separate IR function that may hold orchestration loops and `pl.at` scopes |
-| `@pl.jit.graph` | `Graph` | A recordable orchestration fragment — the `host_build_graph` runtime records its task topology on the first call and replays it after, so N calls cost one graph build rather than N. Requires compiling under `RuntimeKind.HOST_BUILD_GRAPH` |
+| `@pl.jit.graph` | `Graph` | A recordable orchestration fragment, called from an entry |
 
-`@pl.jit.graph` has a scope form: `with pl.graph("name"):` marks a region *in place*
-instead of splitting it into a function. The two compile to the same thing — the region is
-outlined into a Graph function named after `name` — so the choice is ergonomic. Use the
-decorator when the layer is already its own function; use the scope when the region is a
-slice of a larger orchestration body you would rather not split up:
+The sixth function kind, `Graph`, is a recordable orchestration fragment: the
+`host_build_graph` runtime records its task topology on the first call and
+replays it after, so N calls cost one graph build rather than N, and it requires
+compiling under `RuntimeKind.HOST_BUILD_GRAPH`. It is written one of two ways:
+
+- **standalone**: `@pl.jit.graph` on its own function — the jit spelling; the
+  fragment is traced as a callee variant and joined, with anything it
+  dispatches, into the caller's program;
+- **scope**: `with pl.graph("name"):` marks a region *in place* inside an entry, for a
+  slice of a larger orchestration body you would rather not split up.
+
+The two compile to the same thing — the region is outlined into a Graph function named
+after `name` — so the choice is ergonomic, with one constraint that picks for you: a
+Graph stated as a bare `@pl.function(type=pl.FunctionType.Graph)` runs with no program
+assembly, so a fragment written that way must not dispatch other jit kernels — the
+callee would be orphaned out of the program. `@pl.jit.graph` has no such limit (the
+callee lane discovers and joins what it dispatches); the scope form does not either,
+being inside the entry:
 
 ```python
 @pl.jit
@@ -94,7 +113,7 @@ region cannot nest inside another Graph region, nor inside `pl.at` / `pl.cluster
 `pl.spmd` — those become a single device task, whereas a Graph region records a topology of
 them. All three are compile errors.
 
-Sub-function dependencies (`.incore` / `.inline` / `.opaque` / `.graph`) are auto-discovered from
+Sub-function dependencies (`.incore` / `.inline` / `.opaque`) are auto-discovered from
 the entry's body — call them by name. The name you call is resolved in the entry's own
 namespace, so an aliased import (`from kernels import matmul as mm`, or a plain
 `mm = matmul` rebinding) is discovered like any other binding; the generated program still
@@ -137,6 +156,11 @@ reaches across the chip boundary. That keeps two unrelated top-level kernels fro
 silently folding into one program.
 
 `@pl.jit.host` rejects `level=` (HOST is implicit).
+
+> **Quarantined names.** The AST-era specializer is still importable — `pl.jit_specializer`
+> and its `pl.JITFunction` class — but it exists only for its own unit tests: it is not
+> part of the tracing surface this page describes, and it will be removed. Do not build on
+> it.
 
 ### What a sub-function hands back keeps its shape and dtype
 
@@ -196,19 +220,21 @@ move them into a `@pl.jit.incore` sub-function.
 ```python
 @pl.jit
 def bad(x: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
-    out[:] = pl.add(x, x)        # ✗ Misplaced tensor op ... should be inside InCore block
+    out[0:64, 0:64] = pl.add(x, x)        # ✗ Misplaced tensor op ... should be inside InCore block
     return out
 
 @pl.jit
 def good(x: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.add(x, x)    # ✓
+        out[0:64, 0:64] = pl.add(x, x)    # ✓
     return out
 ```
 
-**2. `JITFunction` has no `as_python()`.** The IR does not exist until a specialization
-does. Call `lower(*args)` for the post-pass `ir.Program`, or `compile(*args)` and read
-`compiled.program.as_python()` for the specialized, pre-pass IR.
+**2. A lazy-lane jit kernel has no `as_python()`.** The IR does not exist until a call
+traces it. Call `compile_for_test(*args)` for the post-pass `ir.Program`, or `compile(*args)`
+and read `compiled.program.as_python()` for the traced, pre-pass IR. (A fully annotated
+kernel is traced at decoration — the decorated name *is* the `ir.Function`, and
+`as_python()` works on it directly.)
 
 **3. `compile()` takes the kernel's own arguments, not compile options.** Compile-time
 knobs go through `config=RunConfig(...)`. A stray `compile(skip_ptoas=True)` is bound
@@ -329,7 +355,7 @@ warns.
 ### Splitting compile from dispatch
 
 `@pl.jit` kernels normally fuse specialize + compile + dispatch into one `kernel(*args)`
-call. `JITFunction.compile(*sample_args)` stops after compilation and hands back the
+call. `kernel.compile(*sample_args)` stops after compilation and hands back the
 `CompiledProgram` — for driving `ChipWorker` yourself, inspecting artifacts under
 `compiled.output_dir`, or validating codegen ahead of time.
 
@@ -338,39 +364,35 @@ compiled = my_kernel.compile(sample_x, sample_w, sample_out)
 print("artifacts in:", compiled.output_dir)
 ```
 
-The returned object is the same one the JIT cache holds, so a later call with the same
-specialization key returns the identical instance.
+The returned object is freshly compiled each call — compile-then-call freezes one
+materialization — while the plain `kernel(*args)` dispatch lane caches on the bridged
+signature.
 
-`lower(*sample_args)` stops one stage earlier: it runs the passes and returns the
-post-pass `ir.Program`, with no code generation, no `ptoas`, no artifacts, and no cache
-write. Use it to read lowered IR; use `compile()` when codegen itself is what you want to
-check. Both accept `config=RunConfig(...)`, but `lower()` ignores the runtime and artifact
-fields. Compile options are in [Compiling](../execution/00-compile.md) and the runtime surface in
+`compile_for_test(*sample_args)` stops one stage earlier: it runs the Default pass
+pipeline and returns the post-pass `ir.Program`, with no code generation, no `ptoas`, no
+artifacts, and no cache write. Use it to read lowered IR — it is the structural-equality
+oracle the jit's own round-trip tests compare against — and `compile()` when codegen
+itself is what you want to check. It takes no `config=`: it never reaches `ir.compile`, so
+a `RunConfig` would have nothing to configure. Compile options are in
+[Compiling](../execution/00-compile.md) and the runtime surface in
 [Running](../execution/01-run.md).
 
-`specialize(*sample_args)` stops one stage earlier still: entry and deps are specialized
-into `@pl.program` source and parsed, and the **pre-pass** `ir.Program` comes back
-untransformed. Reach for it only when something downstream runs the pass pipeline itself
-— most of all `ir.compile(program, output_dir=...)`, which runs passes *and* code
-generation, so handing it `lower()`'s output would run the pipeline twice.
-
-```python
-program = my_kernel.specialize(sample_x, sample_w, sample_out)
-ir.compile(program, output_dir="build/out", backend_type=BackendType.Ascend910B)
-```
-
-It takes no `config=`: no pass runs here, so a `RunConfig` would have nothing to
-configure. Sample arguments may be omitted only when every tensor parameter is annotated
-with full shapes — a bare `pl.Tensor` has none to read.
+A kernel whose every parameter is fully annotated is traced at decoration — the decorated
+name already *is* the pre-pass `ir.Function`, so there is nothing left to specialize at
+call time: `kernel.as_python()` prints it directly, and its compile route is
+`ir.compile(ir.Program([kernel], kernel.name, kernel.span), platform="a2a3")`. Note the
+caveat before using it for an entry: the one-function program carries only that kernel, so
+an entry that dispatches other jit kernels wants the lazy lane — bare `pl.Tensor`
+parameters — where `compile()` and `compile_for_test()` assemble the multi-function
+program for you.
 
 > Two kernels that specialize to the same program compare equal **after** passes, not
-> before: the specializer renames SSA-rebound locals (`out` becomes `out_v1`), and
-> canonicalization removes the difference. Compare `lower()` output when asserting
-> equivalence against a hand-written `@pl.program`.
+> before: the tracer renames SSA-rebound locals (`out` becomes `out_v1`), and
+> canonicalization removes the difference. Compare `compile_for_test()` output when
+> asserting equivalence against a hand-written `@pl.program`.
 
-Three accessors describe the signature without specializing anything: `param_names` (in
-declaration order), `output_param_names` (the `pl.Out[...]` and `pl.InOut[...]` params,
-also in declaration order), and `__name__`.
+Two accessors describe the signature without tracing anything: `param_names()` (in
+declaration order) and `__name__`.
 
 ### External C++ kernels
 
@@ -380,15 +402,15 @@ A hand-written C++ kernel can be called like any other function. See
 ## Edge Cases
 
 > **Fatal pitfall:** verify a new `@pl.jit` example with a full `compile()`, never with
-> `lower()` alone. `lower()` stops after the passes, so the "operators in an Orchestration
-> body" error above never fires — the kernel appears to pass and fails only when someone
-> runs it for real.
+> `compile_for_test()` alone. `compile_for_test()` stops after the passes, so the
+> "operators in an Orchestration body" error above never fires — the kernel appears to
+> pass and fails only when someone runs it for real.
 
 | Symptom | Likely cause | Fix |
 | ------- | ------------ | --- |
 | **`Misplaced tensor op ... should be inside InCore block`** | Operators directly in a `@pl.jit` body | Wrap in `with pl.at(level=pl.Level.CORE_GROUP):` or move to `@pl.jit.incore` |
-| **`AttributeError: 'JITFunction' object has no attribute 'as_python'`** | Printing IR that does not exist yet | `f.lower(*args)`, or `f.compile(*args)` then `compiled.program.as_python()` |
-| **`lower()` passes but `compile()` fails** | `lower()` runs no code generation | Expected — use `compile()` to check codegen |
+| **`AttributeError: ... has no attribute 'as_python'`** | Printing the IR of a lazy-lane kernel before any call traces it | `f.compile_for_test(*args).as_python()`, or `f.compile(*args)` then `compiled.program.as_python()` |
+| **`compile_for_test()` passes but `compile()` fails** | `compile_for_test()` runs no code generation | Expected — use `compile()` to check codegen |
 | **`TypeError: got an unexpected keyword argument`** | A compile option was passed to `compile()`, which binds against the kernel's signature | Pass `config=RunConfig(...)` |
 | **A second top-level kernel is missing from the program** | Plain `@pl.jit` does not discover other `@pl.jit` entries | Use `@pl.jit.host`, or make the callee `.incore` / `.opaque` |
 | **`auto_scope=False` rejected** | Used on `.incore` / `.opaque` | Put it on the entry or on an `.inline` helper |

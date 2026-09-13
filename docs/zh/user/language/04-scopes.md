@@ -39,11 +39,11 @@ Y = torch.randn(256, 128, dtype=torch.float32)
 ```python
 @pl.jit
 def scale(
-    x: pl.Tensor[[256, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
+    x: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.mul(x, 2.0)
+        out[0:256, 0:128] = pl.mul(x, 2.0)
     return out
 
 
@@ -74,7 +74,7 @@ torch.testing.assert_close(out, X * 2.0, rtol=1e-4, atol=1e-4)
 | `optimizations=[pl.cross_core_slot(slot_num=N)]` | 自动跨核管道的环深度 |
 | `name_hint="..."` | outline 出的函数名 |
 
-`optimizations=` 的条目必须在调用点内联书写 —— 解析器读的是 AST，因此用变量拼出来的列表不被接受。`pl.split` 与 `pl.cross_core_slot` 彼此正交、可自由组合：一个切分工作，一个给通道定尺寸。
+`optimizations=` 列表是普通的 Python 值 —— 在调用点内联书写、或用变量拼出来都可以；作用域在 trace 时读取它。`pl.split` 与 `pl.cross_core_slot` 彼此正交、可自由组合：一个切分工作，一个给通道定尺寸。
 
 ```python
 with pl.at(level=pl.Level.CORE_GROUP,
@@ -108,9 +108,9 @@ for i in pl.spmd(4):
 ```python
 @pl.jit
 def spmd_add(
-    a: pl.Tensor[[256, 128], pl.FP32],
-    b: pl.Tensor[[256, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     for i in pl.spmd(2):                    # `i` binds the block index
         off = i * 128
@@ -342,7 +342,6 @@ pl.system.sync_wait(0, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)    # 
 | **`Misplaced tensor op ... should be inside InCore block`** | 算子直接写在 `@pl.jit` 体内 | 包进 `with pl.at(level=pl.Level.CORE_GROUP):` |
 | **`with pl.spmd(n):` 体被拒绝** | 它既不读 block 索引也不派发 kernel | 读 `pl.tile.get_block_idx()`，或调用一个 kernel |
 | **大多数 `pl.write` 的写消失了，且每次运行消失的都不一样** | 并发实例写了同一条 64 字节 cache line 的不同元素 —— 抵达 DDR 的单位是 line，不是元素 | 让每个实例独占完整的 64 字节 line，或改由 `pl.spmd(1)` 来写；见 [内存](03-memory.md#来自并发任务实例的标量写) |
-| **`optimizations=` 被拒绝** | 用变量拼出来的 —— 解析器读的是 AST | 在调用点内联书写该列表 |
 | **printed IR 无法被重新解析** | 设备规模查询在使用前被绑定到了名字上 | 在使用处内联书写该调用 |
 | **`vector op '...' sits outside every pl.split_aiv region`** | 函数开了区域，区域即拥有向量放置决定权 | 把该阶段包进 `for _ in pl.split_aiv(2, mode=pl.SplitMode.NONE):` |
 | **`cube op '...' inside a pl.split_aiv region`** | 区域体是 AIV 的工作 | 把 `pl.matmul` 移出区域 |

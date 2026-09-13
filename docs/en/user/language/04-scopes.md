@@ -47,11 +47,11 @@ Y = torch.randn(256, 128, dtype=torch.float32)
 ```python
 @pl.jit
 def scale(
-    x: pl.Tensor[[256, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
+    x: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.mul(x, 2.0)
+        out[0:256, 0:128] = pl.mul(x, 2.0)
     return out
 
 
@@ -84,8 +84,8 @@ Two optional keywords shape that outlined kernel:
 | `optimizations=[pl.cross_core_slot(slot_num=N)]` | Ring depth of the automatic cross-core pipeline |
 | `name_hint="..."` | Name for the outlined function |
 
-Entries in `optimizations=` must be written inline at the call site — the parser reads the
-AST, so a list built up in a variable is not accepted. `pl.split` and `pl.cross_core_slot`
+The `optimizations=` list is an ordinary Python value — build it inline at the call site
+or in a variable; the scope reads it at trace time. `pl.split` and `pl.cross_core_slot`
 are orthogonal and combine freely: one splits the work, the other sizes the channel.
 
 ```python
@@ -117,9 +117,9 @@ The loop form is the one a `@pl.jit` entry can write directly:
 ```python
 @pl.jit
 def spmd_add(
-    a: pl.Tensor[[256, 128], pl.FP32],
-    b: pl.Tensor[[256, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     for i in pl.spmd(2):                    # `i` binds the block index
         off = i * 128
@@ -383,7 +383,6 @@ pl.system.sync_wait(0, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)    # 
 | **`Misplaced tensor op ... should be inside InCore block`** | Operators sit directly in the `@pl.jit` body | Wrap them in `with pl.at(level=pl.Level.CORE_GROUP):` |
 | **`with pl.spmd(n):` body rejected** | It neither reads the block index nor dispatches a kernel | Read `pl.tile.get_block_idx()`, or call a kernel |
 | **Most `pl.write` stores vanish, a different set each run** | Concurrent instances write different elements of one 64-byte cache line — the line, not the element, is what reaches DDR | Give each instance whole 64-byte lines, or write from `pl.spmd(1)`; see [Memory](03-memory.md#scalar-writes-from-concurrent-task-instances) |
-| **`optimizations=` rejected** | Built up in a variable — the parser reads the AST | Write the list inline at the call site |
 | **Printed IR cannot be reparsed** | A device-size query was bound to a name before use | Write the call inline where it is used |
 | **`vector op '...' sits outside every pl.split_aiv region`** | The function opens a region, so the regions own vector placement | Wrap that phase in `for _ in pl.split_aiv(2, mode=pl.SplitMode.NONE):` |
 | **`cube op '...' inside a pl.split_aiv region`** | A region body is AIV work | Move the `pl.matmul` out of the region |

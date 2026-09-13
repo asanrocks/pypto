@@ -30,11 +30,11 @@ A = torch.randn(64, 128, dtype=torch.float32)
 @pl.jit
 def scale(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.mul(a, 2.0)
+        out[0:64, 0:128] = pl.mul(a, 2.0)
     return out
 
 
-prog = scale.lower(A, torch.zeros(64, 128))   # passes only: no codegen, no artifacts
+prog = scale.compile_for_test(A, torch.zeros(64, 128))   # passes only: no codegen, no artifacts
 src = prog.as_python()                        # the lowered IR, as DSL source
 
 # What comes back is post-pass IR, not what you wrote: the pl.at scope has been
@@ -46,9 +46,12 @@ assert "pl.at" not in src
 print(prog.as_python(concise=True)[:200])     # concise= drops intermediate type annotations
 ```
 
-`lower()` is the cheap form — it runs the passes and returns the `Program` without writing
-anything. `as_python()` is available on a `Program` or a single `Function`; a `JITFunction`
-has none of its own, because the IR does not exist until a specialization does.
+`compile_for_test()` is the cheap form — it runs the Default pass pipeline and returns the
+`Program` without writing anything. `as_python()` is available on a `Program` or a single
+`Function`. A jit kernel with bare `pl.Tensor` parameters traces per call, so it has no
+`as_python()` of its own — the IR exists once `compile_for_test()` or `compile()` has
+produced it. A fully annotated kernel is traced at decoration: the decorated name *is* the
+`ir.Function`, and `kernel.as_python()` works directly.
 
 **Expect the IR not to look like your source.** The assertions above are the point: by the
 time the passes have run, `pl.at` is gone — the region became `scale_incore_0`, an `AIV`
@@ -123,10 +126,10 @@ opt-in.
 
 | Symptom | Likely cause | Fix |
 | ------- | ------------ | --- |
-| **`JITFunction` has no `as_python`** | The IR does not exist until specialization | `kernel.lower(*args).as_python()` |
+| **A jit kernel has no `as_python`** | Bare-`pl.Tensor` kernel: the IR does not exist until a call traces it | `kernel.compile_for_test(*args).as_python()` |
 | **Error names a compiler file, not your kernel** | It is an `InternalError` | File a bug; do not work around it |
 | **`ptoas compilation failed:` with an empty message** | The ptoas binary crashed | Point `PTOAS_ROOT` at a working version |
-| **No `passes_dump/`** | `lower()` writes no artifacts | Use `compile()` with `dump_passes=` |
+| **No `passes_dump/`** | `compile_for_test()` writes no artifacts | Use `compile()` with `dump_passes=` |
 
 > **An internal error is not yours to route around.** Silencing it with a shape change or
 > a different spelling hides an invariant violation that will resurface somewhere less

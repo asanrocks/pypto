@@ -5,9 +5,10 @@ Questions that come up repeatedly, and the constraints behind them.
 ## Writing kernels
 
 **Why did my kernel run and write nothing?**
-`out = pl.add(a, b)` rebinds a Python name; it does not write the output parameter. Use
-`out[:] = pl.add(a, b)`, which is sugar for `pl.assemble`. This is the single most common
-first bug, and it fails silently — the run succeeds and the output stays zero. See
+`out = pl.add(a, b)` rebinds a Python name; it does not write the output parameter. Use a
+subscripted write — `out[:] = pl.add(a, b)` covers every axis of the target. It is sugar
+for `pl.assemble`. This is the single most common first bug, and it fails
+silently — the run succeeds and the output stays zero. See
 [Syntax](../language/06-syntax.md).
 
 **Why is a plain `range` rejected?**

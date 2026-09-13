@@ -12,7 +12,7 @@ An element-wise add, checked against torch. It is deliberately the least interes
 arithmetic available, because every step here is about *placement* — where the data is and
 who is allowed to touch it — and arithmetic would only get in the way.
 
-Four steps, each runnable:
+Four steps, each runnable — the doc runner executes every marked block on this page:
 
 1. Tensor level — say what to compute, let the compiler place it
 2. Tile level — place it yourself: load, compute, store
@@ -21,25 +21,32 @@ Four steps, each runnable:
 
 ## Step 1: tensor level
 
+<!-- doctest: setup -->
 ```python
 import pypto.language as pl
 import torch
 from pypto.runtime import RunConfig
 
+CFG = RunConfig(platform="__PLATFORM__")
+torch.manual_seed(0)
+a = torch.randn(128, 128)
+b = torch.randn(128, 128)
+```
+
+<!-- doctest: run -->
+```python
 @pl.jit
 def add_tensor(
-    a: pl.Tensor[[128, 128], pl.FP32],
-    b: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP):
         out[:] = pl.add(a, b)
     return out
 
-a = torch.randn(128, 128)
-b = torch.randn(128, 128)
 out = torch.zeros(128, 128)
-add_tensor(a, b, out, config=RunConfig(platform="a2a3sim"))
+add_tensor(a, b, out, config=CFG)
 assert torch.allclose(out, a + b, rtol=1e-5, atol=1e-5)
 ```
 
@@ -51,20 +58,23 @@ others — see [The dependency model](../tasks/00-model.md). Get it wrong and yo
 not an error.
 
 **`with pl.at(level=pl.Level.CORE_GROUP):` is where the operators go.** The `@pl.jit` body
-itself is the control plane; it dispatches work but cannot contain operators. Writing
-`out = pl.add(a, b)` outside the block is an error — the parser says so.
+itself is the control plane; it dispatches work but cannot contain operators. Writing the
+operator outside the block is an error — orchestration codegen rejects a tensor op in the
+control plane (*Misplaced tensor op ... should be inside InCore block*).
 
-**`out[:] =` is how you write an output.** This is the step everyone gets wrong:
+**A subscripted write is how you write an output.** This is the step everyone gets wrong:
 
 ```python
-out = pl.add(a, b)          # ✗ compiles, writes nothing
-out[:] = pl.add(a, b)       # ✓ writes the whole tensor
+out = pl.add(a, b)   # ✗ compiles, writes nothing
+out[:] = pl.add(a, b)  # ✓ writes the whole tensor
 ```
 
 The first line rebinds a local name. It compiles, it runs, and nothing ever writes the
 output — you are handed whatever that buffer happened to hold, with no diagnostic from any
 stage. On the simulator these examples come back as NaN. The subscript is what makes it a
-write rather than a rebind, exactly as it does for a numpy array.
+write rather than a rebind, exactly as it does for a numpy array — and with the same
+width rule: a bare `out[:]` covers **every axis** (the whole tensor), and axes past the
+ones you name are implicit full slices.
 
 For anything other than the whole tensor, name the offset:
 
@@ -74,7 +84,7 @@ For anything other than the whole tensor, name the offset:
 | A sub-region | `out[r0 : r0 + R, c0 : c0 + C] = value` |
 | At a computed offset, or atomically | `pl.assemble(out, value, [r, c], atomic=...)` |
 
-The subscript form is sugar: the parser rewrites `dst[...] = src` into
+The subscript form is sugar: `dst[...] = src` executes as
 `dst = pl.assemble(dst, src, [...])`. Because that rebinds `dst`, it is rejected under
 `@pl.function(strict_ssa=True)` and in any post-SSA context — call `pl.assemble` directly
 there. See [Syntax](../language/06-syntax.md).
@@ -88,18 +98,24 @@ there. See [Syntax](../language/06-syntax.md).
 Step 1 never said where the data lives. The compiler chose. Doing it yourself means three
 explicit operators:
 
+<!-- doctest: run -->
 ```python
 @pl.jit
 def add_tile(
-    a: pl.Tensor[[128, 128], pl.FP32],
-    b: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile_a = pl.load(a, [0, 0], [128, 128])
         tile_b = pl.load(b, [0, 0], [128, 128])
         pl.store(pl.add(tile_a, tile_b), [0, 0], out)
     return out
+
+
+out = torch.zeros(128, 128)
+add_tile(a, b, out, config=CFG)
+assert torch.allclose(out, a + b, rtol=1e-5, atol=1e-5)
 ```
 
 | Operator | What it does |
@@ -120,14 +136,15 @@ A tile is a fixed-size window of on-chip memory, so a `[512, 128]` tensor cannot
 in one go. Loop over the chunks and move the *offset* — the shape argument stays the tile
 size:
 
+<!-- doctest: setup -->
 ```python
 ROWS, COLS, TILE_ROWS = 512, 128, 128
 
 @pl.jit
 def add_chunked(
-    a: pl.Tensor[[512, 128], pl.FP32],
-    b: pl.Tensor[[512, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[512, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP):
         for i in pl.range(ROWS // TILE_ROWS):
@@ -145,12 +162,13 @@ sits inside a loop nest that walks the tensor a tile at a time.
 
 Nothing so far proves the kernel is right. Compare against torch, and assert:
 
+<!-- doctest: run -->
 ```python
 torch.manual_seed(0)
 a = torch.randn(512, 128)
 b = torch.randn(512, 128)
 out = torch.zeros(512, 128)
-add_chunked(a, b, out, config=RunConfig(platform="a2a3sim"))
+add_chunked(a, b, out, config=CFG)
 assert torch.allclose(out, a + b, rtol=1e-5, atol=1e-5)
 ```
 
@@ -168,7 +186,7 @@ python examples/beginner/02_elementwise.py
 
 | Symptom | Likely cause | Fix |
 | ------- | ------------ | --- |
-| **Output is unwritten (NaN or garbage) and nothing errored** | The result was assigned to the `Out` parameter instead of written | Write it with `out[:] = ...`, `pl.assemble`, or `pl.store` |
+| **Output is unwritten (NaN or garbage) and nothing errored** | The result was assigned to the `Out` parameter instead of written | Write it with a subscripted assignment (`out[0:R, 0:C] = ...`), `pl.assemble`, or `pl.store` |
 | **`Misplaced tensor op`** | Operators sit in the `@pl.jit` body, outside `pl.at` | Move them inside `with pl.at(level=pl.Level.CORE_GROUP):` |
 | **Tile shape rejected** | The window exceeds what on-chip memory holds | Chunk it — step 3 |
 | **Results differ between runs** | Two tasks touching one buffer with nothing ordering them | See [The dependency model](../tasks/00-model.md) |

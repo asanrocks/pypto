@@ -27,7 +27,7 @@ through that alias.
 | [Control Flow](02-control-flow.md) | `pl.range` / `parallel` / `unroll` / `pipeline` / `while_`, carried values, `yield_`, `cond`, SSA |
 | [Memory and Data Movement](03-memory.md) | the memory spaces, `load` / `store` / `move`, `valid_shape` and `fillpad`, L1 residency |
 | [Scopes and Placement](04-scopes.md) | `at` / `cluster` / `spmd` / `split_aiv` — where work runs |
-| [Compile-Time Directives](05-directives.md) | `static_print` / `static_assert`, `const` |
+| [Compile-Time Directives](05-directives.md) | parser-owned diagnostics (`static_print` / `static_assert`) under tracing, `pl.const` |
 | [Language Syntax](06-syntax.md) | Subscript sugar, Python operators, closure capture |
 
 ## Reading order

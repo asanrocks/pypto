@@ -17,7 +17,7 @@ cube 与 vector 在同一个作用域里同时工作。
 with pl.at(level=pl.Level.CORE_GROUP, name_hint="cube_only"):
     acc = pl.matmul(a, b, out_dtype=pl.FP32)
 with pl.at(level=pl.Level.CORE_GROUP, name_hint="vector_only"):
-    out[:] = pl.add(acc, bias)
+    out[0:128, 0:128] = pl.add(acc, bias)
 ```
 
 两个作用域，两次派发。matmul 作用域没跑完之前 vector 单元无事可做，跑完之后 cube 单元又闲下来。这正是混合 kernel 要取代的写法 —— 也正是那些名为「融合」的 kernel 底下常常仍是的样子：名字上融合，执行上串行。
@@ -26,17 +26,24 @@ with pl.at(level=pl.Level.CORE_GROUP, name_hint="vector_only"):
 
 把两个运算放进同一个作用域，并标记为 split：
 
+<!-- doctest: setup -->
 ```python
 import pypto.language as pl
 import torch
 from pypto.runtime import RunConfig
 
+CFG = RunConfig(platform="__PLATFORM__")
+torch.manual_seed(0)
+```
+
+<!-- doctest: run -->
+```python
 @pl.jit
 def mixed(
-    a: pl.Tensor[[128, 256], pl.FP16],
-    b: pl.Tensor[[256, 128], pl.FP16],
-    bias: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    bias: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(
         level=pl.Level.CORE_GROUP,
@@ -44,15 +51,14 @@ def mixed(
         name_hint="mixed",
     ):
         acc = pl.matmul(a, b, out_dtype=pl.FP32)                 # cube (AIC)
-        out[:] = pl.add(acc, bias)        # vector (AIV)
+        out[0:128, 0:128] = pl.add(acc, bias)        # vector (AIV)
     return out
 
-torch.manual_seed(0)
 a = torch.randn(128, 256, dtype=torch.float16)
 b = torch.randn(256, 128, dtype=torch.float16)
 bias = torch.randn(128, 128, dtype=torch.float32)
 out = torch.zeros(128, 128, dtype=torch.float32)
-mixed(a, b, bias, out, config=RunConfig(platform="a2a3sim"))
+mixed(a, b, bias, out, config=CFG)
 assert torch.allclose(out, a.float() @ b.float() + bias, rtol=1e-2, atol=1e-2)
 ```
 

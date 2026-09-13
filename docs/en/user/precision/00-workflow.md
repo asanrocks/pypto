@@ -97,9 +97,9 @@ ROWS, COLS = 16, 128
 
 
 @pl.jit
-def to_fp16(x: pl.Tensor[[ROWS, COLS], pl.INT32], out: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP16]]):
+def to_fp16(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.cast(x, pl.FP16)
+        out[0:ROWS, 0:COLS] = pl.cast(x, pl.FP16)
     return out
 
 
@@ -149,14 +149,12 @@ from pypto.debug import torch_codegen
 def fused(a: pl.Tensor[[64, 128], pl.FP32], b: pl.Tensor[[64, 128], pl.FP32],
           out: pl.Out[pl.Tensor[[64, 128], pl.FP32]]):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.mul(pl.add(a, b), 2.0)
+        out[0:64, 0:128] = pl.mul(pl.add(a, b), 2.0)
     return out
 
 
-a = torch.randn(64, 128)
-b = torch.randn(64, 128)
-
-src = torch_codegen(fused.lower(a, b, torch.zeros(64, 128)))  # check_shapes=True to assert shapes
+# A fully annotated kernel is traced at decoration — `fused` is the ir.Function.
+src = torch_codegen(fused)                                    # check_shapes=True to assert shapes
 assert "def " in src and "torch" in src                       # it is executable python
 ```
 

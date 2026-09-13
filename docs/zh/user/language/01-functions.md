@@ -6,7 +6,7 @@
 
 ## Concept
 
-装饰器不是包装你的函数 —— 它**解析你的源码**。函数体从不作为 Python 执行。这一个事实解释了后面大部分内容：闭包变量为什么是那样的行为、`pl.yield_` 为什么只有写在被装饰函数里才有意义、以及 kernel 体里的错误为什么在解析期带行号报出来，而不是调用时给你一条 traceback。
+装饰器不是包装你的函数 —— 它**trace 它的函数体**。函数体在 trace 期作为 Python 执行，它执行的每个 `pl.*` 操作都被记录为 IR；任何东西都不碰设备。这一个事实解释了后面大部分内容：闭包变量在 trace 运行时才被读取；kernel 体里的错误在 trace 期带行号报出来，而不是在 dispatch 时给你一条 traceback；而对 IR 效果无法被可靠观察的构造（`try/except`、`global`、裸 `yield` …）则会被提前拒绝。
 
 **写 PyPTO kernel 就用 `@pl.jit`。** 类型来自首次调用时的实参，函数随之特化，子函数自动被发现 —— 你按名字调用，装饰器负责找到它们。`examples/` 用的是这种写法，本手册其余部分也一律用它。
 
@@ -23,7 +23,7 @@ def add_kernel(
     b: pl.Tensor[[128, 128], pl.FP32],
     out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
 ):
-    out[:] = pl.add(a, b)
+    out[0:128, 0:128] = pl.add(a, b)
     return out
 
 @pl.jit
@@ -43,7 +43,7 @@ def entry(
 | `add_kernel(a, b, out)` | 一次普通调用；装饰器会发现被调方并接进来 |
 | `out: pl.Out[...]` | 声明方向，编译器据此给任务定序 |
 
-想看它变成的 IR：调 `entry.lower(*args)` 拿 Pass 后的 `ir.Program`，或调 `entry.compile(*args)` 后打印 `compiled.program.as_python()`。
+想看它变成的 IR：调 `entry.as_python()` —— 参数全部有注解时，kernel 在装饰时就 trace 完了，装饰后的名字*就是* `ir.Function`。编译与派发属于 lazy lane（参数为裸 `pl.Tensor` 的 kernel，`entry.compile(*args)` 和 `entry(*args, config=...)` 都在那里）——见[把编译与派发拆开](#把编译与派发拆开)。
 
 ## Mechanics
 
@@ -58,12 +58,22 @@ def entry(
 | `@pl.jit.incore` | `InCore` | 设备 kernel（可接受 `level=` 指定层级） |
 | `@pl.jit.inline` | `Inline` | 由 `InlineFunctions` 在每个调用点展开的辅助函数 |
 | `@pl.jit.opaque` | `Opaque` | 独立 IR 函数，可包含编排循环与 `pl.at` 作用域 |
-| `@pl.jit.graph` | `Graph` | 可录制的编排片段 —— `host_build_graph` runtime 在首次调用时录制其 task 拓扑、之后回放，因此 N 次调用只付一次建图代价。需要在 `RuntimeKind.HOST_BUILD_GRAPH` 下编译 |
+| `@pl.jit.graph` | `Graph` | 可录制的编排片段，由入口调用 |
 
-`@pl.jit.graph` 有一种作用域形式：`with pl.graph("name"):` 就地标记一个区域，而不必把它
-拆成独立函数。两者编译结果相同 —— 区域会被外提为一个以 `name` 命名的 Graph 函数 ——
-因此这只是书写习惯的选择。layer 本身已是独立函数时用装饰器；区域只是某个较大编排函数体
-中不愿拆出去的一段时用作用域：
+第六种函数类别 `Graph` 是可录制的编排片段：`host_build_graph` runtime 在首次调用时录制
+其 task 拓扑、之后回放，因此 N 次调用只付一次建图代价，且需要在
+`RuntimeKind.HOST_BUILD_GRAPH` 下编译。有两种写法：
+
+- **独立形式**：函数上标 `@pl.jit.graph` —— jit 写法；片段作为被调方变体被 trace，
+  连同它派发的一切一起加入调用方的程序；
+- **作用域形式**：在入口内部用 `with pl.graph("name"):` 就地标记区域，适合某个较大
+  编排函数体中不愿拆出去的一段。
+
+两者编译结果相同 —— 区域会被外提为一个以 `name` 命名的 Graph 函数 —— 因此这只是书写
+习惯的选择，但有一条约束会替你做决定：以裸 `@pl.function(type=pl.FunctionType.Graph)`
+写出的片段 trace 不带程序组装，因此这种写法不能派发其它 jit kernel —— 被调方会被
+遗弃在程序之外。`@pl.jit.graph` 没有这个限制（被调方通道会发现并加入它派发的内容）；
+作用域形式也没有，因为它就在入口内部：
 
 ```python
 @pl.jit
@@ -78,7 +88,7 @@ def decode(w: pl.Tensor, hidden: pl.InOut[pl.Tensor]):
 区域内，也不能嵌套在 `pl.at` / `pl.cluster` / `pl.spmd` 内 —— 后者会变成单个设备 task，
 而 Graph 区域录制的是 task 的拓扑。三种情况都是编译期错误。
 
-子函数依赖（`.incore` / `.inline` / `.opaque` / `.graph`）从入口函数体自动发现 —— 按名字调用即可。这里的名字在入口函数自身的命名空间中解析，因此别名导入（`from kernels import matmul as mm`，或普通的 `mm = matmul` 重绑定）与其他绑定一样能被发现；生成的程序仍以其 `def` 名字命名该函数。当两个不同的子函数同名时 —— 两个模块各自定义了 `helper`，或同一个工厂产出的两个 kernel —— 后生成的那个会被加上后缀（`helper`、`helper__2`），从而两份特化都得以保留；入口函数始终保留自己的名字。`@pl.jit.host` 入口还会额外发现 `@pl.jit`（chip 编排）依赖，因此一个完整的分布式程序无需任何 `@pl.program` 类。
+子函数依赖（`.incore` / `.inline` / `.opaque`）从入口函数体自动发现 —— 按名字调用即可。这里的名字在入口函数自身的命名空间中解析，因此别名导入（`from kernels import matmul as mm`，或普通的 `mm = matmul` 重绑定）与其他绑定一样能被发现；生成的程序仍以其 `def` 名字命名该函数。当两个不同的子函数同名时 —— 两个模块各自定义了 `helper`，或同一个工厂产出的两个 kernel —— 后生成的那个会被加上后缀（`helper`、`helper__2`），从而两份特化都得以保留；入口函数始终保留自己的名字。`@pl.jit.host` 入口还会额外发现 `@pl.jit`（chip 编排）依赖，因此一个完整的分布式程序无需任何 `@pl.program` 类。
 
 下面这段只展示发现结构 —— kernel 体已省略，它用到的分布式类型见[分布式](../distributed/index.md)：
 
@@ -108,6 +118,10 @@ def host_orch(
 普通 `@pl.jit` 入口**不会**发现其他 `@pl.jit` 入口 —— 只有 `.host` 跨越 chip 边界。这防止两个互不相关的顶层 kernel 被静默折叠进同一个程序。
 
 `@pl.jit.host` 拒绝 `level=`（HOST 是隐含的）。
+
+> **隔离中的名字。** AST 时代的特化器仍可导入 —— `pl.jit_specializer` 及其
+> `pl.JITFunction` 类 —— 但它只为自身的单元测试而存在：不属于本页描述的 tracing
+> 表面，将来会被移除。不要在它上面构建。
 
 ### 子函数返回的张量会保留 shape 和 dtype
 
@@ -161,17 +175,17 @@ tile 加载，就会得到 `InitMemRef requires static shape` —— 与等价�
 ```python
 @pl.jit
 def bad(x: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
-    out[:] = pl.add(x, x)        # ✗ Misplaced tensor op ... should be inside InCore block
+    out[0:64, 0:64] = pl.add(x, x)        # ✗ Misplaced tensor op ... should be inside InCore block
     return out
 
 @pl.jit
 def good(x: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.add(x, x)    # ✓
+        out[0:64, 0:64] = pl.add(x, x)    # ✓
     return out
 ```
 
-**2. `JITFunction` 没有 `as_python()`。** 在特化发生之前 IR 并不存在。调用 `lower(*args)` 拿 Pass 后的 `ir.Program`，或调用 `compile(*args)` 后读 `compiled.program.as_python()` 拿特化后、Pass 前的 IR。
+**2. lazy lane 的 jit kernel 没有 `as_python()`。** 在某次调用 trace 它之前 IR 并不存在。调用 `compile_for_test(*args)` 拿 Pass 后的 `ir.Program`，或调用 `compile(*args)` 后读 `compiled.program.as_python()` 拿 trace 出来、Pass 前的 IR。（全注解的 kernel 在装饰时就 trace 完了 —— 装饰后的名字*就是* `ir.Function`，`as_python()` 直接可用。）
 
 **3. `compile()` 收的是 kernel 自己的参数，不是编译选项。** 编译期开关走 `config=RunConfig(...)`；误写的 `compile(skip_ptoas=True)` 会拿去和 kernel 签名做绑定，并抛出 `TypeError: got an unexpected keyword argument`。`@pl.jit` 会自行检测 ptoas 是否可用，所以你不需要传 `skip_ptoas`。
 
@@ -270,29 +284,27 @@ prologue，或专用的 `auto_scope=` / `external_source=` 关键字——因此
 
 ### 把编译与派发拆开
 
-`@pl.jit` kernel 通常把特化 + 编译 + 派发融合进一次 `kernel(*args)` 调用。`JITFunction.compile(*sample_args)` 在编译后停下并交还 `CompiledProgram` —— 用于自行驱动 `ChipWorker`、检查 `compiled.output_dir` 下的产物，或提前做 codegen 校验。
+`@pl.jit` kernel 通常把特化 + 编译 + 派发融合进一次 `kernel(*args)` 调用。`kernel.compile(*sample_args)` 在编译后停下并交还 `CompiledProgram` —— 用于自行驱动 `ChipWorker`、检查 `compiled.output_dir` 下的产物，或提前做 codegen 校验。
 
 ```python
 compiled = my_kernel.compile(sample_x, sample_w, sample_out)
 print("artifacts in:", compiled.output_dir)
 ```
 
-返回的对象就是 JIT 缓存持有的那个，因此之后用同一特化 key 再调用会拿到完全相同的实例。
+每次调用都重新编译一个新产物 —— 先编译后调用就是冻结一份物化 —— 而普通的 `kernel(*args)` 派发 lane 按桥接后的签名做缓存。
 
-`lower(*sample_args)` 比它早停一站：只跑 Pass 并返回 Pass 后的 `ir.Program`，不做代码生成、不调 `ptoas`、不写产物、不写缓存。要读降级后的 IR 就用它；要检查代码生成本身就用 `compile()`。两者都接受 `config=RunConfig(...)`，但 `lower()` 会忽略其中的运行时与产物字段。编译选项见 [编译](../execution/00-compile.md)，运行时接口见 [运行](../execution/01-run.md)。
+`compile_for_test(*sample_args)` 比它早停一站：只跑默认 Pass 流水线并返回 Pass 后的 `ir.Program`，不做代码生成、不调 `ptoas`、不写产物、不写缓存。要读降级后的 IR 就用它 —— 它也是 jit 自身往返测试所用的结构相等性基准 —— 要检查代码生成本身就用 `compile()`。它不接受 `config=`：它根本不会走到 `ir.compile`，`RunConfig` 没有可配置的东西。编译选项见 [编译](../execution/00-compile.md)，运行时接口见 [运行](../execution/01-run.md)。
 
-`specialize(*sample_args)` 比它还要早停一站：把入口及其依赖特化成 `@pl.program` 源码并解析，返回**未经任何 Pass** 的 `ir.Program`。只有当下游要自己跑 Pass 流水线时才需要它 —— 最主要的场景是 `ir.compile(program, output_dir=...)`，它会同时跑 Pass 和代码生成，把 `lower()` 的结果喂给它会让流水线跑两遍。
+参数全部有完整注解的 kernel 在装饰时就 trace 完了 —— 装饰后的名字*就是* Pass 前的
+`ir.Function`，调用时已无特化可做：`kernel.as_python()` 直接打印它，编译路线是
+`ir.compile(ir.Program([kernel], kernel.name, kernel.span), platform="a2a3")`。给入口用
+之前注意一条：这个单函数 program 只携带该 kernel 本身，因此会派发其它 jit kernel 的入口
+要用 lazy lane —— 裸 `pl.Tensor` 参数 —— 那里 `compile()` 和 `compile_for_test()` 会替你
+组装多函数 program。
 
-```python
-program = my_kernel.specialize(sample_x, sample_w, sample_out)
-ir.compile(program, output_dir="build/out", backend_type=BackendType.Ascend910B)
-```
+> 两个特化出相同程序的 kernel，是在 **Pass 之后**才相等，而不是之前：特化器会重命名 SSA 重绑定的局部量（`out` 变成 `out_v1`），规范化会消除这个差异。要和手写 `@pl.program` 断言等价，请比较 `compile_for_test()` 的结果。
 
-它不接受 `config=`：这里不跑任何 Pass，`RunConfig` 没有可配置的东西。只有当每个张量参数都带完整形状注解时才能省略采样实参 —— 裸 `pl.Tensor` 没有形状可读。
-
-> 两个特化出相同程序的 kernel，是在 **Pass 之后**才相等，而不是之前：特化器会重命名 SSA 重绑定的局部量（`out` 变成 `out_v1`），规范化会消除这个差异。要和手写 `@pl.program` 断言等价，请比较 `lower()` 的结果。
-
-另有三个访问器可以在不做任何特化的情况下读取签名：`param_names`（按声明顺序）、`output_param_names`（`pl.Out[...]` 与 `pl.InOut[...]` 参数，同样按声明顺序）、以及 `__name__`。
+另有两个访问器可以在不做任何 trace 的情况下读取签名：`param_names()`（按声明顺序）与 `__name__`。
 
 ### 外部 C++ kernel
 
@@ -300,13 +312,13 @@ ir.compile(program, output_dir="build/out", backend_type=BackendType.Ascend910B)
 
 ## 边界情况
 
-> **致命陷阱：** 验证新的 `@pl.jit` 示例要用完整的 `compile()`，不能只用 `lower()`。`lower()` 在 Pass 之后就停下，所以上面那条"Orchestration 体内放算子"的错误根本不会触发 —— kernel 看上去通过了，直到有人真正去跑它才失败。
+> **致命陷阱：** 验证新的 `@pl.jit` 示例要用完整的 `compile()`，不能只用 `compile_for_test()`。`compile_for_test()` 在 Pass 之后就停下，所以上面那条"Orchestration 体内放算子"的错误根本不会触发 —— kernel 看上去通过了，直到有人真正去跑它才失败。
 
 | 症状 | 可能原因 | 修复 |
 | ---- | -------- | ---- |
 | **`Misplaced tensor op ... should be inside InCore block`** | 算子直接写在 `@pl.jit` 体内 | 包进 `with pl.at(level=pl.Level.CORE_GROUP):` 或移入 `@pl.jit.incore` |
-| **`AttributeError: 'JITFunction' object has no attribute 'as_python'`** | 在 IR 尚不存在时打印它 | 用 `f.lower(*args)`，或 `f.compile(*args)` 后取 `compiled.program.as_python()` |
-| **`lower()` 通过但 `compile()` 失败** | `lower()` 不执行代码生成 | 预期行为 —— 代码生成检查用 `compile()` |
+| **`AttributeError: ... has no attribute 'as_python'`** | 在某次调用 trace lazy-lane kernel 之前打印它的 IR | `f.compile_for_test(*args).as_python()`，或 `f.compile(*args)` 后取 `compiled.program.as_python()` |
+| **`compile_for_test()` 通过但 `compile()` 失败** | `compile_for_test()` 不执行代码生成 | 预期行为 —— 代码生成检查用 `compile()` |
 | **`TypeError: got an unexpected keyword argument`** | 编译选项传给了 `compile()`，而它会拿去和 kernel 签名绑定 | 改传 `config=RunConfig(...)` |
 | **程序里少了第二个顶层 kernel** | 普通 `@pl.jit` 不发现其他 `@pl.jit` 入口 | 改用 `@pl.jit.host`，或把被调方改成 `.incore` / `.opaque` |
 | **`auto_scope=False` 被拒绝** | 用在了 `.incore` / `.opaque` 上 | 放到入口或 `.inline` 辅助函数上 |

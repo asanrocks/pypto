@@ -27,7 +27,7 @@ B = torch.randn(128, 128, dtype=torch.float32)
 @pl.jit
 def add(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.add(a, b)
+        out[0:128, 0:128] = pl.add(a, b)
     return out
 
 
@@ -67,7 +67,7 @@ assert compiled.param_names == ["a", "b", "out"]
 | `enable_pypto_l0c_double_buffer` | `None` | L0C double buffer |
 | `emit_source_loc` | `None` | 把 DSL 源位置带进发出的 `.pto` |
 | `dump_ptoas_passes` | `False` | 同时 dump ptoas 自己的 pass IR |
-| `runtime` | `None` | 面向哪个 Simpler 运行时 ABI —— `TENSORMAP_AND_RINGBUFFER` 或 `HOST_BUILD_GRAPH`（`@pl.jit.graph` 需要它 —— [函数](../language/01-functions.md)）；`None` 继承当前 `PassContext`。派发它的 worker 必须与之匹配 |
+| `runtime` | `None` | 面向哪个 Simpler 运行时 ABI —— `TENSORMAP_AND_RINGBUFFER` 或 `HOST_BUILD_GRAPH`（Graph 函数需要它 —— [函数](../language/01-functions.md)）；`None` 继承当前 `PassContext`。派发它的 worker 必须与之匹配 |
 
 ### Pass dump
 
@@ -92,13 +92,13 @@ assert compiled.param_names == ["a", "b", "out"]
 | `report/pipeline_profile.*` | 逐阶段编译计时（当 `profiling=True`） |
 | `dfx_outputs/` | 由 DFX 开关在**运行**时写出，不是编译产物 |
 
-### `JITFunction.compile`
+### jit 的 `compile`
 
 `@pl.jit` 平时把特化 + 编译 + 派发融成一次 `kernel(*args)` 调用。`compile(*sample_args)` 在编译后停下，返回 JIT 缓存持有的那个 `CompiledProgram` —— 所以之后用同一个特化键调用会拿到同一个对象。
 
 它暴露了完整的提取面，这正是直接驱动运行时的 harness 所需要的：`chip_callable`、`runtime_name`、`runtime_config`、`output_dir`、`platform`、`output_indices`、`param_names`、`orchestration_names`、`has_return`。实参编排不属于这个面 —— 交给 [`ChipWorker`](01-run.md#显式派发) 派发，它会替你完成。
 
-`lower(*args)` 比它早停一站：只跑 pass 并返回 `Program`，不写任何产物 —— 也就意味着没有 `passes_dump/`。它适合 [torch codegen](../tools/01-torch-codegen.md)，那里要的就是 IR 本身；而[内存图](../tools/02-memory-map.md)读的是磁盘上的 dump，因此需要 `compile()`。
+`compile_for_test(*args)` 比它早停一站：跑默认 Pass 流水线并返回 Pass 后的 `ir.Program`，不写任何产物 —— 也就意味着没有 `passes_dump/`。它适合 [torch codegen](../tools/01-torch-codegen.md)，那里要的就是 IR 本身；而[内存图](../tools/02-memory-map.md)读的是磁盘上的 dump，因此需要 `compile()`。
 
 ## 边界情况
 
@@ -106,7 +106,7 @@ assert compiled.param_names == ["a", "b", "out"]
 | ---- | ---- | ---- |
 | **`TypeError: got an unexpected keyword argument`** | 编译选项被当位置参数传给了 `compile()` | 放进 `config=RunConfig(...)` |
 | **worker 拒绝该产物** | 编译期 `platform` 与 worker 的不一致 | 用你将要派发的平台去编译 |
-| **没有 `passes_dump/`** | `lower()` 不写产物；或 `dump_passes=False` | 改用 `compile()`，或传 `dump_passes=PassDumpLevel.EXPLICIT` |
+| **没有 `passes_dump/`** | `compile_for_test()` 不写产物；或 `dump_passes=False` | 改用 `compile()`，或传 `dump_passes=PassDumpLevel.EXPLICIT` |
 | **内存图没东西可画** | `memory_planner=PTOAS` 跳过 `AllocateMemoryAddr`，dump 里没有偏移 | 改用端到端对比 |
 
 > **`verification_level` 是调试杠杆，不是该常年调高的默认值。** 默认是 `BASIC` —— 除非 `PYPTO_VERIFY_LEVEL` 另有指定，因为该参数留 `None` 时会交给它。`ROUNDTRIP` 会额外重新解析每份 dump，明显更慢。怀疑 IR 畸形时调高，用完调回去。

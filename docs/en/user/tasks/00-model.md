@@ -29,15 +29,15 @@ That leads to the property this whole chapter exists for:
 import pypto.language as pl
 
 @pl.jit.incore
-def twice(x: pl.Tensor[[256, 128], pl.FP32], out: pl.Out[pl.Tensor[[256, 128], pl.FP32]]):
-    out[:] = pl.add(x, x)
+def twice(x: pl.Tensor, out: pl.Out[pl.Tensor]):
+    out[0:256, 0:128] = pl.add(x, x)
     return out
 
 @pl.jit
 def two_stage(
-    x: pl.Tensor[[256, 128], pl.FP32],
-    scratch: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
-    out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
+    x: pl.Tensor,
+    scratch: pl.Out[pl.Tensor],
+    out: pl.Out[pl.Tensor],
 ):
     scratch = twice(x, scratch)        # writes scratch
     out = twice(scratch, out)          # reads scratch  -> ordered after the write

@@ -27,7 +27,6 @@
 ```python
 import pypto.language as pl
 import torch
-from pypto import ir
 from pypto.runtime import ChipWorker, RunConfig
 
 ROWS, COLS = 128, 128
@@ -50,7 +49,7 @@ B = torch.randn(ROWS, COLS, dtype=torch.float32)
 # A DeviceTensor carries no shape/dtype for the @pl.jit specializer to read, so
 # the resident-weight pattern below runs a *compiled* program rather than the
 # jit entry directly.
-compiled = ir.compile(add_kernel.lower(A, B, torch.zeros(ROWS, COLS)), platform=PLATFORM)
+compiled = add_kernel.compile(A, B, torch.zeros(ROWS, COLS), config=RunConfig(platform=PLATFORM))
 ```
 
 <!-- doctest: run -->
@@ -100,7 +99,7 @@ finally:
 关闭。对同一个 `compiled.chip_callable` 多次 `register` 返回的是同一个 cid 的别名；
 真正的 simpler 反注册在 `worker.close()` 里集中做。
 
-`@pl.jit` 内核走同样的流程，先经过 `JITFunction.compile()`：
+`@pl.jit` 内核走同样的流程，先经过 jit 自己的 `compile()`：
 
 ```python
 @pl.jit
@@ -117,10 +116,14 @@ for batch in stream:
 
 ### 从签名编译（无需样例张量）
 
-当每个张量参数都**完整注解**了 shape 和 dtype 时，`compile()` 可以直接从签名
-读出整个 shape 契约 —— **不传任何位置参数**即可，样例张量全部省掉：
+当每个张量参数都**完整注解**了 shape 和 dtype 时，kernel 就在 **eager lane** 上：
+`@pl.jit` 在装饰时 trace 它，装饰后的名字*就是* trace 出的 `ir.Function` —— 它身上
+没有 `compile()`。直接用 `ir.compile` 编译这个 trace 出的函数，装进一个包含它及其
+体内派发的全部子函数的 program（校验会按名字拒绝缺失被调者的入口）：
 
 ```python
+from pypto import ir
+
 HIDDEN, VOCAB = 4096, 152064
 M = pl.dynamic("M")          # 运行期动态维
 
@@ -132,26 +135,25 @@ def prefill_fwd(
 ): ...
 
 # 没有 torch.empty(...) 占位张量 —— shape 全部来自注解。
-compiled = prefill_fwd.compile()
+compiled = ir.compile(
+    ir.Program([prefill_fwd], prefill_fwd.name, prefill_fwd.span),
+    platform="a2a3",
+)
 ```
 
 对于签名很大的内核，这是更符合直觉的路径：shape 契约只在签名一处声明，而不是
 再写成一长串一次性的 `torch.empty(...)`。细节：
 
 - **静态维**（`HIDDEN`、`VOCAB` …）来自注解常量。
-- **动态维**（`pl.dynamic` / `bind_dynamic`）无需给值 —— 编译产物与具体 extent
-  无关，`compile()` 与等价的 `compile(sample_tensors)` 共享同一 cache 条目。
-- **标量参数**在签名里没有值 —— 用关键字参数传入。传字面量会把该值**特化**进
-  产物，例如 `kernel.compile(num_tokens=128)` 编出的内核只认 128。改传
-  `pl.RUNTIME` —— `kernel.compile(num_tokens=pl.RUNTIME)` —— 则**不特化**：该参数
-  在生成的程序里仍是真正的 `pl.Scalar` 参数，值在 dispatch 时给出；它与动态维一样
-  不进 cache key，一份产物服务所有取值。该值要通过编译产物给出 —— `compiled(...)`
-  或 `worker.register(compiled)` 拿到的 handle —— 而不是直接调用内核：
-  `kernel(x, out, 128)` 会按 128 重新特化并编出另一份产物。`pl.RUNTIME` 也可以写成
-  签名默认值（`num_tokens: pl.Scalar[pl.INT32] = pl.RUNTIME`），这样每个 `compile()`
-  调用点都不必再传关键字。
-- **bare `pl.Tensor`**（无 shape）无从读取，会给出明确报错；请补全
-  `pl.Tensor[[...], dtype]` 注解，或回退到 `compile(*sample_tensors)`。
+- **动态维**（`pl.dynamic`）无需给值 —— 编译产物与具体 extent 无关，
+  `compiled(x, out)` 每次接受不同的行数都不会重编译。（jit 自己的 dispatch lane
+  是静态路线：它把实参形状烘进每个特化。）
+- **标量参数**（`pl.Scalar[...]`）是运行期参数 —— 值在 dispatch 时传，
+  `compiled(x, out, num_tokens)`，一份产物服务所有取值。（`pl.RUNTIME` 与
+  `compile()` 的关键字特化是 AST 时代 specializer 的签名模式；tracing jit 的 eager
+  kernel 上没有 `compile()`。）
+- **bare `pl.Tensor`**（无 shape）参数把 kernel 放到 lazy lane 上 —— 用上面的
+  `kernel.compile(*sample_tensors)` 编译。
 
 完整三种使用模式（推理服务、训练循环、register/dispatch 开销验证）见
 `examples/runtime/explicit_dispatch.py`。

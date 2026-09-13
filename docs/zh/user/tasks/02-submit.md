@@ -27,14 +27,14 @@ import pypto.language as pl
 
 @pl.jit
 def two_stage(
-    x: pl.Tensor[[256, 128], pl.FP32],
-    scratch: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
-    out: pl.Out[pl.Tensor[[256, 128], pl.FP32]],
+    x: pl.Tensor,
+    scratch: pl.Out[pl.Tensor],
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP) as first:
-        scratch[:] = pl.add(x, x)
+        scratch[0:256, 0:128] = pl.add(x, x)
     with pl.at(level=pl.Level.CORE_GROUP, deps=[first]) as second:
-        out[:] = pl.add(scratch, scratch)
+        out[0:256, 0:128] = pl.add(scratch, scratch)
     return scratch, out
 ```
 

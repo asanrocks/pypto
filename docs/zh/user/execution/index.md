@@ -2,11 +2,11 @@
 
 把程序变成产物，再把产物跑到设备上。
 
-在这一章之前，讲的都是你写什么；这一章讲的是它之后会怎样：`ir.compile` 与 `JITFunction.compile` 产出一个 `CompiledProgram`，`ChipWorker` 负责派发它。你真正会关心的东西，多半由两个旋钮决定 —— 产物落在哪里，以及运行时被允许在两次 launch 之间复用其中的什么。
+在这一章之前，讲的都是你写什么；这一章讲的是它之后会怎样：`ir.compile` 与 jit 的 `compile` 产出一个 `CompiledProgram`，`ChipWorker` 负责派发它。你真正会关心的东西，多半由两个旋钮决定 —— 产物落在哪里，以及运行时被允许在两次 launch 之间复用其中的什么。
 
 | 页面 | 覆盖 |
 | ---- | ---- |
-| [编译](00-compile.md) | `ir.compile` 及其参数、`JITFunction.compile`、产物目录、pass dump |
+| [编译](00-compile.md) | `ir.compile` 及其参数、jit 的 `compile`、产物目录、pass dump |
 | [运行](01-run.md) | `CompiledProgram` 的契约、`ChipWorker`、`DeviceTensor`，以及影响派发的 `RunConfig` 字段 |
 
 ## PyPTO 到哪里为止

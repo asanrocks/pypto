@@ -3,13 +3,13 @@
 Turning a program into artifacts, and running those artifacts on a device.
 
 Everything up to this chapter describes what you write. This one describes what happens to
-it: `ir.compile` and `JITFunction.compile` produce a `CompiledProgram`, and `ChipWorker`
+it: `ir.compile` and the jit's `compile` produce a `CompiledProgram`, and `ChipWorker`
 dispatches it. Two knobs decide most of what you will care about — where the artifacts go,
 and which of them the runtime is allowed to reuse between launches.
 
 | Page | Covers |
 | ---- | ------ |
-| [Compiling](00-compile.md) | `ir.compile` and its parameters, `JITFunction.compile`, the artifact directory, pass dumps |
+| [Compiling](00-compile.md) | `ir.compile` and its parameters, the jit's `compile`, the artifact directory, pass dumps |
 | [Running](01-run.md) | `CompiledProgram`'s contract, `ChipWorker`, `DeviceTensor`, and the `RunConfig` fields that affect dispatch |
 
 ## Where PyPTO stops

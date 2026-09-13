@@ -8,22 +8,27 @@ shapes both.
 ## Concept
 
 PyPTO's IR is **SSA**: every binding is written exactly once. That is invisible in
-straight-line code — the parser renames `x` for you as often as you rebind it — but at a
+straight-line code — the tracer renames `x` for you as often as you rebind it — but at a
 loop boundary or a branch merge it becomes visible, because there is no single place for
 the compiler to put the second write.
 
-`pl.yield_` is the answer. It names the value that leaves a scope:
+Under the tracing frontend you never declare that dataflow. The kernel body is executed
+once, and the **passes** derive the rest:
 
-- In a loop, the yielded value becomes the next iteration's input and, after the last
-  iteration, the loop's result.
-- In an `if` / `else`, both branches yield, and the merge produces one result variable
-  (a phi node).
+- In a loop, a name the body rebinds (`acc = pl.add(acc, x)`) *is* the carried value.
+  Reading it after the loop reads the last iteration's result.
+- In a staged `if` / `else`, both arms simply assign the same name; the SSA pass
+  synthesizes the merge (a phi node).
 
-You do not always write `yield_` yourself. Rebinding a name inside a loop is the ordinary
-way to accumulate, and the parser turns it into a carried value for you — `init_values=`
-plus `yield_` is the same thing spelled out, and it is mandatory only for `pl.while_`. A
-branch that produces a value, on the other hand, must always yield from both arms.
-Everything else on this page is a variation on those rules.
+The parser-era declarations are gone: `init_values=` (and the iter-tuple unpacking that
+came with it), per-branch `pl.yield_`, and the `pl.while_` / `pl.cond()` spelling no
+longer exist. You will still *read* them — printed IR shows `init_values=` and
+`pl.yield_` — but that is the printer's round-trip dialect, its own grammar consumed by
+`pl.parse`, not the tracing input. Do not copy it back into a kernel.
+
+One rule underlies everything on this page: **staged state starts at an operator or
+`pl.const`.** A host literal (`acc = 0.0`) is not staged — feeding it to an operator is a
+loud error, not a silent zero.
 
 Four loop constructs share one syntax and differ only in what the compiler is told:
 
@@ -36,32 +41,47 @@ pl.pipeline  body replicated `stage` times for ping-pong buffering
 
 ## Quickstart: a loop that accumulates
 
+<!-- doctest: setup -->
 ```python
 import pypto.language as pl
+import torch
+from pypto.runtime import RunConfig
 
+CFG = RunConfig(platform="__PLATFORM__")
+torch.manual_seed(0)
+A = torch.randn(128, 128, dtype=torch.float32)
+```
+
+<!-- doctest: run -->
+```python
 @pl.jit
 def accumulate(
-    a: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP):
-        t = pl.add(a, a)
+        t = pl.add(pl.load(a, [0, 0], [128, 128]), pl.load(a, [0, 0], [128, 128]))
         for i in pl.range(3):
-            t = pl.add(t, a)      # carried across iterations
-        out[:] = pl.mul(t, t)
+            t = pl.add(t, pl.load(a, [0, 0], [128, 128]))   # carried across iterations
+        pl.store(pl.mul(t, t), [0, 0], out)
     return out
+
+
+out = torch.zeros(128, 128, dtype=torch.float32)
+accumulate(A, out, config=CFG)
+torch.testing.assert_close(out, (5 * A) ** 2, rtol=1e-4, atol=1e-4)
 ```
 
 | Line | What it does |
 | ---- | ------------ |
-| `t = pl.add(a, a)` | Establishes the value before the loop |
+| `t = pl.add(pl.load(...), pl.load(...))` | Establishes the value before the loop — an operator result, so it is staged |
 | `for i in pl.range(3)` | Three iterations; `i` is the loop variable |
-| `t = pl.add(t, a)` | Looks like mutation; is a carried value |
-| `out = pl.mul(t, t)` | Reading `t` after the loop reads the last iteration's result |
+| `t = pl.add(t, ...)` | Looks like mutation; is a carried value |
+| `pl.store(pl.mul(t, t), ...)` | Reading `t` after the loop reads the last iteration's result |
 
-Rebinding `t` inside the loop is the idiomatic way to carry a value. The IR is SSA, so
-the parser gives each iteration's value its own name and threads it through the loop as a
-carried value — which is exactly what the explicit form below spells out by hand.
+Rebinding `t` inside the loop is the idiomatic way to carry a value — there is no other
+way to declare one. The IR is SSA, and the loop pass threads each iteration's `t` through
+the loop as a carried value; you never name that plumbing.
 
 ## Mechanics
 
@@ -72,17 +92,17 @@ literals or `pl.Scalar` values, except where noted.
 
 | Form | Emits | Carried values | Bounds |
 | ---- | ----- | -------------- | ------ |
-| `pl.range(...)` | `ForKind.Sequential` | Yes | int or `Scalar` |
-| `pl.parallel(...)` | `ForKind.Parallel` | Yes | int or `Scalar` |
-| `pl.unroll(...)` | `ForKind.Unroll` | **No** | literals only |
-| `pl.pipeline(..., stage=N)` | Sequential + pipelining | Yes | int or `Scalar` |
+| `pl.range(...)` | `ForKind.Sequential` | Derived from rebinding | int or `Scalar` |
+| `pl.parallel(...)` | `ForKind.Parallel` | Derived from rebinding | int or `Scalar` |
+| `pl.unroll(...)` | `ForKind.Unroll` | Derived only — the explicit carry channel is rejected | literals only |
+| `pl.pipeline(..., stage=N)` | Sequential + pipelining | Derived from rebinding | int or `Scalar` |
 
 ```python
 for i in pl.range(10): ...            # 0..9
 for i in pl.range(2, 10): ...         # 2..9
 for i in pl.range(0, 100, 4): ...     # 0, 4, ..., 96
 for i in pl.parallel(0, nblocks): ...
-for i in pl.unroll(4): ...            # no init_values here
+for i in pl.unroll(4): ...            # no explicit carry channel here
 ```
 
 `pl.parallel` is an assertion, not a request: you are telling the compiler the iterations
@@ -102,70 +122,116 @@ for i in pl.pipeline(64, stage=4):
     pl.store(t, [i * 64, 0], out)
 ```
 
-### Naming the carry explicitly
+### How a carry is derived
 
-`init_values=` plus `pl.yield_` is the explicit spelling of what rebinding does
-implicitly. It is **required** for `pl.while_` (below), and it is the form printed IR
-uses, so you will read it even when you do not write it. Up to five carried values are
-supported by the typed overloads.
-
-The fragment below assumes `init_max` / `init_sum` are values of the same type as the
-loop body produces:
+The loop's carried values are exactly the names the body rebinds self-referentially:
 
 ```python
-for i, (acc_max, acc_sum) in pl.range(4, init_values=(init_max, init_sum)):
-    out_max, out_sum = pl.yield_(pl.maximum(acc_max, row_i), pl.add(acc_sum, row_i))
+acc = pl.load(a, [0, 0], [64, 64])     # staged seed — an operator result
+for i in pl.range(4):
+    acc = pl.add(acc, tile_i)          # `acc` is carried; `tile_i` is not
 ```
 
-Two rules govern it: the loop is read **after** it under the name `yield_` bound (not the
-name in `init_values`), and every carried value must keep one type across the whole loop.
+The same loop may rebind several names; each self-referential name becomes a carried
+value. Single-branch definitions inside a loop body are legal — the missing branch reads
+the previous iteration's value; that is loop-carried behavior and the pass owns it.
+
+The seed must be staged. A host literal seed (`acc = 0.0`) does not silently become a
+carry: the first operator that consumes it rejects it (`pl.add: expected Tensor or Tile
+operands, got (float, Tensor)`). Seed with an operator result, or with a typed constant —
+`pl.const(0.0, pl.FP32)` — which is also the spelling for a counter or a boolean flag.
+
+### While loops
+
+A staged while-loop is a bare `while` over a **staged** predicate. `pl.while_` and
+`pl.cond()` do not exist. Initialize the counter with `pl.const`, and the carry is
+derived from rebinding exactly as above — the body traces one representative iteration:
+
+<!-- doctest: run -->
+```python
+@pl.jit
+def chunked_square(
+    a: pl.Tensor,
+    out: pl.Out[pl.Tensor],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        pos = pl.const(0, pl.INDEX)    # typed staged constant — a host `pos = 0` stays host
+        while pos < 2:                 # staged predicate -> one representative body iteration
+            tile = pl.load(a, [pos * 64, 0], [64, 128])
+            pl.store(pl.mul(tile, tile), [pos * 64, 0], out)
+            pos = pos + 1              # the rebind is the carry
+    return out
+
+
+out = torch.zeros(128, 128, dtype=torch.float32)
+chunked_square(A, out, config=CFG)
+torch.testing.assert_close(out, A * A, rtol=1e-3, atol=1e-3)
+```
+
+Staged or host is decided by the *values*, not the keyword: if the predicate (and the
+names it reads) are host values — plain Python ints, tensor shapes, anything an operator
+did not produce — the `while` executes at trace time and the body is emitted once per
+host iteration. That is real metaprogramming (a shape-driven unroll), not a fallback.
+
+### Conditionals
+
+A staged branch publishes its value by **assignment**. Both arms assign the same name;
+convergence is the pass's job:
+
+```python
+if i == last:
+    valid_len = last_valid_len             # staged value: plain assignment
+else:
+    valid_len = pl.const(block_size, pl.INDEX)   # host value crossing the join: pl.const
+```
+
+A staged `if` traces **both** arms, whatever the predicate's trace-time value. A host
+`if` (host predicate) takes one path at trace time, like the host `while` above.
+
+Two errors guard the join: a name that is staged on one arm and a host literal on the
+other is rejected (`... is staged on one branch of this if and a host value on the
+other`), and the predicate itself must be BOOL-typed — `if k:` on an integer `Scalar` is
+rejected; write `if k != 0:`.
+
+### The assembly channels: `pl.intrin.carry` / `yield_` / `leak`
+
+Ergonomics never states a carry. The one place an explicit channel appears is the
+assembly dialect — compiler tests, and kernel code that must state dataflow the
+derivation would obscure (the task-graph dependency loop is the user-facing case; see
+[Directives](06-syntax.md)). The three spellings:
+
+```python
+(acc,) = pl.intrin.carry(c)        # open the iter args the loop consumes
+for i in pl.range(4):
+    acc = pl.store(tile_i, [i * 64, 0], acc)
+    pl.intrin.yield_(acc)          # publish the branch/iteration value
+(result,) = pl.intrin.leak()       # bind the loop's result after it closes
+```
+
+Rules: the carry must be consumed by the loop opener immediately following it;
+`pl.unroll` rejects it outright; the leak-bound name (`result`, not `acc`) is the one to
+read after the loop; and every carried value must keep one type across the whole loop.
 Mixing levels is where this bites — a value seeded from a tensor-level expression and
 then combined with a tile-level one inside an InCore scope does not type-check, and the
 error names the operator rather than the carry.
 
-### While loops
-
-`pl.while_` **always** requires `init_values`, and the condition is set by `pl.cond()` as
-the **first statement** of the body:
-
-```python
-for (x,) in pl.while_(init_values=(0,)):
-    pl.cond(x < 10)            # continue while true
-    x_out = pl.yield_(x + 1)
-```
-
-`pl.cond` is purely syntactic — the parser lifts it onto the `WhileStmt`. It is not a
-runtime call and cannot appear anywhere else.
-
-### Conditionals
-
-A branch that produces a value must yield from **both** arms, with the same number and
-types of values:
-
-```python
-for i, (prev,) in pl.range(4, init_values=(init,)):
-    if i == 0:
-        result = pl.yield_(a)
-    else:
-        result = pl.yield_(pl.add(prev, delta))
-    out = pl.yield_(result)
-```
-
-If one branch yields, the other must too. A branch with no value to produce yields
-nothing in either arm.
+`pl.yield_` still exists as a deprecated alias of `pl.intrin.yield_`; it warns. Printed
+IR renders the same loop with `init_values=` — again, that is the printer's dialect, not
+input spelling.
 
 ### SSA, and when you have to think about it
 
-Write ordinary Python — rebind names freely. The parser renames:
+Write ordinary Python — rebind names freely. The tracer renames:
 
 ```python
 result = pl.mul(x, 2.0)
-result = pl.add(result, 1.0)      # fine; the parser produces two bindings
+result = pl.add(result, 1.0)      # fine; the tracer produces two bindings
 ```
 
-`@pl.function(strict_ssa=True)` makes the parser reject a rebind instead, which is
-occasionally useful for catching unintended shadowing. It also disables the
-`dst[...] = src` subscript-write sugar, which works by rebinding — see
+`@pl.function(strict_ssa=True)` rejects a rebind instead, which is occasionally useful
+for catching unintended shadowing. It is a round-trip-dialect discipline — the error's
+help text points at `@pl.function_parser` — and it also disables the `dst[...] = src`
+subscript-write sugar, which works by rebinding — see
 [Directives § subscript sugar](06-syntax.md#subscript-sugar).
 
 The pipeline runs [ConvertToSSA](../../dev/passes/04-convert_to_ssa.md) early, so
@@ -173,22 +239,24 @@ non-SSA source is normal input, not a compatibility mode.
 
 ## Edge Cases
 
-> **Fatal pitfall:** reading the `init_values` name after a loop reads the *initial*
-> value, not the accumulated one. The result is a tensor of whatever the initializer held
-> — frequently zeros, which looks like a compute bug rather than a naming one. Read the
-> name bound by `pl.yield_`.
+> **Fatal pitfall (parser era, now loud):** a host-literal seed used to drop the carry —
+> the loop compiled and every iteration read the initial value. Tracing rejects the seed
+> at the first operator that consumes it. If the error below names a Python type where
+> you expected a tensor, your state was never staged.
 
 | Symptom | Likely cause | Fix |
 | ------- | ------------ | --- |
-| **A value written in a loop is empty afterwards** | Reading the `init_values` name instead of the `yield_` name | Read the `yield_` binding |
+| **`pl.add: expected Tensor or Tile operands, got (float, Tensor)`** | A host literal seeding staged state (`acc = 0.0`) | Seed with an operator result or `pl.const(value, dtype)` |
+| **`range() got an unexpected keyword argument 'init_values'`** | Parser-era carry declaration | Drop it — the rebind is the carry |
+| **`... is staged on one branch of this if and a host value on the other`** | A host literal crossing a staged join | `pl.const(...)` on that arm, or stage both arms |
+| **`a staged if predicate must be BOOL-typed`** | `if k:` on an integer `Scalar` | Write the explicit test (`if k != 0:`) |
+| **`a staged for loop cannot have an 'else' suite`** | `else` would be collected unconditionally | Restructure, or keep the predicate a host value |
+| **`pl.unroll() cannot be combined with init_values`** | An explicit `pl.intrin.carry` feeding an unrolled loop | Derive the carry from rebinding, or use `pl.range` |
 | **`tensor.add requires ... but got TileType`** | A carried value changed level mid-loop — inside an InCore scope `pl.slice` yields a Tile | Keep one level across the carry; use `pl.load` / `pl.store` explicitly inside the scope |
-| **`while_() requires init_values to be specified`** | `pl.while_()` with no carried state | Add `init_values=(...)`, even if it is a single counter |
-| **Parser error on `pl.cond`** | Not the first statement of the `while_` body | Move it to the first line |
-| **Branch merge rejected** | Only one arm yields, or arities differ | Yield the same count and types from both arms |
-| **`unroll()` rejects `init_values`** | Unrolled loops carry no state | Use `pl.range`, or restructure so no value is carried |
 | **`unroll()` rejects a bound** | Bounds must be compile-time literals | Use `pl.range` for a `Scalar` bound |
 | **`pipeline()` stage error** | `stage` missing or not a positive int | Pass `stage=N`, N ≥ 1 |
 | **Race under `pl.parallel`** | Iterations are not actually independent | Use `pl.range`, or remove the cross-iteration dependency |
+| **Loop body appears unrolled in the IR** | The predicate or bounds were host values, so the loop executed at trace time | That is legal metaprogramming; stage the values (`pl.const`) if you wanted device-side control flow |
 | **`SSAViolationError`** | Rebinding under `strict_ssa=True` | Use distinct names, or drop `strict_ssa` |
 
 ## Worked examples
@@ -196,13 +264,14 @@ non-SSA source is normal input, not a compatibility mode.
 | Example | Shows |
 | ------- | ----- |
 | `examples/beginner/02_elementwise.py` (`chunked_add`) | A plain `pl.range` over tile chunks |
-| `examples/intermediate/04_matmul_acc.py` | `init_values` carrying an accumulator across iterations |
-| `examples/models/03_flash_attention.py` | Loop-carried state plus nested `if` / `pl.yield_` — the full form |
+| `examples/intermediate/04_matmul_acc.py` | Accumulation without a loop — host-sequenced K-chunks through `pl.matmul_acc` |
+| `examples/models/03_flash_attention.py` | Derived multi-name carries plus nested staged `if` — the full form |
 
 ## See Also
 
 - [Types](00-types.md) — what the carried values are.
 - [Scopes and Placement](04-scopes.md) — the placement scopes these loops sit inside.
+- [Migration guide](../../../design/04-migration-guide.md) — every parser-era spelling and its tracing replacement.
 - [ConvertToSSA](../../dev/passes/04-convert_to_ssa.md) — the conversion this page's rules come from.
 - [UnrollLoops](../../dev/passes/02-unroll_loops.md) — what `pl.unroll` becomes.
 - [LowerPipelineToSlots](../../dev/passes/30-lower_pipeline_to_slots.md) — what `pl.pipeline` becomes under `memory_planner=PTOAS`.

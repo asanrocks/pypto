@@ -14,7 +14,6 @@
 ```python
 import pypto.language as pl
 import torch
-from pypto import ir
 from pypto.runtime import ChipWorker, RunConfig
 
 ROWS, COLS = 128, 128
@@ -37,7 +36,7 @@ B = torch.randn(ROWS, COLS, dtype=torch.float32)
 # A DeviceTensor carries no shape/dtype for the @pl.jit specializer to read, so
 # the resident-weight pattern below runs a *compiled* program rather than the
 # jit entry directly.
-compiled = ir.compile(add_kernel.lower(A, B, torch.zeros(ROWS, COLS)), platform=PLATFORM)
+compiled = add_kernel.compile(A, B, torch.zeros(ROWS, COLS), config=RunConfig(platform=PLATFORM))
 ```
 
 <!-- doctest: run -->
@@ -71,7 +70,7 @@ with ChipWorker(config=cfg) as w:
 
 > **`compiled.program` 不是产出那些产物的那份 IR。** 它是你交给 `compile` 的那个 `Program`，原样存下；codegen 实际跑的那份变换后程序并不保留，而经 `from_dir` 重建的句柄根本没有 program。
 >
-> 在通常的 `ir.compile(MyProgram)` 路径上，那份输入是未经 pass 的 IR。但不必然如此 —— 上面的准备代码编译的是 `add_kernel.lower(...)`，那本身已经降级过，所以**在那里** `compiled.program` 是过了 pass 的。这个属性不对此做任何承诺，它只是把收到的东西交回来。要专门拿降级后的 IR，用 `kernel.lower(*args)` 或读一份 pass dump。
+> 在通常的 `ir.compile(MyProgram)` / `kernel.compile(*args)` 路径上，那份输入是未经 pass 的 IR —— jit 交给 `ir.compile` 的是刚 trace 出来的程序。这个属性不对此做任何承诺，它只是把收到的东西交回来。要专门拿过了 pass 的 IR，用 `kernel.compile_for_test(*args)` 或读一份 pass dump。
 
 ### 显式派发
 

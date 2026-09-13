@@ -32,7 +32,6 @@ and skips both H2D and D2H copies for that argument.
 ```python
 import pypto.language as pl
 import torch
-from pypto import ir
 from pypto.runtime import ChipWorker, RunConfig
 
 ROWS, COLS = 128, 128
@@ -55,7 +54,7 @@ B = torch.randn(ROWS, COLS, dtype=torch.float32)
 # A DeviceTensor carries no shape/dtype for the @pl.jit specializer to read, so
 # the resident-weight pattern below runs a *compiled* program rather than the
 # jit entry directly.
-compiled = ir.compile(add_kernel.lower(A, B, torch.zeros(ROWS, COLS)), platform=PLATFORM)
+compiled = add_kernel.compile(A, B, torch.zeros(ROWS, COLS), config=RunConfig(platform=PLATFORM))
 ```
 
 <!-- doctest: run -->
@@ -110,7 +109,7 @@ explicit early release. Multiple `register` calls for the same
 `compiled.chip_callable` return aliases of the same cid; the underlying
 simpler unregister runs once, in `worker.close()`.
 
-For `@pl.jit` kernels, the same flow works via `JITFunction.compile()`:
+For `@pl.jit` kernels, the same flow works via the jit's `compile()`:
 
 ```python
 @pl.jit
@@ -127,11 +126,16 @@ touched — so the sample tensors are pure metadata carriers.
 
 ### Compiling from the signature (no sample tensors)
 
-When every tensor parameter is **fully annotated** with its shape and dtype,
-`compile()` can read the whole shape contract straight from the signature — call
-it with **no positional arguments** and skip the sample tensors entirely:
+When every tensor parameter is **fully annotated** with its shape and dtype, the kernel
+is on the **eager lane**: `@pl.jit` traces it at decoration, and the decorated name
+already *is* the traced `ir.Function` — there is no `compile()` on it. Compile the traced
+function directly with `ir.compile`, in a program that contains it plus every
+sub-function its body dispatches (verification rejects an entry whose callee is missing,
+by name):
 
 ```python
+from pypto import ir
+
 HIDDEN, VOCAB = 4096, 152064
 M = pl.dynamic("M")          # runtime-dynamic dim
 
@@ -143,7 +147,10 @@ def prefill_fwd(
 ): ...
 
 # No torch.empty(...) dummies — shapes come from the annotations.
-compiled = prefill_fwd.compile()
+compiled = ir.compile(
+    ir.Program([prefill_fwd], prefill_fwd.name, prefill_fwd.span),
+    platform="a2a3",
+)
 ```
 
 This is the ergonomic path for kernels with large signatures: the shape contract
@@ -151,24 +158,17 @@ lives in one place (the signature) instead of being re-declared as a list of
 throwaway `torch.empty(...)` buffers. Details:
 
 - **Static dims** (`HIDDEN`, `VOCAB`, …) come from the annotation constants.
-- **Dynamic dims** (`pl.dynamic` / `bind_dynamic`) need no value — the compiled
-  artifact is extent-independent, and `compile()` shares one cache entry with an
-  equivalent `compile(sample_tensors)` call.
-- **Scalar parameters** carry no value in the signature — pass them as keyword
-  args. A literal **specializes** the value into the artifact, e.g.
-  `kernel.compile(num_tokens=128)` compiles a kernel that only ever sees 128.
-  Pass `pl.RUNTIME` instead — `kernel.compile(num_tokens=pl.RUNTIME)` — to leave
-  the parameter **unspecialized**: it stays a real `pl.Scalar` parameter whose
-  value arrives at dispatch and, like a dynamic dim, drops out of the cache key,
-  so one artifact serves every value. Supply that value through the compiled
-  artifact — `compiled(...)` or a `worker.register(compiled)` handle — not by
-  calling the kernel eagerly: `kernel(x, out, 128)` re-specializes on 128 and
-  compiles a separate artifact. `pl.RUNTIME` also works as the signature default
-  (`num_tokens: pl.Scalar[pl.INT32] = pl.RUNTIME`), which makes the keyword
-  unnecessary at every `compile()` call site.
-- A **bare `pl.Tensor`** parameter (no shape) has nothing to read and raises a
-  clear error; give it a full `pl.Tensor[[...], dtype]` annotation, or fall back
-  to `compile(*sample_tensors)`.
+- **Dynamic dims** (`pl.dynamic`) need no value — the compiled artifact is
+  extent-independent, so `compiled(x, out)` accepts a different row count per
+  launch without recompiling. (The jit's own dispatch lane is the static route:
+  it bakes the argument shapes into each specialization.)
+- **Scalar parameters** (`pl.Scalar[...]`) are runtime parameters — pass the value
+  at dispatch, `compiled(x, out, num_tokens)`, and one artifact serves every
+  value. (`pl.RUNTIME` and the keyword specialization of `compile()` were the
+  AST-era specializer's signature mode; the tracing jit has no `compile()` on an
+  eager kernel.)
+- A **bare `pl.Tensor`** parameter (no shape) puts the kernel on the lazy lane —
+  compile it with `kernel.compile(*sample_tensors)`, as above.
 
 See `examples/runtime/explicit_dispatch.py` for three end-to-end patterns
 (inference service, training loop, register/dispatch overhead check).

@@ -19,7 +19,7 @@
 | [控制流](02-control-flow.md) | `pl.range` / `parallel` / `unroll` / `pipeline` / `while_`、循环携带值、`yield_`、`cond`、SSA |
 | [内存与数据搬运](03-memory.md) | 内存空间、`load` / `store` / `move`、`valid_shape` 与 `fillpad`、片上常驻 |
 | [作用域与放置](04-scopes.md) | `at` / `cluster` / `spmd` / `split_aiv` —— 代码在哪里执行 |
-| [编译期指令](05-directives.md) | `static_print` / `static_assert`、`const` |
+| [编译期指令](05-directives.md) | tracing 下的 parser 专属诊断（`static_print` / `static_assert`）、`pl.const` |
 | [语言语法](06-syntax.md) | 下标语法糖、Python 运算符、闭包捕获 |
 
 ## 阅读顺序

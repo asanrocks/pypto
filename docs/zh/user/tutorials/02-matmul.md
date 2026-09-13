@@ -11,26 +11,32 @@
 
 ## 第 1 步：装得下的 matmul
 
+<!-- doctest: setup -->
 ```python
 import pypto.language as pl
 import torch
 from pypto.runtime import RunConfig
 
+CFG = RunConfig(platform="__PLATFORM__")
+torch.manual_seed(0)
+```
+
+<!-- doctest: run -->
+```python
 @pl.jit
 def matmul_small(
-    a: pl.Tensor[[128, 128], pl.FP16],
-    b: pl.Tensor[[128, 128], pl.FP16],
-    c: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    c: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="matmul"):
-        c[:] = pl.matmul(a, b, out_dtype=pl.FP32)
+        c[0:128, 0:128] = pl.matmul(a, b, out_dtype=pl.FP32)
     return c
 
-torch.manual_seed(0)
 a = torch.randn(128, 128, dtype=torch.float16)
 b = torch.randn(128, 128, dtype=torch.float16)
 c = torch.zeros(128, 128, dtype=torch.float32)
-matmul_small(a, b, c, config=RunConfig(platform="a2a3sim"))
+matmul_small(a, b, c, config=CFG)
 assert torch.allclose(c, a.float() @ b.float(), rtol=1e-2, atol=1e-2)
 ```
 
@@ -49,16 +55,16 @@ K_CHUNK = 128
 
 @pl.jit
 def matmul_k_blocked(
-    a: pl.Tensor[[128, 512], pl.FP16],
-    b: pl.Tensor[[512, 128], pl.FP16],
-    c: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    a: pl.Tensor,
+    b: pl.Tensor,
+    c: pl.Out[pl.Tensor],
 ):
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="k_blocked"):
         acc = pl.matmul(a[:, 0:K_CHUNK], b[0:K_CHUNK, :], out_dtype=pl.FP32)
         for k in pl.range(1, 512 // K_CHUNK):
             k0 = k * K_CHUNK
             acc = pl.matmul_acc(acc, a[:, k0 : k0 + K_CHUNK], b[k0 : k0 + K_CHUNK, :])
-        c[:] = acc
+        c[0:128, 0:128] = acc
     return c
 ```
 
@@ -80,7 +86,7 @@ def matmul_k_blocked(
 KS = K // SPLITS                       # each core's slice of K
 
 with pl.at(level=pl.Level.CORE_GROUP, name_hint="zero_init"):
-    c[:] = pl.full([M, N], dtype=pl.FP32, value=0.0)
+    c[0:M, 0:N] = pl.full([M, N], dtype=pl.FP32, value=0.0)
 for ks in pl.parallel(SPLITS):
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="split_k"):
         k0 = ks * KS

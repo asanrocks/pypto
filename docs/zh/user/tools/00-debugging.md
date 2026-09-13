@@ -26,11 +26,11 @@ A = torch.randn(64, 128, dtype=torch.float32)
 @pl.jit
 def scale(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
-        out[:] = pl.mul(a, 2.0)
+        out[0:64, 0:128] = pl.mul(a, 2.0)
     return out
 
 
-prog = scale.lower(A, torch.zeros(64, 128))   # passes only: no codegen, no artifacts
+prog = scale.compile_for_test(A, torch.zeros(64, 128))   # passes only: no codegen, no artifacts
 src = prog.as_python()                        # the lowered IR, as DSL source
 
 # What comes back is post-pass IR, not what you wrote: the pl.at scope has been
@@ -42,7 +42,7 @@ assert "pl.at" not in src
 print(prog.as_python(concise=True)[:200])     # concise= drops intermediate type annotations
 ```
 
-`lower()` 是便宜的那种形式 —— 只跑 pass 并返回 `Program`，什么都不写。`as_python()` 在 `Program` 或单个 `Function` 上都有；`JITFunction` 自己没有，因为在出现特化之前 IR 并不存在。
+`compile_for_test()` 是便宜的那种形式 —— 只跑默认 pass 流水线并返回 `Program`，什么都不写。`as_python()` 在 `Program` 或单个 `Function` 上都有。参数为裸 `pl.Tensor` 的 jit kernel 每次调用才 trace，自己没有 `as_python()` —— IR 要等 `compile_for_test()` 或 `compile()` 产出它才存在。全注解的 kernel 在装饰时就 trace 完了：装饰后的名字*就是* `ir.Function`，`kernel.as_python()` 直接可用。
 
 **要预期 IR 不长得像你的源码。** 上面那几条断言正是重点：pass 跑完之后 `pl.at` 已经不在了 —— 那个区域变成了 `scale_incore_0`，一个 role 为 `SubWorker` 的 `AIV` 函数，其 tile 带着显式的 `pl.MemRef` 分配。读 dump 就是读那种形态，而不是你写的形态。
 
@@ -105,10 +105,10 @@ print(pypto.get_log_level())
 
 | 现象 | 可能原因 | 修法 |
 | ---- | -------- | ---- |
-| **`JITFunction` 没有 `as_python`** | 特化之前 IR 并不存在 | `kernel.lower(*args).as_python()` |
+| **jit kernel 没有 `as_python`** | 裸 `pl.Tensor` kernel：在调用 trace 它之前 IR 并不存在 | `kernel.compile_for_test(*args).as_python()` |
 | **报错点的是编译器文件，不是你的 kernel** | 那是 `InternalError` | 提 bug，不要绕过去 |
 | **`ptoas compilation failed:` 后面是空的** | ptoas 二进制崩了 | 把 `PTOAS_ROOT` 指向一个能用的版本 |
-| **没有 `passes_dump/`** | `lower()` 不写产物 | 用带 `dump_passes=` 的 `compile()` |
+| **没有 `passes_dump/`** | `compile_for_test()` 不写产物 | 用带 `dump_passes=` 的 `compile()` |
 
 > **内部错误不该由你绕开。** 用改形状或换写法把它压下去，只是掩盖了一条被打破的不变量，它会在更不方便的地方再冒出来。
 

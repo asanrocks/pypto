@@ -15,8 +15,8 @@ PyPTO 让你按**实际需要的控制粒度**去描述计算，其余部分由�
 函数的 type 与 level 描述，**何时运行**由运行时依据编译器推导出的任务图决定。把这三者混为一谈，
 是初期绝大多数误解的根源，因此读下文时值得始终带着这个区分。
 
-PyPTO 程序里没有任何东西是在 Python 运行它时执行的。装饰器把源码解析成 IR；pass 重写 IR；
-代码生成发射设备 kernel 与主机编排代码；运行时调度它们。Python 是撰写语言，不是执行引擎。
+PyPTO 程序就是普通 Python，装饰器会**运行**它：通过追踪前端执行函数体、收集 IR 是执行的副作用。
+pass 重写 IR；代码生成发射设备 kernel 与主机编排代码；运行时调度它们。Python 是撰写语言，追踪结果就是 IR。
 
 ## Quickstart：一个程序里的三个层次
 
@@ -28,17 +28,17 @@ import pypto.language as pl
 
 @pl.jit.incore
 def square_tensor(
-    x: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    x: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     # 张量级：命名整个数组。放置与搬运是编译器的事。
-    out[:] = pl.mul(x, x)
+    out[0:128, 0:128] = pl.mul(x, x)
     return out
 
 @pl.jit.incore
 def square_tile(
-    x: pl.Tensor[[128, 128], pl.FP32],
-    out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    x: pl.Tensor,
+    out: pl.Out[pl.Tensor],
 ):
     # Tile 级：命名片上缓冲区，数据由你自己搬。
     t = pl.load(x, [0, 0], [128, 128])
@@ -48,9 +48,9 @@ def square_tile(
 
 @pl.jit
 def levels(
-    x: pl.Tensor[[128, 128], pl.FP32],
-    out_t: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
-    out_k: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+    x: pl.Tensor,
+    out_t: pl.Out[pl.Tensor],
+    out_k: pl.Out[pl.Tensor],
 ):
     # 控制面：不做计算，只派发。
     out_t = square_tensor(x, out_t)
@@ -130,7 +130,7 @@ InCore (AIC / AIV)            执行面
 ### 编译流水
 
 ```text
-Python DSL          @pl.jit / @pl.program 把源码解析成 IR
+Python DSL          @pl.jit / @pl.program 追踪函数体生成 IR
      │
      ▼
 IR                  不可变树，贯穿整个编译过程共享
@@ -142,19 +142,22 @@ Pass 流水线         默认策略，按序：内联、SSA、外提作用域、
 CodeGen             设备 kernel（.pto -> C++）+ 主机编排 C++
 ```
 
-每个阶段都可观测。`lower()` 会特化 JIT 函数、运行配置对应的 Pass 流水线，并返回 Pass 后的
-`ir.Program`；对该结果调用 `program.as_python()`，即可查看最终 lowering 后的 IR。与之不同，
-`CompiledProgram.program` 保留的是特化后、Pass 前的 program，而不是 Pass 流水线的输出。
-调用 `compile()` 时设置 `dump_passes=`，会在每个 Pass 之后写一份快照；`lower()` 不会写
-Pass 快照。Pass 本身在 [Passes](../dev/passes/index.md) 中逐个有文档，并按执行顺序编号。
+每个阶段都可观测。`compile_for_test(*args)` 会在调用时特化上运行 Default Pass 流水线，并返回
+Pass 后的 `ir.Program`；对该结果调用 `program.as_python()`，即可查看最终 lowering 后的 IR。
+与之不同，`CompiledProgram.program` 保留的是特化后、Pass 前的 program，而不是 Pass 流水线的
+输出。调用 `compile()` 时设置 `dump_passes=`，会在每个 Pass 之后写一份快照；
+`compile_for_test()` 不会写 Pass 快照。Pass 本身在 [Passes](../dev/passes/index.md) 中逐个有
+文档，并按执行顺序编号。
 
-`lower()` 不会执行代码生成，也不会填充编译缓存。需要验证代码生成时请使用 `compile()`。
-（`@pl.jit` 函数自身没有 `as_python()`；要查看 Pass 后的 IR，请检查 `lower()` 的结果；要查看
-`compile()` 后保留的特化后、Pass 前 IR，请调用 `compiled.program.as_python()`。）
+`compile_for_test()` 不会执行代码生成。需要验证代码生成时请使用 `compile()`。（lazy lane 的
+`@pl.jit` 函数自身没有 `as_python()`；要查看 Pass 后的 IR，请检查 `compile_for_test()` 的
+结果；要查看 `compile()` 后保留的特化后、Pass 前 IR，请调用 `compiled.program.as_python()`。
+完全注解的 kernel 在装饰时即被追踪 —— 装饰后的名字*就是* `ir.Function`，可直接对它调用
+`as_python()`。）
 
 作为用户，IR 的两个性质与你直接相关：
 
-- **它是 SSA 的。** 每个绑定只写一次。在 Python 源码里重复绑定同一个名字是允许的 —— parser
+- **它是 SSA 的。** 每个绑定只写一次。在 Python 源码里重复绑定同一个名字是允许的 —— SSA pass
   会重命名，并把循环内被重复绑定的值作为携带值穿过该循环。这就是为什么 `pl.range` 里的
   `acc = pl.add(acc, ...)` 能work，尽管 IR 里并不存在就地修改。
 - **它是不可变的。** pass 构建新 IR 而不是就地修改，这也是逐 pass 快照对调试有意义的原因。

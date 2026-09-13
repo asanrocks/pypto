@@ -20,7 +20,6 @@ buffer out of both copies, which is what makes a resident weight or a KV cache v
 ```python
 import pypto.language as pl
 import torch
-from pypto import ir
 from pypto.runtime import ChipWorker, RunConfig
 
 ROWS, COLS = 128, 128
@@ -43,7 +42,7 @@ B = torch.randn(ROWS, COLS, dtype=torch.float32)
 # A DeviceTensor carries no shape/dtype for the @pl.jit specializer to read, so
 # the resident-weight pattern below runs a *compiled* program rather than the
 # jit entry directly.
-compiled = ir.compile(add_kernel.lower(A, B, torch.zeros(ROWS, COLS)), platform=PLATFORM)
+compiled = add_kernel.compile(A, B, torch.zeros(ROWS, COLS), config=RunConfig(platform=PLATFORM))
 ```
 
 <!-- doctest: run -->
@@ -81,11 +80,10 @@ both H2D and D2H for that argument.
 > `Program` you handed to `compile`, stored as-is; the transformed program codegen ran on is
 > not retained, and a handle rebuilt with `from_dir` has no program at all.
 >
-> On the usual `ir.compile(MyProgram)` path that input is pre-pass IR. It need not be — the
-> setup above compiles `add_kernel.lower(...)`, which is already lowered, so *there*
-> `compiled.program` is post-pass. The property makes no promise either way; it hands back
-> what it was given. For the lowered IR specifically, use `kernel.lower(*args)` or read a
-> pass dump.
+> On the usual `ir.compile(MyProgram)` / `kernel.compile(*args)` path that input is
+> pre-pass IR — the jit hands `ir.compile` the freshly traced program. The property makes
+> no promise either way; it hands back what it was given. For the post-pass IR specifically,
+> use `kernel.compile_for_test(*args)` or read a pass dump.
 
 ### Explicit dispatch
 
