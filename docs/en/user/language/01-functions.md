@@ -113,6 +113,13 @@ region cannot nest inside another Graph region, nor inside `pl.at` / `pl.cluster
 `pl.spmd` — those become a single device task, whereas a Graph region records a topology of
 them. All three are compile errors.
 
+`@pl.expand` is a different kind of reuse: an **expansion entrance** rather than a
+callee. Where an `Inline` helper is collected once and spliced by a pass, `@pl.expand`
+executes and emits its body at **every occurrence** — each call site sees fresh IR, with
+one trailing return and no recursion. Use it when a shared block must be inlined with
+caller-specific values baked in; use `@pl.jit.inline` when the pass can do the splicing
+for you.
+
 Sub-function dependencies (`.incore` / `.inline` / `.opaque`) are auto-discovered from
 the entry's body — call them by name. The name you call is resolved in the entry's own
 namespace, so an aliased import (`from kernels import matmul as mm`, or a plain
@@ -313,6 +320,23 @@ def normalize(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
 
 The decorated object is a `pl.InlineFunction` — a template the parser splices, not a
 function you can call from Python.
+
+`@pl.expand` is the tracing-native expansion entrance. Its body is prepared once and
+executed at every occurrence inside a traced kernel, so placements and host side effects
+happen once per call site — where `@pl.inline` collects one body and leaves the splicing
+to a pass. It emits no declaration, function, or call, and it cannot be called from
+Python: outside an active trace it raises.
+
+```python
+@pl.expand
+def scaled_add(x, y, scale):
+    return pl.add(x, pl.mul(y, scale))
+```
+
+`@pl.function_parser` / `@pl.program_parser` are the permanent parser-owned entries: they
+collect the same classes through the AST parser instead of tracing, and exist for parser
+and round-trip test fixtures. Write kernels with `@pl.function` / `@pl.program`; see
+[Compile-Time Directives](05-directives.md).
 
 ### Function attributes: `pl.func_attr`
 

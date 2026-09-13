@@ -223,6 +223,18 @@ mirror only if that mirror is maintained per-name, not wholesale). Verdicts
 for the remaining six names (documented — where, and is the anchor real?).
 `needs-decision` rows for the removal.
 
+**Outcome (round 1).** The seed's red state undercounted the axis. The R4 oracle
+(`check_api_docs.py`) counts *any* doc file under `docs/` — design docs included — so it saw
+2 undocumented names. The repo's own user-manual gate,
+`tests/lint/check_docs_symbol_coverage.py` (pre-commit), requires each name in a code span
+under `docs/en/user/` and is the authoritative reading of "a user cannot find it": green at
+`origin/main` (**241 documentable, 0 missing**), red at HEAD (**4 missing**: `pl.expand`,
+`pl.program_parser`, `pl.static_dim`, `pl.static_shape`). All four were documented in the
+user manual (en + per-name zh mirror), so both readings are green after: R4 oracle
+`FAIL (2 undocumented)` → `PASS (0)`, user-manual gate `4 missing` → `0`.
+`cond` / `while_` are a confirmed **intentional** removal — verdicts and the one stale-doc
+row are in §7.
+
 ## 4. Discovered tasks
 
 Append here with the next free id (`F*` for fixes, `R*` for new review axes),
@@ -328,7 +340,7 @@ non-allowlisted usages"; the rows were reworded. Fix: exclude
 | 1 | R1 | `opencode-go/deepseek-v4.1-flash:high` | done | `be0618dcf` | 34 → 0 candidates (oracle PASS); 7 files migrated, 1 allowlisted as `necessary`; F1 found. **Orchestrator-verified**: 240 touched tests pass, D10 justification confirmed verbatim, oracle edit narrows scope without weakening it |
 | 1 | R2 | `opencode-go/deepseek-v4.1-flash:high` | done | `27ab5aeff` | 167 → 0 flagged lines (oracle PASS; 133 lines in 28 files allowlisted with reasons, 32 lines restored, 2 reclassified by an oracle scope fix); F2–F4 found. **Orchestrator-verified**: 108 modified-upstream vs 25 pure-addition lines, samples confirm the reasons, F2/F3 confirmed real. **Escalated**: the `vocabulary` group rests on a doc the changeset itself added |
 | 1 | R3 | `openai/gpt-5.6-luna:max` | pending | | |
-| 1 | R4 | `opencode-go/deepseek-v4.1-flash:high` | pending | | |
+| 1 | R4 | `opencode-go/deepseek-v4.1-flash:high` | done | *(this commit)* | R4 oracle 2 → 0 undocumented (PASS); the repo's user-manual gate 4 → 0 missing (the stronger reading: `pl.expand`, `pl.program_parser` were also undocumented in `docs/en/user/`); `cond`/`while_` removal confirmed intentional, one stale index row recorded |
 
 **Convergence.** A round is clean when it introduces no new findings and
 commits only ledger updates, with every oracle green and `./scripts/gate`
@@ -499,4 +511,70 @@ None recorded yet.
 
 ### R4 API documentation verdicts
 
-None recorded yet.
+Oracles (both red before, both green after):
+
+- R4 oracle `python3 scripts/review/check_api_docs.py`.
+  Before: `public names 249 -> 255`, 8 added, `2` undocumented (`static_dim`,
+  `static_shape`, 0 doc files each), `RESULT: FAIL`, exit 1.
+  After: same 8 added, every added name has ≥1 doc file, `RESULT: PASS`, exit 0.
+- User-manual gate `python3 tests/lint/check_docs_symbol_coverage.py` (pre-commit; scopes
+  "documented" to a code span under `docs/en/user/`).
+  Before: `247 documentable, 243 documented, 4 not` — `pl.expand`, `pl.program_parser`,
+  `pl.static_dim`, `pl.static_shape`; `FAIL`, exit 1.
+  After: `247/247`, exit 0. Base cross-check against the `origin/main` blobs:
+  `241 documentable, 0 missing`, so all four violations are new in this changeset.
+
+The R4 oracle undercounts because a design-doc mention satisfies it;
+`check_docs_symbol_coverage.py` is the repo's own reading of "the user manual promises that
+every user-visible capability is findable" and is the criterion used here.
+
+| Name | Doc anchor | Anchor real? | Verdict |
+| --- | --- | --- | --- |
+| `static_dim` | none (planner-only: `docs/migration-todo.md`) | — | `unnecessary` — documented |
+| `static_shape` | none (planner-only) | — | `unnecessary` — documented |
+| `expand` | `docs/design/03-entrance.md` §7, `docs/design/04-migration-guide.md` | design docs only → no user-manual span, gate red | `unnecessary` — documented |
+| `program_parser` | `docs/design/00-tracing.md`, `docs/design/01-language.md`, `docs/en/dev/language/03-functions.md:338` | dev docs only → gate red | `unnecessary` — documented |
+| `function_parser` | `docs/en/user/language/02-control-flow.md:233`, `05-directives.md:20`, `01-functions.md:329` | yes (user manual) | `necessary` — already documented |
+| `intrin` | `docs/en/user/language/02-control-flow.md:196` (§ "The assembly channels") | yes (user manual) | `necessary` — already documented |
+| `jit_specializer` | `docs/en/user/language/01-functions.md:160` (quarantine note) + `docs/en/dev/` | yes | `necessary` — already documented |
+| `runtime` | `pl.runtime(value, dtype)` at `docs/en/dev/language/03-functions.md:48,132`, `docs/zh/dev/language/03-functions.md:41,114`, `docs/design/04-migration-guide.md:279` | canonical spelling anchored in the dev guide; the oracle's 202-file count is incidental prose (`runtime` in unrelated code spans, e.g. `` `examples/runtime/` ``) | `necessary` — documented |
+
+**Changes (en, with the per-name-maintained zh mirror).**
+
+- `docs/en/user/language/00-types.md` (+ zh): new `### Reading a static shape` subsection
+after `### Dynamic shapes`, covering `pl.static_dim` / `pl.static_shape` — host `int`, no
+IR emitted, loud on a dynamic extent, `pl.tensor.dim` for a staged extent.
+- `docs/en/user/language/01-functions.md` (+ zh): a `@pl.expand` paragraph beside the
+`@pl.inline` paragraph (tracing-native expansion: one preparation, executed per call site,
+not host-callable), and a sentence naming the parser-owned `@pl.function_parser` /
+`@pl.program_parser` entries.
+
+**Removal (`cond`, `while_`).** Verdict `necessary` — the removal is intentional and
+proven from the changeset and the design authority:
+
+- `13546e523` deleted `dsl_api.py` (the only definition site of `cond` / `while_`) and
+dropped both from `__all__`; `yield_` survived (re-exported from `intrin`, deprecated
+alias).
+- `docs/design/04-migration-guide.md` §3: "**`pl.while_` and `pl.cond()` are gone.**" —
+with the replacement spelling (a bare `while` over a staged predicate; carry derived from
+rebinding).
+- Round-trip is unaffected: the printer still emits `pl.while_(...)` / `pl.cond(...)`
+(`tests/ut/ir/printing/test_python_printer.py` asserts it) and the parser matches those
+spellings textually (`ast_parser._VALID_ITERATORS`); neither resolves the attribute, so no
+`AttributeError`. `rg 'pl\.while_\b|pl\.cond\(' --glob '!docs/**'` finds no executable
+usage outside the printer/parser/migrator.
+
+The oracle's `STALE DOC?` note is mostly correct prose: the 22 / 13 files are
+`docs/design/`, the dev IR grammar, removal-aware `02-control-flow.md` / `05-directives.md`
+sections, or incidental word matches (`CHECK(cond)` in C++, `if cond:` IR pseudocode,
+`pl.static_assert(cond, msg)` parameter names). One reference is genuinely stale, and it is
+upstream text this changeset made stale: the control-flow index rows
+`docs/en/user/language/index.md:27` and `docs/zh/user/language/index.md:19` still list
+`while_` and `cond` as covered topics (the row was not touched by the migration commit
+`87d7f25c7`).
+
+**Needs-decision (recorded, not edited).**
+
+| Location | Question |
+| --- | --- |
+| `docs/en/user/language/index.md:27`, `docs/zh/user/language/index.md:19` | The two index rows list `while_`, `yield_`, `cond` as control-flow coverage; `while_`/`cond` are gone. `yield_` is still exported (deprecated alias), so only those two are stale. Docs prose is out of scope for this review (§2) — fix in a docs pass, not here. |

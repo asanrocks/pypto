@@ -249,6 +249,21 @@ def normalize(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
 
 被装饰的对象是一个 `pl.InlineFunction` —— 供解析器展开的模板，而不是你能从 Python 调用的函数。
 
+`@pl.expand` 是 tracing 原生的展开入口。它的函数体只准备一次，随后在被 trace 的 kernel 内每
+出现一次就执行一次 —— 放置与 host 副作用在每个调用点各发生一次 —— 而 `@pl.inline` 只收集一次
+函数体，把拼接交给某个 pass。它不生成声明、函数或调用，也不能从 Python 调用：没有活跃 trace
+时它会报错。
+
+```python
+@pl.expand
+def scaled_add(x, y, scale):
+    return pl.add(x, pl.mul(y, scale))
+```
+
+`@pl.function_parser` / `@pl.program_parser` 是永久保留的 parser 专属入口：它们通过 AST
+parser 而非 tracing 收集同样的类，只用于 parser 与 round-trip 测试夹具。写 kernel 请用
+`@pl.function` / `@pl.program`；见[编译期指令](05-directives.md)。
+
 ### 函数属性：`pl.func_attr`
 
 描述整个函数的元数据，用 `pl.func_attr({...})` 声明为函数体的**第一条语句**：

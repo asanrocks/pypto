@@ -195,6 +195,26 @@ dynamic 注解把 kernel 放到 **eager lane** 上：它在装饰时被 trace，
 
 确实固定的维度就保持静态。静态尺寸是编译器能据以规划的数字 —— 分块选择、展开因子、静态边界检查 —— 动态维则把这个信息藏了起来。
 
+### 读取静态 shape
+
+`pl.static_dim(value, axis)` 从已 staged 的张量或 tile 上读出一个静态尺寸，返回普通
+Python `int`；`pl.static_shape(value)` 返回整个 shape 的 `int` 元组。两者都不生成 IR
+—— 它们是 host 侧查询，服务于 kernel 在 IR 构建前就必须定下来的算术（分块策略、派发、
+循环次数）：
+
+```python
+rows = pl.static_dim(x, 0)      # 64 —— host int
+r, c = pl.static_shape(x)       # (64, 128)
+tiles = rows // 16              # host 算术，而非 staged 表达式
+```
+
+直接偷看原始 shape 是个陷阱：静态尺寸是 `ConstInt` IR 对象，`//` 会静默构建出一条 IR
+表达式，把符号上界带进外面的循环。用 `pl.static_dim` 推导分块的 kernel 与写死字面量的
+同一 kernel 在 IR 上完全一致。
+
+任一维为 dynamic 时两者都会报错 —— 这个拼法表达的是「该操作数完全静态」。需要 staged
+运行时尺寸时改用 `pl.tensor.dim`，见上文[动态 shape](#动态-shape)。
+
 ### 参数方向
 
 | 方向 | 语法 | 编译器据此断定 |
