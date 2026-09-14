@@ -65,11 +65,18 @@ The no-shared-spelling variants are pinned at the foot of the file:
 ``deps=`` without ``as tid`` (an **intended divergence**, documented in
 ``docs/en/dev/language/02-manual_dependencies.md:36``), the bare body the
 parser rejects (needs-decision), nested ``pl.split_aiv`` (F24), and the
-rejection parities both lanes share verbatim. The family's one remaining red
-finding (filed by the fix campaign's A2, **F36**) is the explicit-carrier
-spelling's outer name hint: a body that is a lone nested
-``pl.at(level=pl.Level.CORE_GROUP, ...)`` keeps the hint unsplit on the parser
-lane, while the tracing lane reserves the ``_spmd`` suffix.
+rejection parities both lanes share verbatim. The explicit-carrier spelling — a
+body that is a lone nested ``pl.at(level=pl.Level.CORE_GROUP, ...)`` — has one
+residual lane difference (filed by the fix campaign's A2, **F36**): the outer
+``SpmdScopeStmt.name_hint``, which the parser passes through unsplit and the
+tracing lane splits. Both lanes accept the spelling, the statements and the
+carrier are identical, and no pass reads the outer hint, so R5
+(``docs/fix-construct-parity.md`` §4) classifies the difference as a
+**naming-only, accepted divergence** — the witness is
+``test_carrier_explicit_at_hint_accepted_drift``, not a fix target. The same
+fixture exposes a printer-coverage hole shared by both lanes: the for-form
+fall-through drops the **carrier's** hint on a read-first body (**F40**,
+``test_explicit_carrier_print_drops_the_carrier_hint``).
 
 The ``k_saiv_in_at_staged_for`` anchor also has a focused printer round-trip
 regression: its canonical loop yield is nested inside a ``pl.split_aiv`` region.
@@ -99,6 +106,16 @@ def _spmd(fn: ir.Function) -> ir.SpmdScopeStmt:
 def _incore_scopes(fn: ir.Function) -> list[ir.InCoreScopeStmt]:
     """Every ``InCoreScopeStmt`` in the function (nested ones included)."""
     return [s for s in _stmts(fn) if isinstance(s, ir.InCoreScopeStmt)]
+
+
+def _incore_chain(spmd: ir.SpmdScopeStmt) -> list[ir.InCoreScopeStmt]:
+    """The nested ``InCoreScopeStmt`` chain under a ``SpmdScopeStmt``'s body."""
+    chain: list[ir.InCoreScopeStmt] = []
+    node: ir.Stmt = spmd.body
+    while isinstance(node, ir.InCoreScopeStmt):
+        chain.append(node)
+        node = node.body
+    return chain
 
 
 def _assert_subblock_idx_prologue(region: ir.SplitAivScopeStmt) -> None:
@@ -693,30 +710,121 @@ def k_carrier_explicit_at_read(
     return x
 
 
+def k_carrier_explicit_at_read_tid(
+    x: pl.Tensor[[64, 64], pl.FP32],
+) -> pl.Tensor[[64, 64], pl.FP32]:
+    with pl.spmd(2, name_hint="w") as _tid:
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="c"):
+            i = pl.tile.get_block_idx()
+            y = pl.load(x, [0, 0], [64, 64])
+            z = pl.add(y, pl.cast(i, pl.FP32))
+            pl.store(z, [0, 0], x)
+    return x
+
+
 @pytest.mark.parametrize(
     "kernel", [k_carrier_explicit_at, k_carrier_explicit_at_read], ids=["dispatch_body", "index_reading"]
 )
-def test_carrier_explicit_at_hint_divergence(kernel):
-    """**New finding F36 — pinned, not an anchor.**
+def test_carrier_explicit_at_hint_accepted_drift(kernel):
+    """**F36 — accepted divergence under R5 (naming-only), not a fix target.
 
     A body that supplies its own CORE_GROUP carrier (a lone nested
     ``pl.at(level=pl.Level.CORE_GROUP, ...)`` — the parser's
     ``_explicit_incore_carrier`` shape) keeps the ``pl.spmd(name_hint=...)``
     unsplit on the parser lane, because the nested scope *is* the carrier; the
     tracing lane's split-hint rule (``not single_call_body``) reserves the
-    ``_spmd`` suffix for the outer scope regardless. The region and the body
-    match — only the outer ``SpmdScopeStmt.name_hint`` differs, on both the
-    index-reading and the dispatch body. Nothing is lost at codegen scale, so
-    the finding is recorded rather than fixed by A2 (which changed the
-    *carrier-open* decision, not the hint rule).
+    ``_spmd`` suffix for the outer scope regardless.
 
-    Delete the assertions when F36 lands."""
+    The two IRs differ in exactly one string: the outer ``SpmdScopeStmt``'s
+    ``name_hint`` (the assertion below pins that the failing path is
+    ``body[0].name_hint``, i.e. nothing else drifted). Both lanes accept the
+    spelling, the statements and the explicit carrier are identical, the hint
+    names the outlined function and nothing else (``OutlineClusterScopes``
+    consults its ``_spmd_`` *suffix* only when the hint is empty), and each
+    lane's printed text re-parses without error — so this is R5's trivial,
+    naming-only drift (``docs/fix-construct-parity.md`` §4: 'trivial drift ...
+    is fine'), not wrong codegen. Fixing it would need a third static body fact
+    threaded through the rewriter (the parser's explicit-carrier check, which
+    needs the ``pl.at`` level resolved) for a renamed kernel, which R5 forbids.
+
+    The assertions stay as the accepted-divergence witness; do not tighten one
+    lane to make this test disappear. The fixture's *shared* printer hole is a
+    separate finding (F40)."""
     traced = build(kernel)
     parsed = function_parser(kernel)
     assert _spmd(traced).name_hint == "w_spmd"
     assert _spmd(parsed).name_hint == "w"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"body\[0\]\.name_hint"):
         ir.assert_structural_equal(traced, parsed, enable_auto_mapping=True)
+
+
+def test_explicit_carrier_print_keeps_the_carrier_hint():
+    """**F40 regression — the explicit carrier's hint survives print → reparse.**
+
+    A read-first body that supplies its own CORE_GROUP carrier used to print
+    through the printer's for-form sniff
+    (``IRPythonPrinter::VisitStmt_(SpmdScopeStmtPtr)``'s ``tile.get_block_idx``
+    check) as ``for i in pl.spmd(n, name_hint=<the Spmd hint>)`` — a shape with
+    no slot for the carrier's own hint. Re-parsing synthesised the for-form
+    carrier (``name_hint`` = the split-inner name, ``"w"``), so the
+    user-written ``pl.at(level=pl.Level.CORE_GROUP, name_hint="c")`` lost its
+    name on both lanes identically (a printer/parser-coverage hole, the F39
+    class, not a parity divergence); on the parser lane the outer hint
+    additionally re-split (``"w"`` → ``"w_spmd"``) because the for-form always
+    wraps.
+
+    The printer now spells the carrier out as a nested
+    ``pl.at(level=pl.Level.CORE_GROUP, name_hint=...)`` whenever the for-form
+    desugaring would not reproduce its hint, so each lane's printed text
+    re-parses to the same IR."""
+    for build_fn, lane in ((build, "tracing"), (function_parser, "parser")):
+        original = build_fn(k_carrier_explicit_at_read)
+        (carrier,) = _incore_scopes(original)
+        assert carrier.name_hint == "c", lane
+        program = ir.Program([original], f"p_{original.name}_{lane}", ir.Span.unknown())
+        reparsed = pl.parse(program.as_python())[original.name]
+        (reparsed_carrier,) = _incore_scopes(reparsed)
+        assert reparsed_carrier.name_hint == "c", lane
+        prologue = reparsed_carrier.body
+        first = prologue.stmts[0] if isinstance(prologue, ir.SeqStmts) else prologue
+        assert isinstance(first, ir.AssignStmt)
+        assert isinstance(first.value, ir.Call) and first.value.op.name == "tile.get_block_idx", lane
+        assert first.var.name_hint == "i", lane  # the body itself survived the round trip
+        # The whole statement survives, outer hint included: the for-form's
+        # implicit re-split ("w" -> "w_spmd") is gone with it.
+        ir.assert_structural_equal(original, reparsed, enable_auto_mapping=True)
+
+
+def test_captured_spmd_explicit_carrier_wraps_once_by_both_lanes():
+    """**F44 regression — the captured explicit carrier wraps once, on both lanes.**
+
+    ``with pl.spmd(n, name_hint=...) as tid:`` whose body supplies its own
+    ``pl.at(level=pl.Level.CORE_GROUP, name_hint="c")`` carrier used to nest
+    twice on the tracing lane. The ``as tid`` target binding emits no IR, but it
+    still ran the frame's pre-emit flush, and the wrapped with-form's pending
+    carrier (``_carrier_flush_on_emit``) opened there — before the body reached
+    its own region — so ``cancel_pending_carrier`` could no longer absorb it
+    (``_flush_deferred_scopes``' ``entering_incore`` branch only saw a pending
+    entry). The tracing IR was ``Spmd{InCore("w"){InCore("c"){...}}}`` where
+    the parser's ``_emit_spmd_body`` treats the nested ``pl.at`` as *the* carrier
+    and emits ``Spmd{InCore("c"){...}}`` — the shape
+    ``cancel_pending_carrier``'s own docstring says the tracing lane intends.
+
+    Both lanes now emit one carrier (``["c"]``) and each lane's printed text
+    re-parses to the same IR (F40's printer fix makes both lanes fixpoints).
+    The outer ``SpmdScopeStmt.name_hint`` still differs (``"w_spmd"`` vs
+    ``"w"``) — F36's accepted naming-only drift, unchanged by this fix."""
+    traced = build(k_carrier_explicit_at_read_tid)
+    parsed = function_parser(k_carrier_explicit_at_read_tid)
+    assert [c.name_hint for c in _incore_chain(_spmd(parsed))] == ["c"]
+    assert [c.name_hint for c in _incore_chain(_spmd(traced))] == ["c"]
+    for original, lane in ((parsed, "parser"), (traced, "tracing")):
+        program = ir.Program([original], f"p_{original.name}_{lane}", ir.Span.unknown())
+        reparsed = pl.parse(program.as_python())[original.name]
+        assert [c.name_hint for c in _incore_chain(_spmd(reparsed))] == ["c"], lane
+        # The statement survives print → reparse on both lanes; only the outer
+        # Spmd hint differs *between* lanes (F36).
+        ir.assert_structural_equal(original, reparsed, enable_auto_mapping=True)
 
 
 # ===========================================================================

@@ -992,8 +992,14 @@ class PtoFrame:
         if isinstance(value, SupportsTraceBind):
             # Open deferred declarable scopes before the hook runs — a binding
             # proxy may read structural state (the for-target activation's
-            # ``is_inside_incore``) that the pending scopes would change.
-            self._flush_deferred_scopes()
+            # ``is_inside_incore``) that the pending scopes would change. A hook
+            # that emits no IR opts out (``_emits_on_bind`` — the ``as tid``
+            # TaskId capture): flushing at that bind would open a wrapped
+            # ``pl.spmd``'s pending carrier before the body's own CORE_GROUP
+            # region reaches the absorption check, leaving a nested-InCore shape
+            # the parser never emits (F44).
+            if getattr(value, "_emits_on_bind", True):
+                self._flush_deferred_scopes()
             pending = rt.pending_result() if rt is not None else None
             result = value.__trace_bind__(self._ctx, name)
             if isinstance(result, ir.Var):

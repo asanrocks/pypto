@@ -110,6 +110,36 @@ bool SpmdInlineBodyRebuildsCarrier(const InCoreScopeStmtPtr& incore) {
   return detector.found();
 }
 
+/// The InCore carrier name a wrap-producing spelling derives from the Spmd hint.
+///
+/// The inner half of the parser's ``_split_spmd_for_loop_name_hints``: a trailing
+/// ``_spmd`` comes off, otherwise the hint itself names the carrier (an empty hint
+/// leaves it unnamed). Both the for-form and the wrapped with-form auto-wrap a
+/// carrier and cannot spell its name separately, so their printed header may only
+/// stand in for the IR's carrier when this derived name *is* the carried hint.
+std::string DerivedInCoreNameHint(const std::string& spmd_name_hint) {
+  static const std::string kSuffix = "_spmd";
+  if (spmd_name_hint.empty()) return "";
+  if (spmd_name_hint.size() >= kSuffix.size() &&
+      spmd_name_hint.compare(spmd_name_hint.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0) {
+    return spmd_name_hint.substr(0, spmd_name_hint.size() - kSuffix.size());
+  }
+  return spmd_name_hint;
+}
+
+/// True when printing the wrap-producing header (``for i in pl.spmd(...)`` or the
+/// wrapped with-form) reproduces ``incore``'s own name hint.
+///
+/// The header has no slot for the carrier's name — it derives it from the Spmd
+/// hint. When the IR's carrier carries any other hint the header must not be used
+/// for an inlined body: the carrier has to be spelled out as a nested
+/// ``pl.at(level=pl.Level.CORE_GROUP, ...)`` and print its own ``name_hint``, or
+/// the print -> reparse round trip silently renames the carrier (F40).
+bool HeaderReproducesCarrierHint(const std::string& spmd_name_hint, const InCoreScopeStmtPtr& incore) {
+  if (!incore) return true;
+  return incore->name_hint_ == DerivedInCoreNameHint(spmd_name_hint);
+}
+
 /// Convert cast round mode integer to its string name for printing.
 /// Inverse of the CAST_MODE_NAMES mapping in python/pypto/ir/utils.py.
 std::string CastModeToString(int mode) {
@@ -2330,6 +2360,14 @@ void IRPythonPrinter::VisitStmt_(const SpmdScopeStmtPtr& op) {
   auto incore = As<InCoreScopeStmt>(op->body_);
   auto incore_seq = incore ? As<SeqStmts>(incore->body_) : nullptr;
 
+  // Both wrap-producing headers below (the for-form and the ``as tid`` inlined
+  // body) drop the nested ``pl.at(level=CORE_GROUP)`` header and derive the
+  // carrier's name from the Spmd hint. When the IR's carrier carries a different
+  // hint that derivation would rename it on re-parse, so the carrier has to be
+  // spelled out instead — its ``name_hint`` then round-trips through the nested
+  // ``pl.at(...)`` (F40).
+  const bool carrier_hint_needs_spelling = !HeaderReproducesCarrierHint(op->name_hint_, incore);
+
   // ``with pl.spmd(...) [deps=] as tid:`` — the scope carries kAttrTaskIdVar
   // (the grid-dispatch producer TaskId, mirroring ``pl.at ... as tid``). Checked
   // BEFORE the for-form sniff because an inline ``as tid`` body's first statement
@@ -2346,7 +2384,9 @@ void IRPythonPrinter::VisitStmt_(const SpmdScopeStmtPtr& op) {
     if (!op->name_hint_.empty()) {
       stream_ << ", name_hint=\"" << op->name_hint_ << "\"";
     }
-    if (incore) {
+    if (incore && !carrier_hint_needs_spelling) {
+      // Spelled-out carrier: the nested ``pl.at(...)`` prints its own
+      // optimizations, and the parser rejects the entry on both scopes.
       PrintScopeOptimizations(incore->split_, incore);
     }
     PrintScopeDepsAttr(op);
@@ -2362,7 +2402,8 @@ void IRPythonPrinter::VisitStmt_(const SpmdScopeStmtPtr& op) {
     // here, from ``incore``, or they are lost. When the carrier is spelled out
     // instead, the nested InCore prints its own markers and re-printing them
     // here would duplicate them.
-    const bool inlines_incore_body = SpmdInlineBodyRebuildsCarrier(incore);
+    const bool inlines_incore_body =
+        SpmdInlineBodyRebuildsCarrier(incore) && !carrier_hint_needs_spelling;
     PrintScopeCachePolicyStmts(op);
     if (inlines_incore_body) {
       PrintScopeCachePolicyStmts(incore);
@@ -2394,7 +2435,7 @@ void IRPythonPrinter::VisitStmt_(const SpmdScopeStmtPtr& op) {
                           : (incore ? As<AssignStmt>(incore->body_) : nullptr);
   auto first_call = first_assign ? As<Call>(first_assign->value_) : nullptr;
   auto first_op = first_call ? As<Op>(first_call->op_) : nullptr;
-  if (first_op && IsOp(first_op, "tile.get_block_idx")) {
+  if (first_op && IsOp(first_op, "tile.get_block_idx") && !carrier_hint_needs_spelling) {
     stream_ << "for " << GetVarName(first_assign->var_.get()) << " in " << prefix_ << ".spmd(";
     VisitExpr(op->core_num_);
     if (op->sync_start_) {

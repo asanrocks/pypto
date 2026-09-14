@@ -1555,6 +1555,13 @@ class _TaskIdBinding(Scalar):
         super().__init__(expr=_ir.ConstInt(0, DataType.TASK_ID, _ir.Span.unknown()))
         self._tid_var = tid_var
 
+    # The bind hook emits no IR, so the Frame's pre-emit flush must not run
+    # here: a wrapped ``pl.spmd`` carrier is pending at the ``as tid`` target
+    # bind, and flushing it would beat the body's own CORE_GROUP region to the
+    # absorption check (F44). The var is pre-created at the scope's enter, so
+    # nothing structural needs the scopes opened first.
+    _emits_on_bind: bool = False
+
     def __trace_bind__(self, ctx: TraceContext, name: str) -> _ir.Var:
         del ctx, name  # the Var is pre-created; no construction needed
         return self._tid_var
