@@ -299,7 +299,10 @@ Decoration inspects the signature: every parameter facade-annotated →
 eager, traced at decoration. Anything call-time-dependent (`Callable`
 parameters, torch shapes) → lazy, traced at call. A missing parameter
 annotation is a loud decoration-time error — there is no `UnknownType`
-guessing under tracing (P1).
+guessing under tracing (P1). Both timings return the same public jit
+object: for an eager kernel, `compile`/dispatch serve the decoration
+trace (`.fn`) — the declared dynamic extents stay dynamic, so dummy
+compile args are dispatch vocabulary, never a re-specialization.
 
 A host-side `compile` / `__call__` accepts `config=RunConfig` (compile
 fields forward to `ir.compile`, runtime fields to the compiled program).

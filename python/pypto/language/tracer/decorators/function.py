@@ -520,14 +520,18 @@ def _adapt_captured_functions(
     changed = False
     for cell in closure:
         value = cell.cell_contents
-        if isinstance(value, ir.Function):
-            captured.append(value)
-            if specialize:
-                from pypto.language.tracer.decorators import jit as _jit  # noqa: PLC0415
+        from pypto.language.tracer.decorators import jit as _jit  # noqa: PLC0415
 
-                cells.append(types.CellType(_jit._LazyGlobalFn(value, _jit._eager_trace_record(value))))
-            else:
-                cells.append(types.CellType(Marker._from_ir_function(value)))
+        if specialize and isinstance(value, ir.Function):
+            captured.append(value)
+            cells.append(types.CellType(_jit._LazyGlobalFn(value, _jit._eager_trace_record(value))))
+            changed = True
+        elif not specialize and (frozen := _jit._parser_aligned_callee(value)) is not None:
+            # An eagerly traced jit object captured in a closure contributes
+            # its decoration trace to the parser-aligned lane — the callee it
+            # was before the jit object became the decoration result.
+            captured.append(frozen)
+            cells.append(types.CellType(Marker._from_ir_function(frozen)))
             changed = True
         else:
             cells.append(cell)
@@ -579,16 +583,26 @@ def _wrap_global_callee_functions(
         def _wrap(value: ir.Function) -> Any:
             return _jit._LazyGlobalFn(value, _jit._eager_trace_record(value))
 
+        def _callee(value: Any) -> ir.Function | None:
+            return value if isinstance(value, ir.Function) else None
+
     else:
+        from pypto.language.tracer.decorators import jit as _jit  # noqa: PLC0415
 
         def _wrap(value: ir.Function) -> Any:
+            # The parser-aligned lane's callee is the frozen function — an
+            # eagerly traced jit object unwraps to its decoration trace
+            # (no envelope policy: no world checks, no re-trace).
             return Marker._from_ir_function(value)
+
+        _callee = _jit._parser_aligned_callee
 
     patched = False
     g = dict(kernel.__globals__)
     for name, value in g.items():
-        if isinstance(value, ir.Function):
-            g[name] = _wrap(value)
+        frozen = _callee(value)
+        if frozen is not None:
+            g[name] = _wrap(frozen)
             patched = True
     if not patched:
         return kernel

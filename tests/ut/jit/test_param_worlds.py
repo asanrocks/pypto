@@ -185,7 +185,7 @@ def test_standalone_lane_stays_parser_aligned():
         return _callee(x, 3)
 
     assert isinstance(caller, ir.Function)
-    assert any(p.name_hint == "n" for p in _callee.params), "the param stays runtime"
+    assert any(p.name_hint == "n" for p in _callee.fn.params), "the param stays runtime"
 
 
 if __name__ == "__main__":

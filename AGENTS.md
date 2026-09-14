@@ -79,9 +79,14 @@ tests: `tests/ut/language/entrance/`.
 
 ## The two jits (transitional quarantine)
 
-`pl.jit` collects through **tracing** (`pypto/language/tracer/decorators/jit.py`):
-eager (every param a facade annotation) traces at decoration and returns the
-`ir.Function`; lazy is the full jit surface — a call with `torch.Tensor`
+`pl.jit` collects through **tracing** (`pypto/language/tracer/decorators/jit.py`);
+both timings return one public jit object. Eager (every param a facade
+annotation) traces at decoration — the trace (`.fn`) plus the callees its
+body reached are retained in a record, and the object's host
+`compile`/dispatch serve that record's program: the annotation determines
+the artifact (declared dynamic extents stay dynamic; call args are
+dispatch values, and a contradicting static shape re-traces). Lazy is the
+full jit surface — a call with `torch.Tensor`
 args bridges each to a static-shape facade, assembles the multi-function
 program (entry + callees reached in-trace, emitted as detached `ir.Call`s),
 compiles via `ir.compile`, and dispatches (cached on the bridged signature

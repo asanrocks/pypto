@@ -276,7 +276,8 @@ _CARRY_RE = re.compile(r"^\s*(\w+)__rv_v\d+\s*=\s*(\w+);\s*$", re.MULTILINE)
 def _orch_code(kernel, *callees) -> str:
     """Run the Default pipeline over the traced entry, then emit the orchestration C++ in-process.
 
-    The entry is a traced ``ir.Function``; ``callees`` are its inline helpers, which
+    The entry is a traced ``ir.Function`` (an eagerly traced ``@pl.jit`` object
+    contributes its decoration trace); ``callees`` are its inline helpers, which
     ``inline_functions`` splices at the call site. No device is involved.
     ``codegen.generate_orchestration`` is the same emitter that writes
     ``<build>/orchestration/<name>.cpp``.
@@ -290,6 +291,8 @@ def _orch_code(kernel, *callees) -> str:
     """
     _backend.reset_for_testing()
     _backend.set_backend_type(_backend.BackendType.Ascend910B)
+    kernel = getattr(kernel, "fn", kernel)
+    callees = tuple(getattr(c, "fn", c) for c in callees)
     with passes.PassContext([passes.VerificationInstrument(passes.VerificationMode.BEFORE_AND_AFTER)]):
         program = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(
             ir.Program([kernel, *callees], kernel.name, kernel.span)

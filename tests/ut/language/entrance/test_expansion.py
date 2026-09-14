@@ -27,7 +27,11 @@ from pypto.pypto_core import ir
 
 
 def _structural_equal(left, right) -> bool:
-    return ir.structural_equal(left, right, enable_auto_mapping=True)
+    # An eagerly traced ``@pl.jit`` contributes its decoration trace (``.fn``)
+    # — a bare ``ir.Function`` passes through.
+    return ir.structural_equal(
+        getattr(left, "fn", left), getattr(right, "fn", right), enable_auto_mapping=True
+    )
 
 
 # ---------------------------------------------------------------------------

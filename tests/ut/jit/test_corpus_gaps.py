@@ -110,10 +110,13 @@ compile under ptoas 0.54/0.57 — the end-to-end green above was verified
 with ``PTOAS_ROOT`` pointing at a 0.54 install (the newest that accepts
 this branch's codegen); the failure is identical under the AST-era
 ``pl.jit_specializer`` (byte-identical ``.pto`` modulo temp counters),
-confirming it is toolchain rebase debt, not tracing. The jit
-device-execution surface (``.compile(*args, config=RunConfig)`` returning
-a CompiledProgram, then dispatch) is also still specializer-era: driving
-``ir.compile`` directly works around it.
+confirming it is toolchain rebase debt, not tracing. The jit device-execution surface
+(``.compile(*args, config=RunConfig)`` returning a CompiledProgram, then
+dispatch) is served for the eager lane from the decoration record — the
+golden runner's driving contract, pinned in ``TestEagerJitHostSurface``
+below; the name-keyed runtime-scalar compile form
+(``fn.compile(config=..., scalar=pl.RUNTIME)``) remains specializer-era
+surface.
 
 The cadence pins below are qwen3-family surfaces — v4-pro uses none of
 them (zero ``pl.prefetch``/``cross_core_slot``/``defer_wait`` hits; its
@@ -242,10 +245,10 @@ class TestEagerJitGlobalCallee:
             _inline_copy(x, y)
             return y
 
-        assert isinstance(entry, ir.Function)
+        assert isinstance(entry.fn, ir.Function)
         # The call must actually emit (not be swallowed): the callee name
         # appears in the traced body's round-trip text.
-        assert "_inline_copy" in entry.as_python()
+        assert "_inline_copy" in entry.fn.as_python()
 
 
 class TestJitSelfSibling:
@@ -255,16 +258,16 @@ class TestJitSelfSibling:
         (upstream's jit contract; moe.py ``combine``'s constant-false
         specialization branch is the corpus shape)."""
 
-        assert isinstance(_self_sibling_caller, ir.Function)
-        assert _self_sibling_caller.as_python().count("_self_sibling") >= 2
+        assert isinstance(_self_sibling_caller.fn, ir.Function)
+        assert _self_sibling_caller.fn.as_python().count("_self_sibling") >= 2
 
     def test_spmd_submit_accepts_self_sibling(self):
         """``pl.spmd_submit(self.<sibling>, ...)`` — the exact corpus shape
         (moe.py:387): the materialized ``self`` must hand the construct the
         sibling's Marker, not a raw value."""
 
-        assert isinstance(_self_sibling_submitter, ir.Function)
-        assert "_self_sibling" in _self_sibling_submitter.as_python()
+        assert isinstance(_self_sibling_submitter.fn, ir.Function)
+        assert "_self_sibling" in _self_sibling_submitter.fn.as_python()
 
 
 def test_unknown_self_sibling_is_loud():
@@ -289,8 +292,8 @@ class TestAnnotationlessSubmitCallee:
         ``_infer_return_type``), so callers and the printer see the real
         type instead of nothing."""
 
-        assert _submit_sibling.return_types
-        assert "-> pl.Tensor[[64], pl.FP32]" in _submit_sibling.as_python()
+        assert _submit_sibling.fn.return_types
+        assert "-> pl.Tensor[[64], pl.FP32]" in _submit_sibling.fn.as_python()
 
     def test_spmd_submit_accepts_derived_annotationless_sibling(self):
         """The remaining corpus shape (moe.py ``combine`` → ``shared_routed``):
@@ -299,8 +302,8 @@ class TestAnnotationlessSubmitCallee:
         type — never ``UnknownType`` — so the destructured result is
         soundly typed."""
 
-        assert isinstance(_submit_sibling_submitter, ir.Function)
-        text = _submit_sibling_submitter.as_python()
+        assert isinstance(_submit_sibling_submitter.fn, ir.Function)
+        text = _submit_sibling_submitter.fn.as_python()
         assert "pl.spmd_submit(_submit_sibling" in text
         assert "pl.Tuple[pl.Tensor[[64], pl.FP32], pl.Scalar[pl.TASK_ID]]" in text
 
@@ -311,7 +314,7 @@ class TestAnnotationlessSubmitCallee:
         the destructured result), and a submit referencing it raises the
         declared-return rule."""
 
-        assert not _disagree_sibling.return_types
+        assert not _disagree_sibling.fn.return_types
 
         with pytest.raises(TypeError, match="must declare a -> return type"):
 
@@ -341,9 +344,9 @@ class TestInlineOutDirectionNormalization:
             def writer(x: pl.Tensor[[64], pl.FP32], y: pl.Out[pl.Tensor[[64], pl.FP32]]):
                 y[:] = x
 
-        assert all(d == ir.ParamDirection.In for d in writer.param_directions)
+        assert all(d == ir.ParamDirection.In for d in writer.fn.param_directions)
         # The printed signature spells the normalized (bare) form.
-        assert "pl.Out" not in writer.as_python()
+        assert "pl.Out" not in writer.fn.as_python()
 
     def test_lazy_inline_lane_drops_out_directions(self):
         """The lazy jit lane (a bare param forces it) applies the same
@@ -378,7 +381,7 @@ class TestInlineOutDirectionNormalization:
             y[:] = x
             return y
 
-        assert keeper.param_directions[-1] == ir.ParamDirection.Out
+        assert keeper.fn.param_directions[-1] == ir.ParamDirection.Out
 
     def test_inline_out_caller_traces(self):
         """The corpus shape end-to-end at the frontend: a caller passes its
@@ -387,9 +390,9 @@ class TestInlineOutDirectionNormalization:
         the drop. A clean trace with all-In directions on the callee is the
         oracle."""
 
-        assert isinstance(_inline_out_caller, ir.Function)
-        assert all(d == ir.ParamDirection.In for d in _inline_out_writer.param_directions)
-        assert "_inline_out_writer" in _inline_out_caller.as_python()
+        assert isinstance(_inline_out_caller.fn, ir.Function)
+        assert all(d == ir.ParamDirection.In for d in _inline_out_writer.fn.param_directions)
+        assert "_inline_out_writer" in _inline_out_caller.fn.as_python()
 
 
 class TestSpmdWithFormBodyShape:
@@ -407,7 +410,7 @@ class TestSpmdWithFormBodyShape:
                 _i = pl.tile.get_block_idx()
                 y[:] = pl.add(y, y)
 
-        text = wrapped.as_python()
+        text = wrapped.fn.as_python()
         assert 'for _i in pl.spmd(2, name_hint="w_spmd")' in text
         # The split Spmd hint (not the user's bare ``w``) and no direct form.
         assert 'with pl.spmd(2, name_hint="w")' not in text
@@ -423,7 +426,7 @@ class TestSpmdWithFormBodyShape:
             with pl.spmd(2, name_hint="w"):
                 y[:] = pl.add(y, y)
 
-        text = direct.as_python()
+        text = direct.fn.as_python()
         assert 'with pl.spmd(2, name_hint="w")' in text
         assert "pl.incore" not in text
         assert "for _" not in text
@@ -438,9 +441,105 @@ class TestSpmdWithFormBodyShape:
             with pl.spmd(2, name_hint="w") as _tid:
                 y[:] = pl.add(y, y)
 
-        text = captured.as_python()
+        text = captured.fn.as_python()
         assert 'with pl.spmd(2, name_hint="w")' in text
         assert "pl.incore" not in text
+
+
+# The host-surface fixtures, module level (an entry nested in a class body
+# resolves its callee through the module's traced-kernel registry, and a
+# class-scope name is invisible to method annotations anyway).
+_HS_T = pl.dynamic("T_HOST_SURFACE")
+
+
+@pl.jit.incore
+def _hs_writer(x: pl.Tensor[[_HS_T, 64], pl.FP32], y: pl.Tensor[[_HS_T, 64], pl.FP16]):
+    y[0:1, 0:64] = pl.cast(x[0:1, 0:64], pl.FP16)
+
+
+@pl.jit
+def _hs_entry(
+    x: pl.Tensor[[_HS_T, 64], pl.FP32],
+    y: pl.Out[pl.Tensor[[_HS_T, 64], pl.FP16]],
+) -> pl.Tensor[[_HS_T, 64], pl.FP16]:
+    x.bind_dynamic(0, _HS_T)  # redundant with the annotation — the corpus pattern
+    y.bind_dynamic(0, _HS_T)
+    _hs_writer(x, y)
+    return y
+
+
+@pl.jit
+def _hs_static(x: pl.Tensor[[64], pl.FP32], y: pl.Out[pl.Tensor[[64], pl.FP32]]) -> pl.Tensor[[64], pl.FP32]:
+    y[:] = x
+    return y
+
+
+class TestEagerJitHostSurface:
+    """The eager jit's host surface — the golden runner's driving contract.
+
+    pypto-lib's ``golden.run(fn=<eager @pl.jit kernel>, ...)`` was the first
+    real consumer (the 2026-09 rmsnorm probe): it duck-types
+    ``callable(getattr(fn, "compile", None))`` to pick its JIT entry, then
+    drives ``fn.compile(*dummy_args, config=RunConfig)`` and dispatches the
+    returned CompiledProgram. The eager decoration therefore returns the
+    jit object (never a bare ``ir.Function`` — that misrouted the runner
+    into its program entry, where ``ir.compile`` rejected the bare
+    Function), and ``compile`` serves the decoration record's program:
+    dummy args are dispatch vocabulary, not specialization. Re-tracing
+    with the bridged static dummy shapes would demote the declared dynamic
+    extents to static and trip the kernel's own redundant ``bind_dynamic``
+    calls — the corpus's ~1061-call pattern.
+
+    The fixtures live at module level, like the sibling fixtures above: an
+    entry nested in a class body resolves its callee through the module's
+    traced-kernel registry."""
+
+    def test_the_runner_duck_typing_routes_to_the_jit_entry(self):
+        """The decoration result is the jit object with the full surface; the
+        decoration trace (what structural consumers read) is ``.fn``."""
+        assert callable(getattr(_hs_entry, "compile", None))
+        assert not isinstance(_hs_entry, ir.Function)
+        assert isinstance(_hs_entry.fn, ir.Function)
+        assert "_hs_writer" in _hs_entry.fn.as_python()
+
+    def test_compile_serves_the_decoration_record(self):
+        """``compile(*dummy_args, config=...)`` returns the CompiledProgram
+        built from the decoration trace — dummy shapes never re-specialize,
+        so the redundant ``bind_dynamic`` calls stay no-ops and the declared
+        extent survives as a runtime symbol."""
+        torch = pytest.importorskip("torch")
+        from pypto.ir.compiled_program import CompiledProgram  # noqa: PLC0415
+        from pypto.runtime.runner import RunConfig  # noqa: PLC0415
+
+        x = torch.zeros(8, 64, dtype=torch.float32)
+        y = torch.empty(8, 64, dtype=torch.float16)
+        compiled = _hs_entry.compile(x, y, config=RunConfig(platform="a2a3sim"))
+        assert isinstance(compiled, CompiledProgram)
+        # the declaration, not the dummy, typed the artifact
+        assert isinstance(_hs_entry.fn.params[0].type.shape[0], ir.Var)
+
+    def test_no_args_compile_is_annotation_determined(self):
+        """An eager kernel needs no args to compile: the annotations
+        determined the trace at decoration."""
+        from pypto.ir.compiled_program import CompiledProgram  # noqa: PLC0415
+        from pypto.runtime.runner import RunConfig  # noqa: PLC0415
+
+        compiled = _hs_entry.compile(config=RunConfig(platform="a2a3sim"))
+        assert isinstance(compiled, CompiledProgram)
+
+    def test_static_shape_contradiction_retraces(self):
+        """A statically annotated eager kernel called at a different shape
+        keeps the per-call re-trace: the artifact follows the call, exactly
+        as it did before the decoration record existed."""
+        torch = pytest.importorskip("torch")
+
+        prog = _hs_static.compile_for_test(torch.empty(64), torch.empty(64))
+        (entry,) = prog.functions.values()
+        assert entry.params[0].type.shape[0] == 64
+
+        prog128 = _hs_static.compile_for_test(torch.empty(128), torch.empty(128))
+        (entry128,) = prog128.functions.values()
+        assert entry128.params[0].type.shape[0] == 128
 
 
 class TestLazyCalleeDistributedWindow:
@@ -475,8 +574,8 @@ class TestLazyCalleeDistributedWindow:
             put_one(w, y, x)
             return y
 
-        assert isinstance(entry, ir.Function)
-        assert "put_one" in entry.as_python()
+        assert isinstance(entry.fn, ir.Function)
+        assert "put_one" in entry.fn.as_python()
 
 
 class TestLazyCalleeArrayArg:
@@ -499,8 +598,8 @@ class TestLazyCalleeArrayArg:
             body(ready, y, x)
             return y
 
-        assert isinstance(entry, ir.Function)
-        assert "body" in entry.as_python()
+        assert isinstance(entry.fn, ir.Function)
+        assert "body" in entry.fn.as_python()
 
 
 class TestSpmdDepsFromTaskIdArray:

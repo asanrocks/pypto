@@ -408,7 +408,9 @@ class TestEagerLaneInlineCallee:
             y[:] = x
             return y
 
-        adapted = _LazyGlobalFn(inline_copy)
+        # The jit decoration's public result is the jit object; the frozen
+        # callee (what this internal-lane test wraps) is its decoration trace.
+        adapted = _LazyGlobalFn(inline_copy.fn)
 
         def entry(x: pl.Tensor[[64], pl.FP32], y: pl.Out[pl.Tensor[[64], pl.FP32]]):
             r = adapted(x, y)  # consumed through the return value (InOutUseDiscipline)
@@ -422,7 +424,7 @@ class TestEagerLaneInlineCallee:
         )
         assert "inline_copy" in fn.as_python()  # the detached call was emitted
 
-        prog = ir.Program([fn, inline_copy], "eager_inline", fn.span)
+        prog = ir.Program([fn, inline_copy.fn], "eager_inline", fn.span)
         post = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(prog)
         text = post.as_python()
         assert "inline_copy(" not in text  # spliced by inline_functions

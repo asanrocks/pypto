@@ -67,7 +67,9 @@ def _run(program: ir.Program) -> ir.Program:
 
 
 def _program(fn: ir.Function) -> ir.Program:
-    """Wrap a fully annotated traced kernel in the single-function program."""
+    """Wrap a fully annotated traced kernel in the single-function program
+    (an eagerly traced ``@pl.jit`` object contributes its decoration trace)."""
+    fn = getattr(fn, "fn", fn)
     return ir.Program([fn], fn.name, fn.span)
 
 

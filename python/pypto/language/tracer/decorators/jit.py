@@ -10,16 +10,26 @@
 """The ``pl.jit`` envelope over the tracing frontend.
 
 Eager ⊂ lazy: the same trace driver, eager is a pre-execution with
-synthetic args. **Eager** — every param is a facade annotation (concrete or
-DynVar-shaped — the symbolic-extent shape ``pl.Tensor[[N, 64], pl.FP32]``
-IS annotation-determined) — traces at decoration and returns the
-``ir.Function``. **Lazy** — an unannotated/bare/Callable param forces
-deferral: at call, the real args specialize the kernel (tensor facades →
-static-shape params; host scalars → passed through, lifted to ``Const`` by
-the ops at the operand boundary), re-traced per call (no cache).
+synthetic args. Both timings return the same public jit object (the
+``_JitSpecializer`` surface); the split is internal. **Eager** — every
+param is a facade annotation (concrete or DynVar-shaped — the symbolic-
+extent shape ``pl.Tensor[[N, 64], pl.FP32]`` IS annotation-determined) —
+traces at decoration; the decoration trace (``.fn``) and the callees its
+body reached are retained in a record, and the jit's host ``compile`` /
+dispatch reuse them — the annotation determines the artifact, so a call
+argument supplies a dispatch value, never a re-specialization. **Lazy** —
+an unannotated/bare/Callable param forces deferral: at call, the real
+args specialize the kernel (tensor facades → static-shape params; host
+scalars → passed through, lifted to ``Const`` by the ops at the operand
+boundary), re-traced per call (no cache).
 
-The lazy object is the full jit surface:
+The jit object is the full jit surface:
 
+- **eager lane** — the decoration record's program (the decoration trace
+  plus its collected callees) serves every ``compile``/dispatch whose
+  arguments are compatible with the declaration (a declared dynamic
+  extent accepts any concrete shape; a static dim must match — a
+  contradicting static call re-traces, as a static kernel always has);
 - **specialize lane** — a call with facades/host values re-traces and
   returns the ``ir.Function`` (O9: an ``ir.Function`` is not executable);
 - **dispatch lane** — a call with ``torch.Tensor`` args bridges each to an
@@ -122,14 +132,17 @@ def jit_trace(
     level: ir.Level | None = None,
     role: ir.Role | None = None,
     attrs: dict[str, Any] | None = None,
-) -> ir.Function | _JitSpecializer:
-    """The ``pl.jit`` envelope: eager ⊂ lazy.
+) -> _JitSpecializer:
+    """The ``pl.jit`` envelope: eager ⊂ lazy, one public object.
 
-    Eager (every param a facade annotation) → the traced ``ir.Function``
-    (the annotation-determined gate; the conformance gate compares it to
+    Eager (every param a facade annotation) → traces at decoration; the
+    returned jit object's host ``compile``/dispatch reuse the decoration
+    record (the traced ``ir.Function`` — ``.fn`` — plus the callees the
+    decoration trace reached), so the annotation-determined artifact keeps
+    its declared dynamic extents (the conformance gate compares ``.fn`` to
     ``function_parser``). Lazy (an unannotated/bare/Callable param — the IR
-    depends on call-time info) → a ``_JitSpecializer`` callable
-    that re-traces per call with the baked args and returns the IR.
+    depends on call-time info) → a ``_JitSpecializer`` callable that
+    re-traces per call with the baked args and returns the IR.
     Both lanes materialize ``self`` in the traced body as the module's
     traced-kernel registry (``self.<sibling>`` — upstream's jit contract).
     """
@@ -169,8 +182,16 @@ def jit_trace(
             )
         finally:
             _ACTIVE_ASSEMBLY.reset(token)
-        _EAGER_TRACES[fn] = _EagerTraceRecord(fn, kernel, None, assembly)
-        return fn
+        record = _EagerTraceRecord(fn, kernel, None, assembly)
+        _EAGER_TRACES[fn] = record
+        # The public object is the jit surface, not the bare ir.Function: the
+        # host compile/dispatch half of the specializer's contract (the
+        # golden runner's ``fn.compile(*args, config=...)`` and
+        # ``fn(*tensors)``) routes through the record's specializer, which
+        # serves the decoration trace's program (annotations determine the
+        # artifact; call args are dispatch values). In-trace calls take the
+        # per-call variant lane unchanged.
+        return record.specializer()
     return _JitSpecializer(
         kernel,
         function_type=function_type,
@@ -222,6 +243,7 @@ class _JitSpecializer:
         role: ir.Role | None = None,
         attrs: dict[str, Any] | None = None,
         localns: dict[str, object] | None = None,
+        eager_record: _EagerTraceRecord | None = None,
     ) -> None:
         self.kernel = kernel
         self._function_type = function_type
@@ -229,6 +251,13 @@ class _JitSpecializer:
         self._role = role
         self._attrs = attrs
         self._localns = localns
+        # The eager lane's decoration record: when present, the annotation
+        # determined the trace at decoration time, so host compile/dispatch
+        # reuse the record's program instead of re-tracing with the bridged
+        # call shapes (which would demote declared dynamic extents to
+        # static — the exact silent specialization the declaration exists
+        # to prevent).
+        self._eager_record = eager_record
         # The parameter declarations pin each parameter's world (types flow
         # from values): a pl facade annotation is a runtime parameter, a
         # plain Python annotation (or none) is a host knob baked at trace
@@ -247,6 +276,21 @@ class _JitSpecializer:
         """The positional parameter names, in signature order — shared with
         the eager-record variant lane (``_LazyGlobalFn``)."""
         return list(self._param_names)
+
+    @property
+    def fn(self) -> ir.Function:
+        """The decoration-time trace — the eager jit's annotation-determined
+        ``ir.Function`` (directions already normalized, derived return
+        already pinned). Structural consumers (the conformance gate, corpus
+        pins, the printer) read the IR here. A lazily traced jit has no
+        single pre-executed trace — the property is eager-only, loud
+        otherwise."""
+        if self._eager_record is None:
+            raise AttributeError(
+                f"{self.kernel.__name__!r} is lazily traced — there is no decoration "
+                "trace; a call re-traces with the call-site arguments"
+            )
+        return self._eager_record.fn
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         # The parser-aligned kwargs rule: a jit call takes its arguments
@@ -440,7 +484,20 @@ class _JitSpecializer:
         multi-function program: the entry plus every callee its body
         reached (lazy jit callees traced at their call sites, captured
         standalone functions adapted from the closure and the module
-        globals)."""
+        globals).
+
+        The eager lane short-circuits to the decoration record when the
+        bridged call is compatible with the declaration: the decoration
+        trace plus its collected callees IS the artifact, and re-tracing
+        would bridge the concrete arg shapes, demoting declared dynamic
+        extents to static."""
+        if self._eager_record is not None and self._declaration_serves(bridged):
+            rec = self._eager_record
+            return ir.Program(
+                [rec.fn, *rec.assembly.functions],
+                rec.fn.name,
+                source_span_for_function(self.kernel),
+            )
         assembly = _ProgramAssembly()
         token = _ACTIVE_ASSEMBLY.set(assembly)
         try:
@@ -451,6 +508,32 @@ class _JitSpecializer:
         return ir.Program(
             [entry, *assembly.functions], self.kernel.__name__, source_span_for_function(self.kernel)
         )
+
+    def _declaration_serves(self, bridged: list[Any]) -> bool:
+        """Can the decoration trace's program serve this bridged call? Each
+        declared dynamic extent accepts any concrete shape; a declared
+        static dim (or dtype) must match. A contradicting static call falls
+        through to the per-call re-trace — a statically annotated kernel
+        re-specializes at the new shape, as it always has — while a
+        dynamic-annotated kernel is always served by its record."""
+        for name, arg in zip(self._param_names, bridged):
+            declared = self._param_hints.get(name)
+            d_shape = getattr(declared, "shape", None)
+            c_shape = getattr(arg, "shape", None)
+            if d_shape is None or c_shape is None:
+                continue  # shape-less (scalar, Ptr, expr-wrapping): annotation-determined
+            if len(d_shape) != len(c_shape):
+                return False
+            for d, c in zip(d_shape, c_shape):
+                if isinstance(d, ir.Var) or hasattr(d, "_ir_var"):
+                    continue  # a declared dynamic extent accepts any shape
+                if d != c:
+                    return False
+            d_dtype = getattr(declared, "dtype", None)
+            c_dtype = getattr(arg, "dtype", None)
+            if d_dtype is not None and c_dtype is not None and d_dtype != c_dtype:
+                return False
+        return True
 
     def _adapted_kernel(self, assembly: _ProgramAssembly) -> types.FunctionType:
         """Make the jit values visible to one traced execution callable:
@@ -504,6 +587,13 @@ class _JitSpecializer:
     def compile(self, *args: Any, config: Any = None) -> Any:
         """Build + compile for the signature implied by *args*; returns the
         ``CompiledProgram`` (device dispatch is its ``__call__``).
+
+        For an eagerly traced kernel (annotation-determined), *args* carry
+        no specialization power: the decoration trace's program — with its
+        declared dynamic extents — is the artifact, and the args only need
+        to be compatible with the declaration (the golden runner's dummy
+        tensors satisfy this by construction). A statically annotated kernel
+        called at a different shape re-traces at that shape.
 
         ``config=RunConfig(...)`` is consumed here — never forwarded to the
         kernel — and its compile-side fields (``strategy``, ``dump_passes``,
@@ -710,13 +800,13 @@ _ACTIVE_ASSEMBLY: ContextVar[_ProgramAssembly | None] = ContextVar("pto_jit_asse
 class _EagerTraceRecord:
     """Decoration-time facts of one eagerly traced jit kernel.
 
-    The eager decoration replaces the module global with the traced
-    ``ir.Function`` and drops the kernel; this record (keyed by the function
-    object) retains what the per-call variant lane needs: the kernel (the
-    re-trace source), the decoration assembly (the callees the decoration
-    trace reached), and the lazily built specializer. The specializer's
-    AST-era counterpart held all of this by construction — it *is* the
-    function object."""
+    The eager decoration replaces the module global with the jit object
+    (the record's specializer); this record (keyed by the decoration trace's
+    ``ir.Function``) retains what that object serves its lanes from: the
+    trace (``fn``), the kernel (the re-trace source), the decoration
+    assembly (the callees the decoration trace reached), and the lazily
+    built specializer. The specializer's AST-era counterpart held all of
+    this by construction — it *is* the function object."""
 
     __slots__ = ("fn", "kernel", "localns", "assembly", "_specializer")
 
@@ -734,8 +824,11 @@ class _EagerTraceRecord:
         self._specializer: _JitSpecializer | None = None
 
     def specializer(self) -> _JitSpecializer:
-        """The per-call re-trace driver for the recorded kernel, rebuilt from
-        the decoration-time function's classification facts."""
+        """The jit object for the recorded kernel, rebuilt from the
+        decoration-time function's classification facts. Carries the record
+        so the host compile/dispatch lanes serve the decoration trace's
+        program; the per-call variant lane re-traces through the kernel as
+        before."""
         if self._specializer is None:
             self._specializer = _JitSpecializer(
                 self.kernel,
@@ -744,11 +837,29 @@ class _EagerTraceRecord:
                 role=self.fn.role,
                 attrs=dict(self.fn.attrs) or None,
                 localns=self.localns,
+                eager_record=self,
             )
         return self._specializer
 
 
 _EAGER_TRACES: dict[ir.Function, _EagerTraceRecord] = {}
+
+
+def _parser_aligned_callee(value: Any) -> ir.Function | None:
+    """The frozen function a parser-aligned lane (the standalone
+    ``pl.function`` build, the program methods) should see for *value*: an
+    ``ir.Function`` passes through; an eagerly traced jit object contributes
+    its decoration trace — the same callee the bare ``ir.Function`` module
+    global was before the jit object became the public decoration result.
+    Without this, the jit object's own ``__call__`` would leak the jit
+    envelope's world checks into a lane the conformance oracle pins as
+    parser-aligned. Anything else (a lazy jit, a plain callable) is None —
+    not this lane's callee."""
+    if isinstance(value, ir.Function):
+        return value
+    if isinstance(value, _JitSpecializer) and value._eager_record is not None:
+        return value._eager_record.fn
+    return None
 
 
 def _eager_trace_record(fn: ir.Function) -> _EagerTraceRecord | None:

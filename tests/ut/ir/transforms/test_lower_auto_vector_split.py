@@ -4827,6 +4827,8 @@ def _e2e_kernel_text(fn):
     """
     _backend.reset_for_testing()
     _backend.set_backend_type(_backend.BackendType.Ascend910B)
+    # An eagerly traced ``@pl.jit`` kernel contributes its decoration trace.
+    fn = getattr(fn, "fn", fn)
     with passes.PassContext([passes.VerificationInstrument(passes.VerificationMode.BEFORE_AND_AFTER)]):
         program = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(
             ir.Program([fn], fn.name, fn.span)

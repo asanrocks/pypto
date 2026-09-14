@@ -55,7 +55,9 @@ class TestStaticDimIRNeutrality:
                 y[0:8, d0 : d0 + 32] = x[0:8, d0 : d0 + 32]
             return y
 
-        ir.assert_structural_equal(literal, inferred, enable_auto_mapping=True)
+        ir.assert_structural_equal(
+            getattr(literal, "fn", literal), getattr(inferred, "fn", inferred), enable_auto_mapping=True
+        )
 
     def test_tile_extent_is_host_int(self):
         """A staged Tile's extents are static by construction; the query
@@ -101,7 +103,10 @@ class TestStaticDimIRNeutrality:
             pl.store(t, [0, 0], y)
             return y
 
-        ir.assert_structural_equal(kernel, reference, enable_auto_mapping=True)
+        # An eagerly traced ``@pl.jit`` contributes its decoration trace (``.fn``).
+        ir.assert_structural_equal(
+            getattr(kernel, "fn", kernel), getattr(reference, "fn", reference), enable_auto_mapping=True
+        )
 
 
 class TestStaticDimHostSemantics:
@@ -224,4 +229,4 @@ class TestStaticDimDynamicIsLoud:
             return y
 
         # the static query folded to a host int: the bound is the literal 4
-        assert "pl.pipeline(4, stage=2)" in str(k.as_python())
+        assert "pl.pipeline(4, stage=2)" in str(k.fn.as_python())

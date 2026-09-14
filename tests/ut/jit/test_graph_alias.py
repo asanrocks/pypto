@@ -50,11 +50,11 @@ def test_standalone_fragment_traces_as_a_graph_function():
             pl.store(pl.add(t, c), [0, 0], acc)
         return acc
 
-    assert isinstance(band, ir.Function)
-    assert band.func_type == ir.FunctionType.Graph
+    assert isinstance(band.fn, ir.Function)
+    assert band.fn.func_type == ir.FunctionType.Graph
     # A Graph body orchestrates tasks: chip level, orchestrator role.
-    assert band.level == ir.Level.CHIP
-    assert band.role == ir.Role.Orchestrator
+    assert band.fn.level == ir.Level.CHIP
+    assert band.fn.role == ir.Role.Orchestrator
 
 
 def test_standalone_fragment_matches_the_explicit_spelling():
@@ -88,7 +88,7 @@ def test_standalone_fragment_matches_the_explicit_spelling():
 
     # Each frontend builds its own Var objects; the anchor compares shape +
     # names, never object identity (the conformance-harness regime).
-    ir.assert_structural_equal(band, make_reference(), enable_auto_mapping=True)
+    ir.assert_structural_equal(band.fn, make_reference(), enable_auto_mapping=True)
 
 
 def test_graph_alias_rejects_level():

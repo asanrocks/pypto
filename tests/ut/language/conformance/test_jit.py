@@ -47,17 +47,19 @@ def eager_kernel(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32
 
 def test_eager_gate_returns_function():
     """The annotation-determined kernel traces at decoration — `jit_trace(k)`
-    returns the ir.Function (not a specializer)."""
+    returns the jit object whose ``.fn`` is the decoration trace (the host
+    compile/dispatch lanes serve it; a bare ``ir.Function`` has no such
+    surface)."""
     fn = jit_trace(eager_kernel)
-    assert isinstance(fn, ir.Function)
-    assert fn.name == "eager_kernel"
+    assert isinstance(fn.fn, ir.Function)
+    assert fn.fn.name == "eager_kernel"
 
 
 def test_eager_gate_conformance():
-    """The eager gate's conformance: the traced function equals
+    """The eager gate's conformance: the decoration trace equals
     `function_parser(k)` raw and post-canonical (the traced-IR gate — only for
     the eager case)."""
-    fn = jit_trace(eager_kernel)
+    fn = jit_trace(eager_kernel).fn
     assert isinstance(fn, ir.Function)
     ast_ = function_parser(eager_kernel)
     ir.assert_structural_equal(fn, ast_, enable_auto_mapping=True)
@@ -74,7 +76,7 @@ def eager_dyn_kernel(x: pl.Tensor[[N, 64], pl.FP32]) -> pl.Tensor[[N, 64], pl.FP
 def test_eager_gate_dynvar_shape():
     """A DynVar-shaped annotation IS annotation-determined — eager.
     The DynVar dim unwraps to its shared extent symbol (`_shape_dim`)."""
-    fn = jit_trace(eager_dyn_kernel)
+    fn = jit_trace(eager_dyn_kernel).fn
     assert isinstance(fn, ir.Function)
     assert isinstance(fn.params[0].type, ir.TensorType)
 
@@ -133,7 +135,7 @@ def test_bind_dynamic_redundant_is_noop():
     pl.dynamic — pypto-lib's ~70-use pattern) is a benign no-op: the
     annotation already carries the DynVar."""
     fn = jit_trace(k_bind_redundant)
-    assert isinstance(fn, ir.Function)
+    assert isinstance(fn.fn, ir.Function)
 
 
 def test_bind_dynamic_override_is_loud():
