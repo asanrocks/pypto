@@ -125,6 +125,57 @@ def _drop_inline_directions(fn: ir.Function, function_type: ir.FunctionType) -> 
     )
 
 
+def _eager_trace_record_for(
+    kernel: types.FunctionType,
+    *,
+    function_type: ir.FunctionType,
+    level: ir.Level | None,
+    role: ir.Role | None,
+    attrs: dict[str, Any] | None,
+) -> _EagerTraceRecord:
+    """Run the one-time eager trace (decoration semantics) and register its
+    record. Shared by ``jit_trace``'s eager lane and the Inline deferral —
+    the same body, run at decoration or at first use."""
+    from pypto.language.tracer.decorators.function import function_trace  # noqa: PLC0415 - avoid a cycle
+
+    # The decoration trace owns an assembly: in-trace calls to eagerly
+    # traced callees specialize into it (per-call variants), and the
+    # record keeps it reachable so a program build can join the entry
+    # with exactly the callees its body reached — the closure text-scan
+    # cannot see variant functions (they are minted at call sites, never
+    # bound to module globals).
+    assembly = _ProgramAssembly()
+    token = _ACTIVE_ASSEMBLY.set(assembly)
+    try:
+        # An annotationless ``->`` pins the derived return contract (the
+        # specializer's inferred return, materialized as the Function
+        # signature — its synthesized ``->``). The pin is what lets a later
+        # ``pl.spmd_submit`` callee see the recovered types as declared
+        # facts (the Submit's Tuple[<ret>, TASK_ID] derives from them). An
+        # Inline alias additionally drops Out/InOut param directions (the
+        # specializer's generated-source normalization — see
+        # ``_drop_inline_directions``).
+        fn = _drop_inline_directions(
+            pin_derived_return_types(
+                function_trace(
+                    kernel,
+                    function_type=function_type,
+                    level=level,
+                    role=role,
+                    attrs=attrs,
+                    materialize_self=True,
+                    specialize_global_callees=True,
+                )
+            ),
+            function_type,
+        )
+    finally:
+        _ACTIVE_ASSEMBLY.reset(token)
+    record = _EagerTraceRecord(fn, kernel, None, assembly)
+    _EAGER_TRACES[fn] = record
+    return record
+
+
 def jit_trace(
     kernel: types.FunctionType,
     *,
@@ -147,43 +198,29 @@ def jit_trace(
     traced-kernel registry (``self.<sibling>`` — upstream's jit contract).
     """
     if _eagerly_traceable(kernel):
-        from pypto.language.tracer.decorators.function import function_trace  # noqa: PLC0415 - avoid a cycle
-
-        # The decoration trace owns an assembly: in-trace calls to eagerly
-        # traced callees specialize into it (per-call variants), and the
-        # record keeps it reachable so a program build can join the entry
-        # with exactly the callees its body reached — the closure text-scan
-        # cannot see variant functions (they are minted at call sites, never
-        # bound to module globals).
-        assembly = _ProgramAssembly()
-        token = _ACTIVE_ASSEMBLY.set(assembly)
-        try:
-            # An annotationless ``->`` pins the derived return contract (the
-            # specializer's inferred return, materialized as the Function
-            # signature — its synthesized ``->``). The pin is what lets a later
-            # ``pl.spmd_submit`` callee see the recovered types as declared
-            # facts (the Submit's Tuple[<ret>, TASK_ID] derives from them). An
-            # Inline alias additionally drops Out/InOut param directions (the
-            # specializer's generated-source normalization — see
-            # ``_drop_inline_directions``).
-            fn = _drop_inline_directions(
-                pin_derived_return_types(
-                    function_trace(
-                        kernel,
-                        function_type=function_type,
-                        level=level,
-                        role=role,
-                        attrs=attrs,
-                        materialize_self=True,
-                        specialize_global_callees=True,
-                    )
-                ),
-                function_type,
+        if function_type in (ir.FunctionType.Inline, ir.FunctionType.InCore):
+            # The callee-tier lanes (Inline, InCore) defer their decoration
+            # trace to first use (01-language.md §10): a callee-tier
+            # function has no dispatch arguments, so tracing at decoration
+            # buys nothing, and eager execution before the module finishes
+            # loading turns a definition-order choice into a raw NameError —
+            # the AST-era jit decorated lazily, and def order was free (the
+            # corpus's ``decode_indexer`` chain: an ``@pl.jit.incore``
+            # caller referencing a later-defined sibling). The specializer
+            # materializes the record (the identical eager body) at the
+            # first ``.fn`` / host-compile access; in-trace calls take the
+            # per-call variant lane and never need it.
+            return _JitSpecializer(
+                kernel,
+                function_type=function_type,
+                level=level,
+                role=role,
+                attrs=attrs,
+                defer_eager=True,
             )
-        finally:
-            _ACTIVE_ASSEMBLY.reset(token)
-        record = _EagerTraceRecord(fn, kernel, None, assembly)
-        _EAGER_TRACES[fn] = record
+        record = _eager_trace_record_for(
+            kernel, function_type=function_type, level=level, role=role, attrs=attrs
+        )
         # The public object is the jit surface, not the bare ir.Function: the
         # host compile/dispatch half of the specializer's contract (the
         # golden runner's ``fn.compile(*args, config=...)`` and
@@ -244,6 +281,7 @@ class _JitSpecializer:
         attrs: dict[str, Any] | None = None,
         localns: dict[str, object] | None = None,
         eager_record: _EagerTraceRecord | None = None,
+        defer_eager: bool = False,
     ) -> None:
         self.kernel = kernel
         self._function_type = function_type
@@ -257,7 +295,13 @@ class _JitSpecializer:
         # call shapes (which would demote declared dynamic extents to
         # static — the exact silent specialization the declaration exists
         # to prevent).
-        self._eager_record = eager_record
+        # ``defer_eager`` — the callee-tier lanes (Inline, InCore): the
+        # record materializes at first use (01-language.md §10), running
+        # the identical eager body then. A genuinely lazy jit (an
+        # unannotated/bare/Callable param) keeps ``None`` forever — ``.fn``
+        # stays loud there.
+        self.__eager_record = eager_record
+        self.__defer_eager = defer_eager
         # The parameter declarations pin each parameter's world (types flow
         # from values): a pl facade annotation is a runtime parameter, a
         # plain Python annotation (or none) is a host knob baked at trace
@@ -276,6 +320,20 @@ class _JitSpecializer:
         """The positional parameter names, in signature order — shared with
         the eager-record variant lane (``_LazyGlobalFn``)."""
         return list(self._param_names)
+
+    @property
+    def _eager_record(self) -> _EagerTraceRecord | None:
+        """The decoration record — materialized on first access for the
+        deferred Inline lane, ``None`` forever for a genuinely lazy jit."""
+        if self.__eager_record is None and self.__defer_eager:
+            self.__eager_record = _eager_trace_record_for(
+                self.kernel,
+                function_type=self._function_type,
+                level=self._level,
+                role=self._role,
+                attrs=self._attrs,
+            )
+        return self.__eager_record
 
     @property
     def fn(self) -> ir.Function:

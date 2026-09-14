@@ -276,13 +276,16 @@ def test_unknown_self_sibling_is_loud():
     (the parser frontend's undefined-program-function discipline). A plain
     test function, not a method: a kernel nested in a method captures the
     method's ``self`` as a closure freevar, so the materialized ``self``
-    never engages there."""
+    never engages there. The Inline lane defers its trace to first use
+    (01-language.md §10), so the loud unknown fires at materialization —
+    here, the first ``.fn`` access."""
+
+    @pl.jit.inline
+    def entry(x: pl.Tensor[[64], pl.FP32]):
+        self.nope(x)  # noqa: F821 - the loud-unknown pin
 
     with pytest.raises(AttributeError, match="self.nope does not resolve"):
-
-        @pl.jit.inline
-        def entry(x: pl.Tensor[[64], pl.FP32]):
-            self.nope(x)  # noqa: F821 - the loud-unknown pin
+        _ = entry.fn
 
 
 class TestAnnotationlessSubmitCallee:
@@ -317,15 +320,18 @@ class TestAnnotationlessSubmitCallee:
 
         assert not _disagree_sibling.fn.return_types
 
-        with pytest.raises(TypeError, match="must declare a -> return type"):
+        @pl.jit.inline
+        def submitter(
+            x: pl.Tensor[[64], pl.FP32],
+            y: pl.Out[pl.Tensor[[64], pl.FP32]],
+        ):
+            n = pl.const(1, pl.INT32)
+            _out, _tid = pl.spmd_submit(_disagree_sibling, n, x, y, core_num=1)
 
-            @pl.jit.inline
-            def submitter(
-                x: pl.Tensor[[64], pl.FP32],
-                y: pl.Out[pl.Tensor[[64], pl.FP32]],
-            ):
-                n = pl.const(1, pl.INT32)
-                _out, _tid = pl.spmd_submit(_disagree_sibling, n, x, y, core_num=1)
+        # The Inline lane defers its trace to first use (01-language.md
+        # §10) — the loud declared-return rule fires at materialization.
+        with pytest.raises(TypeError, match="must declare a -> return type"):
+            _ = submitter.fn
 
 
 class TestInlineOutDirectionNormalization:
@@ -339,11 +345,14 @@ class TestInlineOutDirectionNormalization:
         verification (the corpus's ``return x_next`` after
         ``hc_post(..., x_next)``)."""
 
-        with pytest.warns(DeprecationWarning, match="deprecated for inline helpers"):
+        @pl.jit.inline
+        def writer(x: pl.Tensor[[64], pl.FP32], y: pl.Out[pl.Tensor[[64], pl.FP32]]):
+            y[:] = x
 
-            @pl.jit.inline
-            def writer(x: pl.Tensor[[64], pl.FP32], y: pl.Out[pl.Tensor[[64], pl.FP32]]):
-                y[:] = x
+        # The Inline lane defers its trace to first use (01-language.md
+        # §10) — the warning fires at materialization, not decoration.
+        with pytest.warns(DeprecationWarning, match="deprecated for inline helpers"):
+            _ = writer.fn
 
         assert all(d == ir.ParamDirection.In for d in writer.fn.param_directions)
         # The printed signature spells the normalized (bare) form.
@@ -958,3 +967,72 @@ class TestBareReturnContract:
             @pl.function
             def pair(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
                 return pl.add(x, x), pl.sub(x, x)
+
+
+class TestInlineForwardReference:
+    """The Inline lane defers its trace to first use (01-language.md §10):
+    an Inline callee has no dispatch arguments, so tracing at decoration
+    buys nothing — and eager execution before the module finishes loading
+    turned a definition-order choice into a raw NameError. The AST-era jit
+    decorated lazily, so corpus trees (dspark ``decode_indexer``'s
+    ``indexer_topk_leaf`` → ``indexer_topk_full_leaf``, the
+    ``prefill_indexer_query`` chain) freely defined callees after their
+    callers. Def order is free again; an unresolvable name is still loud —
+    just at first use."""
+
+    def test_callee_defined_after_caller(self):
+        @pl.jit.inline
+        def caller(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
+            return callee(x)
+
+        @pl.jit.inline
+        def callee(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
+            return pl.add(x, x)
+
+        # First use after both defs: the materialized trace resolves the
+        # global callee — no NameError.
+        assert "callee(" in caller.fn.as_python()
+
+    def test_forward_ref_inside_a_caller_trace(self):
+        """The corpus's actual chain shape: an inline helper referencing a
+        later-defined inline helper, itself called by an eagerly traced
+        entry — the whole chain materializes at the entry's decoration,
+        when the module is fully loaded."""
+
+        @pl.jit.inline
+        def mid(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
+            return leaf(x)
+
+        @pl.jit.inline
+        def leaf(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
+            return pl.add(x, x)
+
+        @pl.jit
+        def entry(x: pl.Tensor[[64], pl.FP32], y: pl.Out[pl.Tensor[[64], pl.FP32]]):
+            y[:] = mid(x)
+
+        assert "mid(" in entry.fn.as_python()
+        assert "leaf(" in mid.fn.as_python()
+
+    def test_incore_lane_defers_the_same_way(self):
+        """The InCore lane is the same callee tier — the corpus chain that
+        stayed broken after the Inline fix (dspark ``decode_indexer``: an
+        ``@pl.jit.incore`` caller referencing a later-defined sibling)."""
+
+        @pl.jit.incore
+        def incore_caller(q: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
+            return incore_leaf(q)
+
+        @pl.jit.incore
+        def incore_leaf(q: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
+            return pl.add(q, q)
+
+        assert "incore_leaf(" in incore_caller.fn.as_python()
+
+    def test_unresolvable_name_still_loud_at_first_use(self):
+        @pl.jit.inline
+        def broken(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
+            return nowhere(x)  # noqa: F821 - the loud-unknown pin
+
+        with pytest.raises(NameError, match="nowhere"):
+            _ = broken.fn

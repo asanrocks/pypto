@@ -369,6 +369,16 @@ alternative: the body executes and is emitted at *every* occurrence, with
 normal Python call semantics — the manual-inline recipe from the
 parser era maps onto it.
 
+**`@pl.jit.inline` and `@pl.jit.incore` defer their trace to first use**
+(`01-language.md` §10). The AST-era jit decorated lazily, so def order was free; under
+tracing, an inline helper whose body referenced a later-defined callee
+raised a raw `NameError` at import. Def order is free again — the trace
+runs at the first structural read (`.fn`), host compile, or materialization
+from a caller's trace. Loud errors that used to fire at import (the
+`self.<sibling>` unknown, the annotationless-submit declared-return rule,
+the Out-direction deprecation warning) now fire at that first use —
+move them with the kernel if you split a module.
+
 ## 6. Tier 3 — advanced kernels
 
 ### 6.1 Cross-core pipes: explicit tpop producers

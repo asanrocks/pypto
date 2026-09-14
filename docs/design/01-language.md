@@ -554,6 +554,18 @@ static-shape parameters; dyn-dims appear only in annotations and are
 *shared by name* — two parameters both annotated `N` share one `N`
 extent symbol.
 
+**Callee-tier functions defer their trace to first use.** A function
+marked `inline=True` or `incore=True` has no dispatch arguments — its IR is annotation-determined,
+so tracing at decoration buys nothing, and executing the body before the
+module finishes loading turns a definition-order choice into a raw
+`NameError` (a forward-referenced callee is legal Python that the AST-era
+jit accepted by decorating lazily). The deferral keeps the eager record
+semantics — one trace, declared annotations, the identical body — but it
+runs at the first use (a structural read of the traced function, a host
+compile, or materialization from a caller's trace); in-trace calls take
+the per-call variant lane regardless. An unresolvable name stays loud —
+at first use, not decoration.
+
 ```python
 # Eager-collectable: IR fully determined by annotations. Traced at decoration.
 @pl.function
