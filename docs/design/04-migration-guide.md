@@ -176,6 +176,19 @@ becomes a carried value. Single-branch definitions inside a loop body are
 legal — the missing branch reads the previous iteration's value; that is
 loop-carried behavior and the pass owns it.
 
+Two shapes the example above does not show, both regular in real kernels:
+
+- the initial value need not be `pl.const` — **any staged producer**
+  (`pl.load`, a tile op, a callee result) already binds a staged name, and
+  that name is a valid carry seed. `pl.const` (§4.1) is only for *host*
+  literals.
+- the parser era chained **nested-branch `yield_`s through intermediate
+  names** (`m_valid = pl.yield_(...)` per branch, then
+  `m_after = pl.yield_(m_valid, ...)`, then the carried rebind). Each
+  `yield_` becomes a plain assignment of the same names; reads of the old
+  *iter arg* (`m_iter`) become reads of the carried name (`running_m`).
+  The alias chain itself can stay — copy folding is a pass concern.
+
 **`pl.while_` and `pl.cond()` are gone.** The parser era spelled a staged
 while-loop as `for (x,) in pl.while_(init_values=(x_init,)):` with
 `pl.cond(...)` as the body's first statement. Write a bare `while` with a
@@ -259,6 +272,16 @@ The supported spelling is the annotation-embedded `pl.dynamic(name)`:
 declare the dimension dynamic where the parameter is annotated, and the
 call site supplies the value.
 
+One case where the error fires although the annotation already declares
+the dimension dynamic: an **inline callee called in-trace with a
+static-shaped argument**. The callee's in-trace parameter type follows the
+*argument*, not the callee's annotation (type-soundness — the value really
+is that shape), so a static slice reaching a `pl.dynamic`-annotated
+parameter mints a static type and the body's `bind_dynamic` raises. Under
+the specializer the AST scan read the annotation instead, so the call was
+silently honored. The call is residue: delete it — the body reads the
+minted (static) extent, which is the argument's true shape.
+
 ## 5. Tier 2 — jit users
 
 `pl.jit` is the tracing jit. The AST-era runtime survives quarantined as
@@ -282,6 +305,36 @@ call site is a loud `TypeError` in both directions:
 A `torch.Tensor` argument bridges to a static-shape facade; dynamic
 extent dimensions appear only in annotations and are shared by name —
 two parameters both annotated `N` share one extent symbol.
+
+**Migrating an AST-era `pl.Scalar` parameter.** Under the specializer
+every scalar specialized into the artifact by value, so a `pl.Scalar`
+annotation did not pin a world — each one is an open question at
+migration time, and the production call site is the ground truth:
+
+- a host literal or module constant, the same on every dispatch and on
+  every rank sharing the artifact, is a **host knob** — re-annotate it
+  plainly (`done_epoch: int`), pass the value at the call or through
+  `compile(name=value)`, and spell body constants `pl.const(...)` rather
+  than `pl.cast(literal, ...)` (the cast-of-a-literal form was the parser
+  era's coercion device into `Scalar`-typed params; the value now folds
+  to a `Const`);
+- a staged expression, a per-rank value, or a per-forward counter (an
+  epoch advancing across dispatches of one artifact) is a **runtime
+  parameter** — keep `pl.Scalar`, and dispatch runtime values
+  (`pl.runtime(value, dtype)` at a host call; a test harness marks the
+  scalar runtime in its spec).
+
+**Which lane fixes a host int depends on where the call sits.** The
+world check raises at both, but the two lanes take different spellings:
+
+- at a **host call** (a fixture or driver dispatching the jit kernel):
+  `pl.runtime(value, dtype)`, or mark the scalar runtime in the harness
+  spec;
+- **inside a trace** (a kernel calling another kernel): pass a staged
+  value. A trace-time constant is spelled `pl.const(value, dtype)` — a
+  staged constant flowing into the runtime-scalar slot. `pl.runtime` is
+  *not* valid here; it raises
+  `RuntimeError: Cannot unwrap annotation-only Scalar`.
 
 ### 5.2 Directions
 
@@ -400,6 +453,8 @@ row is a P3 instance; the design-level statement is `01-language.md` §12.
 | declared `->` return contract produces no matching traced return (§4.4) | a return contract the body never honors | fix the annotation or return the declared value |
 | non-bool `Scalar` in `and`/`or`/`not` | host float truthiness carrying into staged logic | `x != pl.const(0, pl.FP32)` |
 | `bind_dynamic` on a static dim (§4.5) | an override the frontend never saw | declare `pl.dynamic` in the annotation |
+| world contradiction at a call (`parameter 'x' is declared Scalar[int32] ... but received a host int`, §5.1) | AST-era code whose `pl.Scalar` annotations were decorative — the specializer specialized every scalar by value, so a value-varying scalar silently rebaked the artifact per value | re-annotate by the call-site rule: constant → plain annotation, varying → keep `pl.Scalar` and pass `pl.runtime(value, dtype)` at a host call or `pl.const(value, dtype)` in-trace |
+| `pl.runtime(...)` inside a trace (`RuntimeError: Cannot unwrap annotation-only Scalar`) | the host-dispatch spelling used in the wrong lane — the value never becomes staged | in-trace calls pass a staged value: `pl.const(value, dtype)` |
 | staged loop with an `else` suite | `else` collected unconditionally, contradicting skipped-by-`break` | restructure, or keep the predicate a host value |
 | callee recursion | device IR has no recursion | unroll on the host (`pl.unroll`) or restructure |
 | staged-ness flip under open control flow (§4.1) | post-join reads inline the literal instead of the variable | keep the name staged on every path, or host on every path |
