@@ -112,11 +112,12 @@ this branch's codegen); the failure is identical under the AST-era
 ``pl.jit_specializer`` (byte-identical ``.pto`` modulo temp counters),
 confirming it is toolchain rebase debt, not tracing. The jit device-execution surface
 (``.compile(*args, config=RunConfig)`` returning a CompiledProgram, then
-dispatch) is served for the eager lane from the decoration record — the
-golden runner's driving contract, pinned in ``TestEagerJitHostSurface``
-below; the name-keyed runtime-scalar compile form
-(``fn.compile(config=..., scalar=pl.RUNTIME)``) remains specializer-era
-surface.
+dispatch) is served for the eager lane from the decoration record, and the
+name-keyed runtime-scalar compile form (``fn.compile(config=...,
+scalar=pl.RUNTIME)`` — the golden runner's ``compile_runtime`` path,
+corpus-shape in moe.py / decode_layer.py) is declaration-owned: ``RUNTIME``
+is a no-op on an already-runtime scalar and a host literal is accepted and
+ignored — both pinned in ``TestEagerJitHostSurface`` below.
 
 The cadence pins below are qwen3-family surfaces — v4-pro uses none of
 them (zero ``pl.prefetch``/``cross_core_slot``/``defer_wait`` hits; its
@@ -474,6 +475,17 @@ def _hs_static(x: pl.Tensor[[64], pl.FP32], y: pl.Out[pl.Tensor[[64], pl.FP32]])
     return y
 
 
+@pl.jit
+def _hs_scalars(
+    x: pl.Tensor[[_HS_T, 64], pl.FP32],
+    y: pl.Out[pl.Tensor[[_HS_T, 64], pl.FP32]],
+    layer_id: pl.Scalar[pl.INT32],
+    num_tokens: pl.Scalar[pl.INT32],
+) -> pl.Tensor[[_HS_T, 64], pl.FP32]:
+    y[:] = x
+    return y
+
+
 class TestEagerJitHostSurface:
     """The eager jit's host surface — the golden runner's driving contract.
 
@@ -540,6 +552,50 @@ class TestEagerJitHostSurface:
         prog128 = _hs_static.compile_for_test(torch.empty(128), torch.empty(128))
         (entry128,) = prog128.functions.values()
         assert entry128.params[0].type.shape[0] == 128
+
+    def test_name_keyed_scalar_vocabulary_is_declaration_owned(self):
+        """The ``compile_runtime`` form (moe.py's mixed call — one RUNTIME, one
+        literal, no tensor args): the declaration pinned every scalar runtime,
+        so ``pl.RUNTIME`` is a no-op, the literal is accepted and ignored
+        (dispatch supplies the value), and the artifact keeps both scalars as
+        real parameters — nothing specializes."""
+        from pypto.ir.compiled_program import CompiledProgram  # noqa: PLC0415
+        from pypto.runtime.runner import RunConfig  # noqa: PLC0415
+
+        compiled = _hs_scalars.compile(
+            config=RunConfig(platform="a2a3sim"),
+            layer_id=3,
+            num_tokens=pl.RUNTIME,
+        )
+        assert isinstance(compiled, CompiledProgram)
+        names = [p.name_hint for p in _hs_scalars.fn.params]
+        assert names[-2:] == ["layer_id", "num_tokens"], "no scalar specialized away"
+
+    def test_name_keyed_vocabulary_is_loud_where_the_declaration_cannot_speak(self):
+        """Unknown names, host-knob parameters (the marker cannot retype a
+        plain annotation), and non-scalar values all raise — compile is never
+        looser than the call boundary it serves."""
+        from pypto.runtime.runner import RunConfig  # noqa: PLC0415
+
+        with pytest.raises(TypeError, match="has no parameter 'nope'"):
+            _hs_scalars.compile(config=RunConfig(platform="a2a3sim"), nope=1)
+
+        with pytest.raises(TypeError, match="host knob by declaration"):
+
+            @pl.jit
+            def host_knob_entry(
+                x: pl.Tensor[[64], pl.FP32],
+                scale: float,
+                y: pl.Out[pl.Tensor[[64], pl.FP32]],
+            ) -> pl.Tensor[[64], pl.FP32]:
+                y[:] = pl.mul(x, pl.const(scale, pl.FP32))
+                return y
+
+            host_knob_entry.compile(scale=2.0)
+
+        torch = pytest.importorskip("torch")
+        with pytest.raises(TypeError, match="scalar values only"):
+            _hs_scalars.compile(config=RunConfig(platform="a2a3sim"), layer_id=torch.zeros(3))
 
 
 class TestLazyCalleeDistributedWindow:

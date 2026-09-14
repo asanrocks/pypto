@@ -76,7 +76,7 @@ from pypto.language.tracer.decorators.function import (
 from pypto.language.tracer.return_contract import pin_derived_return_types
 from pypto.language.typing._runtime_scalar import RuntimeScalar
 from pypto.language.typing.arg_direction import param_directions, unmangle_hints, unmangle_param_name
-from pypto.language.typing.scalar import Scalar
+from pypto.language.typing.scalar import RUNTIME, Scalar
 from pypto.language.typing.tensor import Tensor
 from pypto.pypto_core import ir
 
@@ -584,7 +584,7 @@ class _JitSpecializer:
         program = self._build_program(bridged)
         return PassManager.get_strategy(OptimizationStrategy.Default).run_passes(program)
 
-    def compile(self, *args: Any, config: Any = None) -> Any:
+    def compile(self, *args: Any, config: Any = None, **kwargs: Any) -> Any:
         """Build + compile for the signature implied by *args*; returns the
         ``CompiledProgram`` (device dispatch is its ``__call__``).
 
@@ -594,6 +594,17 @@ class _JitSpecializer:
         to be compatible with the declaration (the golden runner's dummy
         tensors satisfy this by construction). A statically annotated kernel
         called at a different shape re-traces at that shape.
+
+        Name-keyed *kwargs* are the annotation-driven scalar vocabulary (the
+        golden runner's ``compile_runtime`` form: ``compile(config=...,
+        layer_id=5, moe_epoch=pl.RUNTIME)``). The declaration owns every
+        parameter's world, so no compile-time input re-specializes:
+        ``pl.RUNTIME`` on a runtime-declared (``pl.Scalar``) parameter is a
+        benign no-op — it is one already — and a host literal is accepted
+        and ignored (the value arrives at dispatch; the artifact is
+        identical either way). A ``pl.runtime(v, dtype)`` marker is likewise
+        a no-op. A keyword naming a host-knob parameter, an unknown name, or
+        a non-scalar value is loud.
 
         ``config=RunConfig(...)`` is consumed here — never forwarded to the
         kernel — and its compile-side fields (``strategy``, ``dump_passes``,
@@ -606,8 +617,42 @@ class _JitSpecializer:
         compile-then-call freezes one materialization (03-entrance.md §5.5).
         """
         config = _checked_run_config(config)
+        self._check_compile_kwargs(kwargs)
         bridged, _ = self._bridge_args(args)
         return _compile_program(self._build_program(bridged), config)
+
+    def _check_compile_kwargs(self, kwargs: dict[str, Any]) -> None:
+        """Validate the name-keyed scalar vocabulary against the declaration.
+
+        Every parameter's world was pinned at decoration, so the check can
+        only confirm that each keyword speaks the declaration's language —
+        it can never retype or re-specialize (the specializer's literal-
+        specialization is deliberately not adopted: the jit's own call
+        boundary rejects a host scalar into a runtime parameter, and compile
+        must not be looser than the call it serves).
+        """
+        for name, value in kwargs.items():
+            if name not in self._param_names:
+                raise TypeError(f"compile(): {self.kernel.__name__!r} has no parameter {name!r}")
+            if not _staged_declared(self._param_hints.get(name)):
+                raise TypeError(
+                    f"compile(): parameter {name!r} of {self.kernel.__name__!r} is a "
+                    "host knob by declaration — it is baked at trace time from the "
+                    "call arguments, not from compile keywords; declare it "
+                    "pl.Scalar[dtype] for a runtime parameter"
+                )
+            if value is RUNTIME or isinstance(value, (RuntimeScalar, bool, int, float)):
+                # pl.RUNTIME: already runtime by declaration — a no-op. A
+                # host literal or a pl.runtime marker: accepted and ignored —
+                # the declaration pinned the world and dispatch supplies the
+                # value, so the artifact is identical either way.
+                continue
+            raise TypeError(
+                f"compile(): keyword {name!r} of {self.kernel.__name__!r} must be "
+                "pl.RUNTIME, pl.runtime(value, dtype), or a host scalar — the "
+                "name-keyed vocabulary carries scalar values only (tensors go "
+                "positionally)"
+            )
 
 
 def _annotation_shaped(arg: Any) -> bool:

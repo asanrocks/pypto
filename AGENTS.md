@@ -100,7 +100,12 @@ by the declaration: a pl facade annotation (bare class included) is a runtime
 param, a plain Python annotation or none is a host knob baked at trace time;
 a contradicting call site is a loud TypeError in both directions, and
 `pl.runtime(value, dtype)` is the entry spelling for a runtime scalar (the
-dispatch cache keys on the dtype, never the value). Outputs are host-visible
+dispatch cache keys on the dtype, never the value). The name-keyed compile
+vocabulary (`fn.compile(config=..., scalar=pl.RUNTIME)` — the golden
+runner's `compile_runtime` path) is declaration-owned: `RUNTIME` is a no-op
+on an already-runtime `pl.Scalar` param, a host literal is accepted and
+ignored (dispatch supplies the value; the artifact is identical), and a
+name targeting a host-knob param is loud. Outputs are host-visible
 only through Out parameters: `MaterializeEntryReturns` promotes a dispatch
 entry's returned tensors to appended Out params (deleting the internal
 `tensor.create` that held them), so a return-style kernel's host call returns

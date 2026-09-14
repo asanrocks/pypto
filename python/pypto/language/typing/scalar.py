@@ -284,13 +284,20 @@ class RuntimeScalarMarker(Scalar):
 
     A ``pl.Scalar[dtype]`` annotation carries a type but no value, so
     annotation-driven signature mode (``compile()`` / ``lower()`` with no
-    tensor arguments) needs one value per scalar parameter. Passing a literal
-    **specializes** that value into the compiled artifact; passing
+    tensor arguments) needs one value per scalar parameter. Passing
     [`RUNTIME`][pypto.language.RUNTIME] leaves the parameter **unspecialized** — it stays a real
     ``pl.Scalar`` parameter in the generated program and its value is supplied
     at dispatch, exactly like a ``pl.dynamic`` dimension extent. Unspecialized
     scalars also drop out of the specialization cache key, so one artifact
     serves every runtime value.
+
+    Under the tracing jit the declaration owns the parameter's world: a
+    ``pl.Scalar[dtype]`` parameter is already runtime, so ``RUNTIME`` is a
+    benign no-op and a host literal is accepted and ignored (the value
+    arrives at dispatch — the artifact is identical either way). Literal
+    *specialization* is the quarantined specializer's behavior; the tracing
+    jit never re-specializes from the call site. A kernel that wants a
+    baked scalar declares it with a plain Python annotation (a host knob).
 
     Subclasses [`Scalar`][pypto.language.Scalar] so that a type checker accepts it as the default
     of a scalar parameter — ``n: pl.Scalar[dtype] = pl.RUNTIME`` — for the same
