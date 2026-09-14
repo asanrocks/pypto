@@ -357,7 +357,7 @@ class TestInlineOutDirectionNormalization:
         downstream pass observes Inline functions), so the warning is the
         pin."""
 
-        import torch  # noqa: PLC0415 - heavy import scoped to the bridging tests
+        import torch  # noqa: PLC0415 - this test only needs torch for the runtime bridge
 
         @pl.jit.inline
         def writer(x: pl.Tensor, y: pl.Out[pl.Tensor[[64], pl.FP32]]):  # x shape-bare: forces lazy
@@ -656,6 +656,42 @@ class TestLazyCalleeArrayArg:
 
         assert isinstance(entry.fn, ir.Function)
         assert "body" in entry.fn.as_python()
+
+
+class TestSpmdDepsWithoutCapture:
+    """``deps=`` on the uncaptured ``pl.spmd`` forms — closed 2026-09-14.
+
+    The tracer rejected ``deps=`` on the plain with-form and the for-form
+    while the parser (the round-trip owner) accepts every form and the
+    Spmd outliner synthesises the uncaptured TaskId Var — a surface
+    asymmetry that broke 13 corpus files at decoration. Corpus shapes:
+    ``gate.py``'s for-form quant block (deps + allow_early_resolve) and
+    ``expert_routed.py``'s plain with-form expert scopes. The conformance
+    anchors live in ``test_spmd_submit_only_kwargs.py``; these pins hold
+    the corpus shapes (clean trace is the oracle)."""
+
+    def test_for_form_deps_with_early_resolve(self):
+        @pl.function
+        def k(y: pl.Out[pl.Tensor[[64], pl.FP32]]):
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="seed") as tid0:
+                t = pl.load(y, [0], [8])
+                pl.store(t, [0], y)
+            for b in pl.spmd(8, name_hint="gate_quant", deps=[tid0], allow_early_resolve=True):
+                pl.store(pl.load(y, [b * 8], [8]), [b * 8], y)
+
+        assert isinstance(k, ir.Function)
+
+    def test_plain_with_form_deps(self):
+        @pl.function
+        def k(y: pl.Out[pl.Tensor[[64], pl.FP32]]):
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="seed") as tid0:
+                t = pl.load(y, [0], [8])
+                pl.store(t, [0], y)
+            with pl.spmd(8, name_hint="expert_mm", deps=[tid0]):
+                i = pl.tile.get_block_idx()
+                pl.store(pl.load(y, [i * 8], [8]), [i * 8], y)
+
+        assert isinstance(k, ir.Function)
 
 
 class TestSpmdDepsFromTaskIdArray:

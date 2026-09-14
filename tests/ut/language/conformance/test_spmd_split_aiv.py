@@ -910,24 +910,20 @@ def k_spmd_zero_cores(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor[[64], pl.FP32]:
     return x
 
 
-def test_spmd_deps_without_capture_is_tracing_rejected():
-    """**Intended divergence** (documented), not a bug.
-
-    ``docs/en/dev/language/02-manual_dependencies.md:36``: *'``deps=`` is
-    accepted **only on the ``as tid`` capture form** — the plain ``with`` and
-    the ``for i in pl.spmd(...)`` form both reject it with a loud ``TypeError``
-    naming the two supported spellings (the edges have no TaskId var to hang
-    on); ``pl.at`` is the scope form that accepts ``deps=`` without
-    ``as tid``.'* ``docs/migration-todo.md`` records the docs being corrected
-    to this reading (the earlier "accepted on all three forms" claim was
-    parser-era).
+def test_spmd_deps_without_capture_is_anchored():
+    """``deps=`` without ``as tid`` traces like the parser — anchored.
 
     The parser (the round-trip owner) accepts both spellings and synthesizes
-    the TaskId Var the outliner needs, so no anchor exists."""
+    the TaskId Var the outliner needs, so the tracer accepts them too
+    (an uncaptured scope still lowers to a Submit; ``manual_dep_edges`` rides
+    the Spmd scope). The earlier tracing-only rejection — once recorded as an
+    "intended divergence" in the dev docs — broke the corpus's
+    ``gate.py`` / ``expert_routed.py`` shapes and contradicted the
+    conformance principle (accept what the parser accepted); the docs now
+    state the permissive rule."""
     for kernel in (k_spmd_deps_without_capture, k_spmd_deps_for_form):
         assert function_parser(kernel) is not None  # the parser lane accepts
-        with pytest.raises(TypeError, match=r"does not accept 'deps='"):
-            build(kernel)
+        conformance(kernel, build)
 
 
 def test_spmd_bare_body_is_tracing_accepted():

@@ -30,7 +30,7 @@ DSL 暴露**两套正交的机制**，用户可任意组合：
 | `result, tid = pl.submit(kernel, *args, deps=[...], allow_early_resolve=False, timing_slot=<0..15>)` | 单个 kernel 调用 | 尾部 `tid` 是 producer `pl.Scalar[pl.TASK_ID]`。它是 traced construct（类似 `pl.range`），不是 runtime 函数。`allow_early_resolve=True` 将该 task 标记为推测式 early-dispatch producer（让调度器提前预置其 consumer；lower 为 `Arg::set_allow_early_resolve(true)`）。`timing_slot=<0..15>` 是可选整数字面量，用于给该 task 添加选择性 device 计时标签；共享同一 slot 的所有 task 会从最早 dispatch 到最晚完成生成一个 span。同样接受 `predicate=(t[i] > 0)` —— 调度器在 dispatch 点求值的调度谓词（参见[调度谓词](#调度谓词predicate)）。 |
 | `result, tid = pl.spmd_submit(kernel, *args, core_num=N, sync_start=False, deps=[...], timing_slot=<0..15>)` | 单个 SPMD task launch | `pl.submit` 的 SPMD 版本：将 kernel 在 `N` 个 block 上分发（一个 orchestration task → 一个 `tid`）。`core_num` 是必填关键字参数（正整数表达式）；`sync_start=True` 强制所有 block 原子启动。callee 可以是 InCore / AIC / AIV / Group。launch spec 记录在 `Submit.core_num` / `Submit.sync_start` 上。同样接受 `allow_early_resolve=True`（与 `pl.submit` 相同的 early-dispatch 选项）、`timing_slot=<0..15>`（与 `pl.submit` 相同的字面量选择性 device 计时标签）和 `predicate=(t[i] > 0)`（参见[调度谓词](#调度谓词predicate)）。 |
 | `with pl.at(level=pl.Level.CORE_GROUP, deps=[...]) as tid:` | outlined `pl.at`-块 | 整块被 outline 成 InCore kernel + `Submit`；`tid` 捕获被合成的 Submit 的 TaskId，可作为后续 `pl.submit` / `pl.at` 的 dep。不写 `as tid` 时 outliner 会合成一个未使用的 TaskId Var——deps 始终走 `Submit::deps_`。同样接受 `allow_early_resolve=True`（与 `pl.submit` 相同的 early-dispatch 选项）；即使不写 `as tid` 也会强制走 `Submit` 形态，并 lower 为 `Arg::set_allow_early_resolve(true)`。同样接受 `predicate=(t[i] > 0)`（参见[调度谓词](#调度谓词predicate)；仅限 `level=pl.Level.CORE_GROUP`，同样强制走 `Submit` 形态）。不能嵌套在 `pl.cluster()` / `pl.spmd()` / 另一个 CORE_GROUP `pl.at` 内；所在函数还必须是 `OutlineIncoreScopes` 会改写的类型（不能是 `Group` / `Spmd` / InCore 系 kernel）。 |
-| `with pl.spmd(N, deps=[...]) as tid:` | outlined SPMD 分发 | `pl.at ... as tid` 形式的 SPMD 版本。内联 body 自动外包成 InCore kernel 并在 `N` 个 block 上分发；`tid` 捕获 grid 级 producer TaskId。`deps=` **仅在 `as tid` 捕获形式上可用**——普通 `with` 和 `for i in pl.spmd(...)` 形式都会在 trace 期以响亮的 `TypeError` 拒绝（错误信息会给出两种受支持的写法；显式边没有可挂靠的 TaskId 变量）；`pl.at` 才是不写 `as tid` 也接受 `deps=` 的作用域形式。`core_num` / `sync_start` 记录在 lower 出的 `Submit` 自身的 `core_num` / `sync_start` 字段上（launch spec 属于启动点，而非外包出的被调函数）；codegen 直接从那里读取。同样接受 `allow_early_resolve=True`（与 `pl.submit` / `pl.at` 相同的 early-dispatch 选项；`pl.spmd` 三种形式均可用，即使不写 `as tid` 也会强制走 `Submit` 形态）和 `predicate=(t[i] > 0)`（参见[调度谓词](#调度谓词predicate)；同样三种形式均可用，同样强制走 `Submit` 形态）。不能嵌套在 `pl.cluster()` 内。 |
+| `with pl.spmd(N, deps=[...]) as tid:` | outlined SPMD 分发 | `pl.at ... as tid` 形式的 SPMD 版本。内联 body 自动外包成 InCore kernel 并在 `N` 个 block 上分发；`tid` 捕获 grid 级 producer TaskId。《`deps=` 在每种形式上都可用——包括不写 `as tid` 的普通 `with` 和 `for i in pl.spmd(...)` 形式。》不捕获的作用域照样 lower 成 `Submit`，Spmd outliner 会合成未使用的 TaskId Var——与 `pl.at(..., deps=[...])` 的机制完全一致，显式边始终有处可挂。三个 Submit-only 参数（`deps=`、`allow_early_resolve=True`、`predicate=(...)`）在 `pl.cluster()` 内一律拒绝（嵌套进 cluster 的作用域不会 lower 成 `Submit`）。`core_num` / `sync_start` 记录在 lower 出的 `Submit` 自身的 `core_num` / `sync_start` 字段上（launch spec 属于启动点，而非外包出的被调函数）；codegen 直接从那里读取。同样接受 `allow_early_resolve=True`（与 `pl.submit` / `pl.at` 相同的 early-dispatch 选项；`pl.spmd` 三种形式均可用，即使不写 `as tid` 也会强制走 `Submit` 形态）和 `predicate=(t[i] > 0)`（参见[调度谓词](#调度谓词predicate)；同样三种形式均可用，同样强制走 `Submit` 形态）。不能嵌套在 `pl.cluster()` 内。 |
 | `barrier = pl.system.task_dummy(deps=[...])` | dependency-only barrier | 不提交 kernel。返回的 TaskId 是一个紧凑的 fan-in 点，可供后续 `deps=[barrier]` 使用。 |
 | `None`（Python 字面量） | 种子 / dep 条目 | "暂无 producer" 的哨兵。`prev_tid = None` 用作 TaskId 循环 iter_arg 的种子；`deps=[None]` 中的 `None` 被丢弃（不贡献任何边）。下沉为 `system.task_invalid` → `TaskId::invalid()`。 |
 
@@ -242,12 +242,11 @@ with pl.spmd(4, deps=[g_tid], predicate=(rc[0, 0] > 0)) as tid:  # producer 是�
 
 由这条路径引出两点：
 
-- **`deps=` 需要 `as tid` 形式。** 与 `allow_early_resolve=True`、`predicate=` 不同，
-  `deps=` 仅在捕获形式上可用——普通 `with` 和 `for i in pl.spmd(...)` 形式都会在
-  trace 期以 `TypeError` 拒绝，错误信息会给出两种受支持的写法（显式边没有可挂靠的
-  TaskId 变量）。`pl.at` 才是不写 `as tid` 也接受 `deps=` 的作用域形式（outliner
-  会合成一个未使用的 TaskId Var）。只有当*后续*任务需要等待本次派发时才需要捕获
-  TaskId——但带 `deps=` 时本来就要捕获。
+- **`deps=` 挂在作用域上，与是否捕获无关。** 与 `allow_early_resolve=True`、
+  `predicate=` 相同，`deps=` 在 `pl.spmd` 的每种形式上都可用：不捕获的作用域照样
+  lower 成 `Submit`，outliner 会合成一个未使用的 TaskId Var——与 `pl.at` 不写
+  `as tid` 也接受 `deps=` 是同一机制。只有当*后续*任务需要等待本次派发时才需要捕获
+  TaskId——只写 `deps=` 时可以不捕获，显式边照样传递。
 - **谓词契约依旧成立。** 若谓词读取的张量由同一函数内的其他任务产出，该 producer 必须
   出现在 `deps=` 中——`as tid` 形式能表达这一点。与调用形式一样，tracing 下没有检查
   （parser 时代的抽查——它还会把作用域体内赋值的张量记录为该作用域的产物——在这里

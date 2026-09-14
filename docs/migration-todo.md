@@ -1304,7 +1304,20 @@ en and zh move together (parity is lint-enforced,
   `deps=` without `as tid` on both the plain `with` and the `for` form
   (verified TypeError), while `pl.at` still accepts `deps=` without
   capture — the table row, the scope-forms bullets, and the cluster-nesting
-  "parse time" wording all now state this. Also: Examples 1–3 were
+  "parse time" wording all now state this.
+
+  **Correction (2026-09-14, corpus port):** the (4) reading above aligned
+  the docs to the tracer instead of the tracer to the parser, and was
+  itself wrong — the parser is the round-trip owner, it accepts `deps=` on
+  every form (its `_build_spmd_scope_attrs` docstring documents the
+  outliner-synthesised uncaptured TaskId), and the pypto-lib corpus
+  (``gate.py``'s for-form, ``expert_routed.py``'s plain with-form; 13
+  files failing at decoration) depends on the permissive forms. The
+  tracing rejection was removed (scopes.py), the conformance anchors
+  converted from "intended divergence" pins to structural-equality
+  anchors, and the dev docs (en+zh) restored the permissive rule with the
+  `pl.at`-style outliner explanation. The migration guide's "existing
+  dependency lists keep working" promise is now literally true. Also: Examples 1–3 were
   standalone `@pl.function` orchestrators with a `self` param (loud
   "parameter 'self' needs ... annotation" under tracing) and now use the
   `@pl.program` class spelling (all three verified to trace); the

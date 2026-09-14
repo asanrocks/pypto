@@ -15,3 +15,8 @@
 # CADENCE PINS — upstream surfaces this repo has not adopted. The fix is a
 # rebase/adopt (2e54cd660, #2142, #2089, #2369), never a test or corpus edit.
 tests/ut/jit/test_corpus_gaps.py::TestCadenceUpstreamSurface::test_cadence_prefetch_context_traces
+
+# spmd_submit(core_num=1): the literal types int32 under tracing, index under
+# the parser (found by the deps anchors' first draft, 2026-09-14). Own surface:
+# the submit construct's core_num literal coercion.
+tests/ut/language/conformance/test_spmd_submit_only_kwargs.py::test_spmd_submit_literal_core_num_dtype

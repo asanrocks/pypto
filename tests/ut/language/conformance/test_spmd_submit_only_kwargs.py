@@ -19,8 +19,13 @@ and ``predicate`` (the DSV4 parity verifier's ``expert_shared`` divergence;
 same sweep found three more in the family:
 
 * ``pl.at(..., windowize=True)`` — ``self.windowize`` was never read.
-* for-form / plain-with-form ``deps=`` — silently accepted where the parser
-  rejects (``deps=`` is legal only on the ``as tid`` capture form).
+* for-form / plain-with-form ``deps=`` — the parser accepts ``deps=`` on
+  every form (an uncaptured scope still lowers to a Submit; the Spmd
+  outliner synthesises the unused TaskId Var, exactly as ``pl.at`` does),
+  so the tracer accepts them too, anchored by structural equality. The
+  earlier tracing-only rejection was a surface asymmetry the corpus
+  (``gate.py``'s for-form, ``expert_routed.py``'s plain with-form)
+  depends on being closed.
 * cluster-nested ``pl.spmd`` with Submit-only kwargs (or ``as tid``) —
   accepted at trace time, then failing late in ``OutlineClusterScopes`` as
   an internal error where the parser rejects at parse time.
@@ -39,7 +44,7 @@ import pytest
 from pypto.language.tracer.decorators.function import function_trace, trace_program
 from pypto.pypto_core import ir
 
-from ._harness import conformance
+from ._harness import conformance, program_conformance
 
 build = function_trace
 
@@ -122,35 +127,29 @@ def test_at_windowize():
 
 
 class _ForFormDeps:
-    @pl.function
-    def stage(self, x: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
-        return pl.add(x, x)
-
     @pl.function(type=pl.FunctionType.Orchestration)
     def main(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
-        with pl.manual_scope():
-            a, tid = pl.spmd_submit(self.stage, a, core_num=1)
-            for i in pl.spmd(2, deps=[tid]):
-                off = i * 8
-                t = pl.load(a, [off, 0], [8, 16])
-                pl.store(pl.tile.add(t, t), [off, 0], a)
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="seed") as tid0:
+            t = pl.load(a, [0, 0], [16, 16])
+            pl.store(t, [0, 0], a)
+        for i in pl.spmd(2, deps=[tid0]):
+            off = i * 8
+            t = pl.load(a, [off, 0], [8, 16])
+            pl.store(pl.tile.add(t, t), [off, 0], a)
         return a
 
 
 class _PlainWithFormDeps:
-    @pl.function
-    def stage(self, x: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
-        return pl.add(x, x)
-
     @pl.function(type=pl.FunctionType.Orchestration)
     def main(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
-        with pl.manual_scope():
-            a, tid = pl.spmd_submit(self.stage, a, core_num=1)
-            with pl.spmd(2, deps=[tid]):  # no `as tid` — deps= is not legal here
-                i = pl.tile.get_block_idx()
-                off = i * 8
-                t = pl.load(a, [off, 0], [8, 16])
-                pl.store(pl.tile.add(t, t), [off, 0], a)
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="seed") as tid0:
+            t = pl.load(a, [0, 0], [16, 16])
+            pl.store(t, [0, 0], a)
+        with pl.spmd(2, deps=[tid0]):  # no `as tid` — still legal; the outliner synthesises the TaskId
+            i = pl.tile.get_block_idx()
+            off = i * 8
+            t = pl.load(a, [off, 0], [8, 16])
+            pl.store(pl.tile.add(t, t), [off, 0], a)
         return a
 
 
@@ -179,21 +178,49 @@ class _ClusterNestedAsTid:
         return a
 
 
-def test_for_form_deps_rejected():
-    """The for-form captures no TaskId, so ``deps=`` has nowhere to hang its
-    edges — rejected by keyword presence (``deps=[]`` included), mirroring the
-    parser's ``allow_deps=False`` (pre-fix: silently accepted and dropped)."""
+def test_for_form_deps():
+    """``for i in pl.spmd(n, deps=[tid])`` lowers the edges onto the Spmd
+    scope (``manual_dep_edges``) exactly as the parser's for-form does — the
+    outliner synthesises the uncaptured TaskId Var. Corpus shape:
+    ``gate.py``'s ``x_norm_quant`` block."""
 
-    with pytest.raises(TypeError, match="pl.spmd\\(\\) does not accept 'deps=' here"):
-        trace_program(_ForFormDeps)
+    program_conformance(_ForFormDeps, trace_program)
 
 
-def test_plain_with_form_deps_rejected():
-    """``deps=`` is legal only on the ``as tid`` capture form (pre-fix: the
-    tracer threaded ``manual_dep_edges`` where the parser rejects)."""
+def test_plain_with_form_deps():
+    """``with pl.spmd(n, deps=[tid])`` without ``as tid`` — the plain form
+    carries the edges like the parser (pre-fix: a tracing-only rejection
+    where the parser accepts). Corpus shape: ``expert_routed.py``'s
+    exp_gate_mm / exp_up_mm / exp_w2_mm scopes."""
 
-    with pytest.raises(TypeError, match="pl.spmd\\(\\) does not accept 'deps=' here"):
-        trace_program(_PlainWithFormDeps)
+    program_conformance(_PlainWithFormDeps, trace_program)
+
+
+class _ClusterNestedDeps:
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="seed") as tid0:
+            t = pl.load(a, [0, 0], [16, 16])
+            pl.store(t, [0, 0], a)
+        with pl.cluster():
+            with pl.spmd(2, deps=[tid0]):
+                i = pl.tile.get_block_idx()
+                off = i * 8
+                t = pl.load(a, [off, 0], [8, 16])
+                pl.store(pl.tile.add(t, t), [off, 0], a)
+        return a
+
+
+def test_cluster_nested_deps_rejected():
+    """``deps=`` inside ``pl.cluster()``: the never-produces-a-Submit
+    reasoning, mirroring the parser's guard (which reports ``deps=[...]``
+    first of the three Submit-only kwargs)."""
+
+    with pytest.raises(
+        TypeError,
+        match="`pl.spmd\\(\\.\\.\\., deps=\\[\\.\\.\\.\\]\\)` cannot be nested inside `pl.cluster\\(\\)`",
+    ):
+        trace_program(_ClusterNestedDeps)
 
 
 def test_cluster_nested_submit_only_kwargs_rejected():
@@ -240,3 +267,25 @@ def _spmd_attrs(fn: ir.Function) -> list:
     for s in fn.body or []:
         walk(s)
     return found
+
+
+class _SpmdSubmitLiteralCoreNum:
+    @pl.function
+    def stage(self, x: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
+        return pl.add(x, x)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, a: pl.Tensor[[16, 16], pl.FP32]) -> pl.Tensor[[16, 16], pl.FP32]:
+        with pl.manual_scope():
+            a, tid = pl.spmd_submit(self.stage, a, core_num=1)
+            del tid
+        return a
+
+
+def test_spmd_submit_literal_core_num_dtype():
+    """KNOWN GAP (found by the deps anchors' first draft): a literal
+    ``core_num=1`` types as ``int32`` under tracing but ``index`` under the
+    parser. Tracked in ``_migration_xfail.txt``; the deps anchors above use a
+    ``pl.at`` producer so the deps surface stays gated independently."""
+
+    program_conformance(_SpmdSubmitLiteralCoreNum, trace_program)

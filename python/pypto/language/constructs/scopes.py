@@ -1010,31 +1010,21 @@ class spmd:
             attrs.append(("predicate", self.predicate.unwrap()))
         return attrs
 
-    def _reject_deps_without_capture(self) -> None:
-        """Reject ``deps=`` on a form that captures no TaskId (both call sites).
+    def _reject_submit_only_kwargs_in_cluster(self, builder: IRBuilder, dep_edges: list[_ir.Var]) -> None:
+        """Reject Submit-only ``pl.spmd()`` kwargs on a cluster-nested scope (both forms).
 
-        Mirrors the parser's ``allow_deps=False`` path: gated by keyword
-        presence, not the resolved list — ``deps=[]`` / ``deps=[None]`` are
-        rejected too (a truthiness check would silently accept them)."""
-        raise TypeError(
-            "pl.spmd() does not accept 'deps=' here — use `with pl.spmd(n, "
-            "deps=[...]) as tid:` (the with-form) to declare explicit TaskId "
-            "deps, or `out, tid = pl.spmd_submit(..., deps=[...])` for the "
-            "single-call form."
-        )
-
-    def _reject_submit_only_kwargs_in_cluster(self, builder: IRBuilder) -> None:
-        """Reject Submit-only kwargs on a cluster-nested ``pl.spmd`` (both forms).
-
-        Mirrors the parser's ``_reject_spmd_submit_only_kwargs_in_cluster``:
-        a cluster-nested pl.spmd is unwrapped into the Group function by
-        ``OutlineClusterScopes`` and never lowers to a ``Submit``, so the
-        kwargs would be silently lost. Without the trace-time guard the attrs
-        reach the pass pipeline and fail there as an internal error
-        (``UnwrapNestedSpmd`` re-asserts) — late and far less diagnosable."""
+        Mirrors the parser's ``_reject_spmd_submit_only_kwargs_in_cluster``
+        (``deps=`` first, the parser's report order): a cluster-nested pl.spmd
+        is unwrapped into the Group function by ``OutlineClusterScopes`` and
+        never lowers to a ``Submit``, so any of the three kwargs would be
+        silently lost. Without the trace-time guard the attrs reach the pass
+        pipeline and fail there as an internal error (``UnwrapNestedSpmd``
+        re-asserts) — late and far less diagnosable."""
         if not builder.is_inside_scope(_ir.ScopeKind.Cluster):
             return
-        if self.allow_early_resolve:
+        if dep_edges:
+            kwarg, lost = "deps=[...]", "the dependency edges"
+        elif self.allow_early_resolve:
             kwarg, lost = "allow_early_resolve=True", "the early-dispatch hint"
         elif self.predicate is not None:
             kwarg, lost = "predicate=(...)", "the dispatch predicate"
@@ -1071,14 +1061,14 @@ class spmd:
         ``task_id_var``, ``allow_early_resolve``, and ``predicate``."""
         split_mode, split_slot_num = _parse_spmd_optimizations(self.optimizations)
         builder = ctx.builder
-        # Form-surface discipline, mirroring the parser: ``deps=`` is legal only
-        # on the ``as tid`` capture form (gated by keyword presence, not the
-        # resolved list — ``deps=[]`` / ``deps=[None]`` are rejected too), the
-        # Submit-only kwargs are rejected inside ``pl.cluster()``, and so is
+        # Form-surface discipline, mirroring the parser: ``deps=`` is accepted
+        # on every form — an uncaptured scope still lowers to a Submit, the
+        # Spmd outliner synthesising the unused TaskId Var exactly as
+        # ``pl.at(..., deps=[...])`` does — while the Submit-only kwargs
+        # (``deps=`` included) are rejected inside ``pl.cluster()``, and so is
         # ``as tid`` itself (nothing cluster-nested lowers to a Submit).
-        if self.deps is not None and as_name is None:
-            self._reject_deps_without_capture()
-        self._reject_submit_only_kwargs_in_cluster(builder)
+        dep_edges = _lower_scope_deps(self.deps, "pl.spmd", builder) if self.deps else []
+        self._reject_submit_only_kwargs_in_cluster(builder, dep_edges)
         if as_name and builder.is_inside_scope(_ir.ScopeKind.Cluster):
             raise TypeError(
                 "`with pl.spmd(...) as tid:` cannot capture a TaskId when nested "
@@ -1088,10 +1078,8 @@ class spmd:
                 "dispatch TaskId."
             )
         scope_attrs: list[tuple[str, Any]] = []
-        if self.deps:
-            edges = _lower_scope_deps(self.deps, "pl.spmd", builder)
-            if edges:
-                scope_attrs.append(("manual_dep_edges", edges))
+        if dep_edges:
+            scope_attrs.append(("manual_dep_edges", dep_edges))
         as_binding = None
         if as_name:
             # the TaskId-capture channel (mirrors AtContext.__trace_enter__ /
@@ -1271,12 +1259,13 @@ class spmd:
         split_mode, split_slot_num = _parse_spmd_optimizations(self.optimizations)
         from pypto.language.op import tile_ops as _tile_ops  # noqa: PLC0415 - avoid the op-module cycle
 
-        # The for-form's mirror of the parser's ``allow_deps=False``: the loop
-        # form captures no TaskId, so ``deps=`` has nowhere to hang its edges.
+        # The for-form captures no TaskId, but ``deps=`` still lowers: the
+        # edges ride the Spmd scope's ``manual_dep_edges`` and the outliner
+        # synthesises the uncaptured TaskId Var — the parser's for-form
+        # contract (``_build_spmd_scope_attrs`` with no ``task_id_var``).
         # The cluster guard mirrors the with-form's.
-        if self.deps is not None:
-            self._reject_deps_without_capture()
-        self._reject_submit_only_kwargs_in_cluster(builder)
+        dep_edges = _lower_scope_deps(self.deps, "pl.spmd", builder) if self.deps else []
+        self._reject_submit_only_kwargs_in_cluster(builder, dep_edges)
         spmd_name_hint, incore_name_hint = _split_spmd_for_loop_name_hints(self.name_hint)
         incore_attrs: list[tuple[str, Any]] | None = None
         if split_slot_num is not None:
@@ -1284,12 +1273,18 @@ class spmd:
         incore_attrs = _merge_sticky_dump_vars(incore_attrs, sticky_dump_vars or [])
         loop_var = builder.var(name, _ir.ScalarType(DataType.INDEX), _ir.Span.unknown())
         block_idx = _tile_ops.get_block_idx().unwrap()
+        # Canonical attr order (``_build_spmd_scope_attrs``): manual_dep_edges,
+        # then the Submit-only kwargs — no ``task_id_var`` (the for-form
+        # captures none).
+        scope_attrs = self._submit_only_scope_attrs()
+        if dep_edges:
+            scope_attrs = [("manual_dep_edges", dep_edges), *scope_attrs]
         builder.begin_scope(
             _ir.ScopeKind.Spmd,
             core_num=self.core_num,
             sync_start=self.sync_start,
             name_hint=spmd_name_hint,
-            attrs=self._submit_only_scope_attrs() or None,
+            attrs=scope_attrs or None,
         )
         self._carrier_split = split_mode
         self._carrier_attrs = incore_attrs
