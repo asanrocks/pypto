@@ -54,6 +54,18 @@ code. AGENTS.md points here. Evidence anchors are task ids
   `check_headers` fails on a few `python/pypto` files with license-wording
   drift — all pre-existing. Compare your failure against a run on the
   untouched tree before treating it as yours.
+- **A/B the quarantined specializer to separate port defects from
+  upstream drift.** When a migrated corpus kernel fails numerically, the
+  question "is this the tracing port or the compiler?" is answered in
+  one run: re-collect the same kernel through the quarantined AST
+  runtime (`pl.jit = pl.jit_specializer` before importing the kernel
+  module) and compare. Same failure under both frontends = upstream
+  compiler/toolchain drift (file it separately; do not bundle it into
+  the port) — this is how the `v4_pro` `gate.py` `quant_mx` a5sim
+  mismatch was proven pre-existing, down to the identical
+  error_count/total in the ratio_allclose report (2026-09-13). Divergent
+  behavior = a tracing-port defect; minimize it into a repro pin
+  (`tests/ut/jit/test_corpus_gaps.py` tradition).
 
 ## Debugging heuristics
 
