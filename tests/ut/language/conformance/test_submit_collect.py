@@ -1135,21 +1135,93 @@ class SubmitMultiOutputSingleTarget:
         return x
 
 
-def test_multi_output_single_result_target_is_tracing_accepted() -> None:
-    """**F32** — a multi-output submit unfolded into one result target is
-    accepted by the tracing lane and the result binding is silently dropped.
+class SubmitMultiOutputTwoStepUnpack:
+    """The same single result target, *consumed* by a second-step unpack.
 
-    The parser's `_parse_submit_assignment` validates the result-target arity
-    against the callee's return arity (`pl.submit(...) unpacks 1 result
-    value(s) but kernel 'multi' returns 2`); the tracing lane's
-    `_SubmitResult` view happily routes the nested outputs view into a single
-    target, and no `out` binding reaches the traced body (the printed text has
-    only the shared temp and `tid`)."""
+    This is the superset spelling the parser's one-shot surface cannot
+    express: the tracing lane's `out` is `_SubmitResult`'s nested outputs
+    view, so the caller may name it and unpack it in a second statement
+    (F32's R2 verdict, witnessed below)."""
 
-    new = trace_program(SubmitMultiOutputSingleTarget)["main"]
+    @pl.function
+    def multi(
+        self, x: pl.Tensor[[16], pl.INT32]
+    ) -> tuple[pl.Tensor[[16], pl.INT32], pl.Tensor[[16], pl.INT32]]:
+        return pl.add(x, x), pl.sub(x, x)
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def main(self, x: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
+        out, tid = pl.submit(self.multi, x)
+        a, b = out
+        return pl.add(a, b)
+
+
+def test_multi_output_single_result_target_is_r2_lenient() -> None:
+    """**F32 — accepted divergence under R2 (tracing is a superset); no fix.**
+
+    ``out, tid = pl.submit(self.multi, x)`` binds the single result target to
+    ``_SubmitResult``'s *nested outputs view* — the same Python tuple boundary
+    the ergonomic ``(a, b), tid = pl.submit(...)`` target iterates — not to a
+    dropped IR value: the two-target unpack consumes the view, so only the
+    shared ``_submit_1`` temp and the TaskId projection reach the body. The
+    parser's ``_parse_submit_assignment`` validates the result-target count
+    against the callee's return arity and rejects the spelling
+    (``pl.submit(...) unpacks 1 result value(s) but kernel 'multi' returns 2``),
+    so there is no shared spelling: the tracing lane accepts *more*, never
+    less.
+
+    That extra acceptance is R2's legalised superset, not a silent drop. The
+    view composes into a second-step unpack of the callee's results (the
+    witness below), while every other use is loud at trace time
+    (``pl.add(out, x)`` names ``_SubmitOutputs`` in an
+    ``InvalidOperationError``; forwarding it to another ``pl.submit`` is the
+    staged-operand ``TypeError``); the emitted IR keeps the Submit, all of its
+    results, and the TaskId, and it print → reparses. Tightening the tracing
+    lane to the parser's arity rule would delete the two-step unpack for a
+    parity goal R2 does not create (``docs/fix-construct-parity.md`` §4:
+    *'tracing may be a superset'*), so the assertions stay as the
+    accepted-divergence witness — do not tighten a lane to make this test
+    disappear."""
+
+    traced = trace_program(SubmitMultiOutputSingleTarget)
+    new = traced["main"]
+    # The discarded name owns no IR binding, and nothing else is missing:
+    # the whole body is the shared temp plus `tid`.
     assert "out" not in _bound_names(new)
+    assert _bound_names(new) == ["_submit_1", "tid"]
+    # The accepted shape has a printed form and re-parses (no round-trip break).
+    ir.assert_structural_equal(pl.parse(str(traced)), traced, enable_auto_mapping=True)
     with pytest.raises(ParserError, match="unpacks 1 result value"):
         program_parser(SubmitMultiOutputSingleTarget)
+
+
+def test_multi_output_result_view_composes_into_a_two_step_unpack() -> None:
+    """The R2 capability behind the single-result-target leniency (F32).
+
+    The single result target is ``_SubmitResult``'s nested outputs view, so a
+    caller may name it and unpack it afterwards: the second step binds the
+    callee's two results off the shared Submit — statements the parser cannot
+    produce, because its surface demands the one-shot ``(a, b), tid = ...``
+    target (the same arity rule the witness above pins). That is why F32's
+    acceptance is a superset rather than a dropped binding; the traced IR is
+    print → reparse stable."""
+
+    traced = trace_program(SubmitMultiOutputTwoStepUnpack)
+    new = traced["main"]
+    assert _bound_names(new) == ["_submit_1", "tid", "a", "b"]
+    lets = {s.var.name_hint: s for s in _body_stmts(new) if isinstance(s, ir.AssignStmt)}
+    for name, index in (("a", 0), ("b", 1)):
+        projection = lets[name].value
+        assert isinstance(projection, ir.TupleGetItemExpr)
+        assert projection.index == index
+        base = projection.tuple
+        assert isinstance(base, ir.Var) and base.name_hint == "_submit_1"
+    # The Submit still carries every result plus the TaskId.
+    submit_type = _first_submit(new).type
+    assert isinstance(submit_type, ir.TupleType) and len(submit_type.types) == 3
+    ir.assert_structural_equal(pl.parse(str(traced)), traced, enable_auto_mapping=True)
+    with pytest.raises(ParserError, match="unpacks 1 result value"):
+        program_parser(SubmitMultiOutputTwoStepUnpack)
 
 
 class SubmitDeviceNonOrchestrator:
