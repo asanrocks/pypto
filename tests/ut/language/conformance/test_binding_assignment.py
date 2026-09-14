@@ -249,7 +249,11 @@ def test_typechange_rebind_in_loop_shared_free_var():
     ``a_2``; ``store(a_2)`` after the loop). The post-loop read therefore
     names a loop-body-local Var; ``ConvertToSSA``'s post verification rejects
     it (``SSAVerify: 'a' used outside its defining scope`` and
-    ``UseAfterDefCheck: 'a' used before definition``). The same source in a
+    ``UseAfterDefCheck: 'a' used before definition``) — except where the
+    pre-loop binding exists under the same name with a different dtype, in
+    which case the rejection is the named carry-dtype diagnostic
+    (``loop-carry … rebinds as``, ConvertToSSA 2026-09-14: the corpus
+    INT32-init/INDEX-carry accumulator shape). The same source in a
     straight line canonicalizes fine, and a *same-type* rebind in the loop
     canonicalizes fine (``test_rebind_in_for_anchor``) — the hole is the
     fresh-``let`` path of the §7 relaxed-reassignment rule entering a
@@ -261,7 +265,10 @@ def test_typechange_rebind_in_loop_shared_free_var():
     it identically."""
     conformance(k_typechange_rebind_in_loop, build)  # raw: both lanes identical
     for build_fn in (build, function_parser):
-        with pytest.raises(Exception, match="used outside its defining scope|used before definition"):
+        with pytest.raises(
+            Exception,
+            match="used outside its defining scope|used before definition|loop-carry 'a' rebinds as",
+        ):
             canonicalize(build_fn(k_typechange_rebind_in_loop))
 
 

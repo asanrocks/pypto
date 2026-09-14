@@ -607,6 +607,21 @@ class SSAConverter {
       auto type = SubstType(type_it->second);
       auto init = FindInitValue(type, before);
       if (!init) {
+        // The type-exact carry's loud case (P3): the variable HAS a pre-loop
+        // binding, but its dtype differs from the rebind's. The placeholder
+        // fallback below would defer the failure to the SSA verifier as an
+        // opaque "used outside its defining scope" scope error naming
+        // neither the conflict nor the site — name it here instead.
+        for (const auto& [pre_key, pre_val] : before) {
+          if (pre_key->name_hint_ != key->name_hint_) continue;
+          CHECK_SPAN(false, key->span_)
+              << "ConvertToSSA: loop-carry '" << key->name_hint_ << "' rebinds as "
+              << CarryTypeDesc(type) << " inside the loop, but its pre-loop initialization has type "
+              << CarryTypeDesc(pre_val->GetType())
+              << " — the carry derivation is type-exact. Initialize the accumulator with the "
+                 "carried dtype (e.g. pl.const(0, <carried dtype>)) or make the rebind's operator "
+                 "produce the initialized dtype.";
+        }
         // Last resort: create a placeholder using any variable with matching type
         // This covers zero-trip loop cases
         init = std::make_shared<Var>(key->name_hint_, type, op->span_);
@@ -753,7 +768,21 @@ class SSAConverter {
       if (type_it == tc.types.end()) continue;
       auto type = SubstType(type_it->second);
       auto init = FindInitValue(type, before);
-      if (!init) init = std::make_shared<Var>(key->name_hint_, type, op->span_);
+      if (!init) {
+        // Same loud case as the for-loop handler: name the dtype conflict
+        // instead of deferring to the SSA verifier's opaque scope error.
+        for (const auto& [pre_key, pre_val] : before) {
+          if (pre_key->name_hint_ != key->name_hint_) continue;
+          CHECK_SPAN(false, key->span_)
+              << "ConvertToSSA: loop-carry '" << key->name_hint_ << "' rebinds as "
+              << CarryTypeDesc(type) << " inside the loop, but its pre-loop initialization has type "
+              << CarryTypeDesc(pre_val->GetType())
+              << " — the carry derivation is type-exact. Initialize the accumulator with the "
+                 "carried dtype (e.g. pl.const(0, <carried dtype>)) or make the rebind's operator "
+                 "produce the initialized dtype.";
+        }
+        init = std::make_shared<Var>(key->name_hint_, type, op->span_);
+      }
       int iv = NextVersion(key);
       auto new_ia = std::make_shared<IterArg>(BuildAutoNamedVersion(key->name_hint_, "iter", iv), type, init,
                                               op->span_);
@@ -1092,6 +1121,13 @@ class SSAConverter {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────
+
+  static std::string CarryTypeDesc(const TypePtr& type) {
+    if (auto scalar = std::dynamic_pointer_cast<const ScalarType>(type)) {
+      return "Scalar[" + DataTypeToString(scalar->dtype_) + "]";
+    }
+    return type->TypeName();
+  }
 
   VarPtr FindInitValue(const TypePtr& type, const std::unordered_map<const Var*, VarPtr>& pre) {
     // Prefer Out/InOut parameter with matching type

@@ -774,6 +774,48 @@ class TestInlineSpliceTypeClosure:
         assert isinstance(prog, ir.Program)
 
 
+class TestCarryInitDtypeConflict:
+    """A loop-carry whose rebind dtype differs from its pre-loop init is a
+    loud, named error — not a def-less placeholder that the SSA verifier then
+    reports as an opaque ``used outside its defining scope`` scope violation.
+
+    Closed 2026-09-14 from the pypto-lib census (dspark ``decode_indexer`` /
+    ``decode_csa``): ``max_cache_len = pl.const(0, pl.INT32)`` accumulated
+    with ``pl.read(i32_tensor, [i]) // n``, and floordiv promotes its operand
+    to INDEX, so the escaping carry's type (INDEX) never matched the init's
+    (INT32). The message must name the variable, both dtypes, and the init
+    site — the fix is a kernel-side dtype alignment (``pl.const(0,
+    pl.INDEX)``), never an implicit promotion."""
+
+    def test_int32_init_index_rebind_is_named(self):
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        @pl.jit
+        def entry(kv: pl.Tensor[[8], pl.INT32]) -> pl.Scalar:
+            m = pl.const(0, pl.INT32)
+            for b in pl.range(4):
+                x = pl.read(kv, [b]) // 4  # INDEX: floordiv promotes the operand
+                m = pl.max(m, x)
+            return m
+
+        with pytest.raises(ValueError, match="loop-carry 'm' rebinds as Scalar\[INDEX\].*Scalar\[INT32\]"):
+            entry.compile_for_test(torch.zeros(8, dtype=torch.int32))
+
+    def test_matching_init_dtype_still_compiles(self):
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        @pl.jit
+        def entry(kv: pl.Tensor[[8], pl.INT32]) -> pl.Scalar:
+            m = pl.const(0, pl.INDEX)
+            for b in pl.range(4):
+                x = pl.read(kv, [b]) // 4
+                m = pl.max(m, x)
+            return m
+
+        prog = entry.compile_for_test(torch.zeros(8, dtype=torch.int32))
+        assert isinstance(prog, ir.Program)
+
+
 class TestSpmdDepsWithoutCapture:
     """``deps=`` on the uncaptured ``pl.spmd`` forms — closed 2026-09-14.
 

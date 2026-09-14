@@ -155,6 +155,16 @@ reason.
 
 Booleans follow the same spelling: `flag = pl.const(False, pl.BOOL)`.
 
+The init's **dtype must match the carried rebind's** — a rebind whose
+operator produces a different dtype is a fresh definition, not a carry
+(the pre-loop init is then read only by the representative iteration,
+which is exactly the dropped-carry failure `pl.const` exists to close).
+`ConvertToSSA` names the conflict: `loop-carry 'acc' rebinds as
+Scalar[INDEX] inside the loop, but its pre-loop initialization has type
+Scalar[INT32]`. The common corpus trigger is floordiv — `pl.read(x, [i])
+// n` promotes its operand to `INDEX` — so an accumulator fed by it
+initializes as `pl.const(0, pl.INDEX)`, not `INT32`.
+
 ### 4.2 Loop carries: derive, do not declare
 
 `pl.range` (and `pl.parallel`, `pl.pipeline`) no longer takes
