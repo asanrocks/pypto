@@ -329,12 +329,29 @@ world check raises at both, but the two lanes take different spellings:
 
 - at a **host call** (a fixture or driver dispatching the jit kernel):
   `pl.runtime(value, dtype)`, or mark the scalar runtime in the harness
-  spec;
+  spec — the golden-harness spelling is
+  `ScalarSpec(name, dtype, value, compile_runtime=True)`. Marking *any*
+  scalar switches the compile to the annotation-driven signature path:
+  every tensor parameter then needs a complete
+  `pl.Tensor[[shape...], dtype]` annotation. A driver that deliberately
+  keeps bare `pl.Tensor` params so per-case shapes bridge from the torch
+  arguments cannot take this path — restructure its wrapper (full
+  annotations with `pl.dynamic` extents) or bake the scalar instead;
 - **inside a trace** (a kernel calling another kernel): pass a staged
   value. A trace-time constant is spelled `pl.const(value, dtype)` — a
   staged constant flowing into the runtime-scalar slot. `pl.runtime` is
   *not* valid here; it raises
   `RuntimeError: Cannot unwrap annotation-only Scalar`.
+
+**The argument's dtype is the truth, too.** A `pl.Scalar[pl.INT32]`
+parameter does not retype its argument: a staged value of another dtype
+keeps its own. The corpus shape is an INDEX-typed loop product —
+`layer = order * 2 + pl.const(2, pl.INT32)` promotes to INDEX because the
+loop variable dominates — flowing into an INT32 parameter; it stays
+INDEX, and the first dtype-checked consumer (`tensor.write` into an
+INT32 tensor) fails loudly. The specializer read the annotation and
+coerced; tracing reads the value. Cast at the source of the wrongly-typed
+value (`layer = pl.cast(order * 2 + 2, pl.INT32)`), not at each consumer.
 
 ### 5.2 Directions
 
@@ -362,6 +379,10 @@ fields forward to `ir.compile`, runtime fields to the compiled program).
 In-trace calls stay parser-aligned and reject it. `@pl.jit.extern` traces
 a single-core stub as a header-only AIC/AIV function and a `mixed` stub
 as an AIC + AIV member pair.
+
+Harness and tooling code that introspected the specializer's private
+`fn._func` (signature scans in spec builders) should read `fn.kernel` —
+the original Python function — under the tracing jit.
 
 Inline callees currently trace as sub-kernels and the backend inlining
 pass splices them. `@pl.expand` is the additive tracing-native
