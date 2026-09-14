@@ -638,6 +638,7 @@ __all__ = [
     "_to_int32_scalar",
     "_to_make_tuple",
     "derived_return_types",
+    "first_return_value_types",
     "has_partial_valid_region",
     "resolve_cast_mode",
     "resolve_saturation_deviation",
@@ -733,9 +734,9 @@ def derived_return_types(fn: "_ir.Function") -> list["_ir.Type"]:
     * Paths disagree (``return_value_types`` yields an UnknownType) → no
       pin. A signature carrying UnknownType would type every caller query
       as Unknown — and a Submit's ``Tuple[<ret>, TASK_ID]`` built from it
-      is exactly the silently-wrong state. The parser's own derivation
-      (``_derive_return_types_from_body``) keeps ``[]`` for the same
-      reason.
+      is exactly the silently-wrong state. The parser's call-typing
+      fallback (``first_return_value_types`` below) keeps ``[]`` for the
+      same reason.
     * Any recovered type is inexpressible (a body-local extent Var) → no
       pin for the *whole* function. Pinning the expressible subset of a
       multi-return would change the signature's arity — a stronger lie
@@ -748,3 +749,39 @@ def derived_return_types(fn: "_ir.Function") -> list["_ir.Type"]:
     if not all(signature_expressible(t, fn) for t in actual):
         return []
     return actual
+
+
+class _FirstReturnTypeCollector(_ir.IRVisitor):
+    """Capture the value types of the first ``return <values>`` in a body."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.types: list[_ir.Type] | None = None
+
+    def visit_return_stmt(self, op: _ir.ReturnStmt) -> None:
+        if self.types is None and op.value:
+            self.types = [v.type for v in op.value]
+        super().visit_return_stmt(op)
+
+
+def first_return_value_types(fn: "_ir.Function") -> list["_ir.Type"]:
+    """Effective return types derived from a function body's first return.
+
+    The call-typing fallback for a callee that declared no ``->``: the
+    function signature stays empty (a body-local extent cannot be spelled
+    there, and the printed round-trip is unaffected), while a *call* recovers
+    a concrete result type — the parser's ``_effective_return_types`` rule,
+    shared here so the two frontends cannot drift. Recording only the first
+    value-bearing return is sufficient: a function's returns are
+    type-consistent. ``[]`` when the body has no value-bearing return or any
+    recovered type is ``UnknownType`` — nothing to recover, and the call
+    stays untyped exactly as before.
+    """
+    if fn.body is None:
+        return []
+    collector = _FirstReturnTypeCollector()
+    collector.visit_stmt(fn.body)
+    types = collector.types
+    if not types or any(isinstance(t, _ir.UnknownType) for t in types):
+        return []
+    return types

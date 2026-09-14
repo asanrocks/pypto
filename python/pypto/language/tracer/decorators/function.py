@@ -36,6 +36,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from pypto.ir.utils import first_return_value_types
 from pypto.language.ambient import reset_active_frame, set_active_frame
 from pypto.language.diagnostics import ParserSyntaxError, ParserTypeError
 from pypto.language.entrance.annotation import capture_caller_names, source_span_for_function
@@ -493,6 +494,16 @@ def trace_program(cls: type, *, strict_ssa: bool = False) -> ir.Program:
             marker.implicit_returns_pinned = bool(derived) or not return_value_types(fn)
             if derived:
                 marker.return_types = list(derived)
+            elif fn.body is not None:
+                # The signature pin declined (a body-local extent the printed
+                # ``->`` cannot spell, or disagreeing return paths), but a
+                # *call* still needs the callee's result shape — a caller's
+                # unpack must not degrade to an untyped Scalar. Mirror the
+                # parser's ``_effective_return_types``: type the call from
+                # the body's first return while the signature stays empty
+                # (the printed round-trip is unaffected; the AST keeps
+                # ``return_types=[]`` for the same callee).
+                marker.body_derived_return_types = first_return_value_types(fn)
         _check_declared_return(fn, marker)
         functions.append(fn)
     all_functions = functions + list(external_functions.values())

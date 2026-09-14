@@ -176,6 +176,12 @@ class Marker:
         # the declared set (the AST's ``as_submit`` convention — its tuple
         # arity is governed by pl.submit, not the callee's implicit return).
         self.declared_return_types: list[ir.Type] = list(self.return_types)
+        # The call-typing fallback for an annotationless callee (the parser's
+        # ``_effective_return_types`` rule): the body's first-return types,
+        # used ONLY to type the emitted Call — never pinned onto the
+        # signature, whose submit/pin consumers keep reading the declared
+        # set above. ``[]`` for a declared ``->`` or a void/unrecoverable body.
+        self.body_derived_return_types: list[ir.Type] = []
         # Whether the *implicit* return set is final. A class-body Marker
         # starts unpinned (its body has not traced yet — the program decorator
         # pins it in definition order); a declared ``->`` never needs pinning.
@@ -230,10 +236,21 @@ class Marker:
         # would upgrade on reparse, breaking print -> parse). The Function's
         # own signature stays the declaration: nothing is materialized onto it.
         declared_return_types = list(function.return_types)
-        from pypto.ir.utils import derived_return_types, return_value_types  # noqa: PLC0415
+        from pypto.ir.utils import (  # noqa: PLC0415
+            derived_return_types,
+            first_return_value_types,
+            return_value_types,
+        )
 
         self.declared_return_types = declared_return_types
         self.return_types = declared_return_types or derived_return_types(function)
+        # The call-typing fallback (the parser's ``_effective_return_types``
+        # rule): the body's first-return types, unguarded by the signature's
+        # expressibility pin — a multi-return callee whose pin declined (a
+        # body-local extent is unspellable in a printed ``->``) still types
+        # its callers' Call while the signature stays empty.
+        if not declared_return_types:
+            self.body_derived_return_types = first_return_value_types(function)
         # The adaptation pins the return set only when it is a sound fact:
         # declared/derived return types, or a genuinely void body. A body
         # whose return paths disagree or whose types the signature cannot
@@ -354,8 +371,16 @@ class Marker:
 
         # Uniform deduction: read the *declared* signature — the
         # Marker's params + ``->`` return types — never the callee's traced
-        # body. This is what makes the Marker self-sufficient.
-        return_types = ir.deduce_call_return_type(self.params, arg_exprs, self.return_types)
+        # body. This is what makes the Marker self-sufficient. One sanctioned
+        # exception, mirroring the parser's ``_effective_return_types``: an
+        # annotationless callee falls back to the body's first-return types
+        # (recovered once at adaptation, ``body_derived_return_types``) so a
+        # multi-return callee whose derived *signature* pin declined (a
+        # body-local extent is unspellable) still types its Call — the
+        # parser does the same at its call-inference layer.
+        return_types = ir.deduce_call_return_type(
+            self.params, arg_exprs, self.return_types or self.body_derived_return_types
+        )
         return _call_facade(self.gvar, arg_exprs, return_types, attrs=call_attrs)
 
 

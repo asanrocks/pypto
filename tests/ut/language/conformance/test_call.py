@@ -692,3 +692,39 @@ def test_orchestrator_device_dispatch_anchor_raw_equal() -> None:
 
 def test_kernel_call_attrs_anchor_raw_equal() -> None:
     program_conformance(CallMetadataProgram, trace_program)
+
+
+class _InexpressibleMultiReturn:
+    @pl.function
+    def producer(self, x: pl.Tensor[[16], pl.FP32], y: pl.Out[pl.Tensor[[16], pl.FP32]]):
+        with pl.spmd(2, name_hint="work") as tid:
+            b = pl.tile.get_block_idx()
+            pl.store(pl.load(x, [b * 8], [8]), [b * 8], y)
+        n = pl.tensor.dim(x, 0)
+        n2 = n * 2  # computed extent — unspellable in a printed signature
+        aux = pl.create_tensor([n2, 1], dtype=pl.FP32)
+        return aux, tid  # annotationless multi-return with an inexpressible member
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def caller(
+        self, x: pl.Tensor[[16], pl.FP32], y: pl.Out[pl.Tensor[[16], pl.FP32]]
+    ) -> pl.Tensor[[16], pl.FP32]:
+        aux2, tid2 = self.producer(x, y)
+        with pl.at(level=pl.Level.CORE_GROUP, deps=[tid2]):
+            pl.store(pl.load(x, [0], [8]), [8], y)
+        return y
+
+
+def test_annotationless_inexpressible_multi_return_call_anchor():
+    """An annotationless multi-return callee whose derived *signature* pin
+    declines (a body-local extent is unspellable) still types its Call — the
+    caller's unpack must not degrade to an untyped Scalar. The parser has
+    always done this (``_effective_return_types`` types the call from the
+    callee body's first return while the signature stays empty); the tracer
+    now mirrors it through ``Marker.body_derived_return_types`` (corpus
+    shape: ``decode_sparse_attn_swa``'s ``sparse_attn_swa`` →
+    ``sparse_attn_swa_tp1`` 8-tuple handoff, 2026-09-14). Distinct from F34
+    above: that lane's callee body is never traced (a closure-captured plain
+    function), this one's is (a traced program method)."""
+
+    program_conformance(_InexpressibleMultiReturn, trace_program)

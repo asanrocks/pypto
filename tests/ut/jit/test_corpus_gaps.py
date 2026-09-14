@@ -658,6 +658,42 @@ class TestLazyCalleeArrayArg:
         assert "body" in entry.fn.as_python()
 
 
+class TestAnnotationlessInexpressibleMultiReturn:
+    """An annotationless inline callee whose derived *signature* pin declines
+    (a body-local extent — e.g. ``t_dim * const`` — is unspellable in a printed
+    ``->``) still types its callers' Call. Closed 2026-09-14: the jit lanes
+    degraded the call to an untyped Scalar, so the caller's unpack raised
+    ``cannot unpack non-iterable Scalar object`` — 13 corpus files' shape is
+    ``decode_sparse_attn_swa``'s ``sparse_attn_swa`` → ``sparse_attn_swa_tp1``
+    8-tuple handoff (t_blk-computed extents). The parser always typed the call
+    (``_effective_return_types``); the tracer now mirrors it through
+    ``Marker.body_derived_return_types`` while the signature pin keeps its
+    all-or-nothing guard. The program-lane anchor lives in
+    ``test_call.py::test_annotationless_inexpressible_multi_return_call_anchor``."""
+
+    def test_inline_lane_unpack(self):
+        @pl.jit.inline
+        def producer(x: pl.Tensor[[16], pl.FP32], y: pl.Out[pl.Tensor[[16], pl.FP32]]):
+            with pl.spmd(2, name_hint="work") as tid:
+                b = pl.tile.get_block_idx()
+                pl.store(pl.load(x, [b * 8], [8]), [b * 8], y)
+            n = pl.tensor.dim(x, 0)
+            n2 = n * 2  # computed extent — unspellable in a signature
+            aux = pl.create_tensor([n2, 1], dtype=pl.FP32)
+            return aux, tid
+
+        @pl.jit.inline
+        def caller(x: pl.Tensor[[16], pl.FP32], y: pl.Out[pl.Tensor[[16], pl.FP32]]):
+            aux2, tid2 = producer(x, y)
+            with pl.at(level=pl.Level.CORE_GROUP, deps=[tid2]):
+                pl.store(pl.load(x, [0], [8]), [8], y)
+            return y
+
+        # The eager jit lane's decoration result is the specializer envelope;
+        # its traced artifact is ``.fn``.
+        assert isinstance(caller.fn, ir.Function)
+
+
 class TestSpmdDepsWithoutCapture:
     """``deps=`` on the uncaptured ``pl.spmd`` forms — closed 2026-09-14.
 

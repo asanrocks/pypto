@@ -409,43 +409,6 @@ def _normalize_inferred_type_for_annotation(
     )
 
 
-class _FirstReturnTypeCollector(ir.IRVisitor):
-    """Capture the value types of the first ``return <values>`` in a body.
-
-    Used to derive a callee's *effective* return types when it declared no
-    ``-> `` annotation but does ``return <value>``. Recording only the first
-    value-bearing return is sufficient: a function's returns are type-consistent,
-    so any of them yields the same call result type.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.types: list[ir.Type] | None = None
-
-    def visit_return_stmt(self, op: ir.ReturnStmt) -> None:
-        if self.types is None and op.value:
-            self.types = [v.type for v in op.value]
-        super().visit_return_stmt(op)
-
-
-def _derive_return_types_from_body(body: ir.Stmt | None) -> list[ir.Type]:
-    """Effective return types derived from a function body's first return.
-
-    Returns an empty list when *body* is ``None``, has no value-bearing
-    ``return`` (a void function), or the returned values are not all concretely
-    typed. In the last case there is nothing to recover — leaving the result
-    empty keeps the call's type ``UnknownType`` exactly as before.
-    """
-    if body is None:
-        return []
-    collector = _FirstReturnTypeCollector()
-    collector.visit_stmt(body)
-    types = collector.types
-    if not types or any(isinstance(t, ir.UnknownType) for t in types):
-        return []
-    return types
-
-
 @dataclass
 class _AtKwargState:
     """Mutable accumulator used while parsing pl.at() keyword arguments."""
@@ -7925,7 +7888,9 @@ class ASTParser:
             return declared
         cached = self._derived_return_types_cache.get(func)
         if cached is None:
-            cached = _derive_return_types_from_body(func.body)
+            from pypto.ir.utils import first_return_value_types  # noqa: PLC0415
+
+            cached = first_return_value_types(func)
             self._derived_return_types_cache[func] = cached
         return list(cached)
 
