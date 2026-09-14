@@ -703,6 +703,77 @@ class TestAnnotationlessInexpressibleMultiReturn:
         assert isinstance(caller.fn, ir.Function)
 
 
+class TestInlineSpliceTypeClosure:
+    """The inline splice's substitution must be closed over Var *types*.
+
+    Closed 2026-09-14, from the pypto-lib census (7 dspark/mtp files failed
+    ``ConvertToSSA`` with ``Variable '…' used outside its defining scope``).
+    Two leaks, one per mechanism:
+
+    * **Same-splice** — ``CloneInlineBody`` seeds its fresh replacement Vars
+      with the callee's type verbatim (the seed exists before the traversal,
+      the complete substitution table only after), so a replacement Var's type
+      kept referencing the callee's local ``tensor.dim`` def. Fixed in
+      ``DeepClone``: after the traversal, every replacement Var whose type
+      embeds a substituted Var is rebuilt with the remapped type.
+    * **Cross-splice** — a callee traced with a dynamic-extent arg embeds the
+      *caller-trace's* local in its param/loop-carried types (the variant
+      lane), and a caller local typed from an inline callee's return type
+      embeds the *callee's* local. Neither is a substitution key of the splice
+      that meets them, so the renames accumulate in ``SpliceRenames`` and one
+      repair sweep runs after the fixpoint over the kept functions.
+
+    The corpus shape (``prefill_hca``): an Orchestration entry calling an
+    inline callee whose ``tensor.dim``-derived local reaches both a nested
+    inline callee's carried rebinds and the caller's unpacked local. The pin
+    compiles — trace-level assertions cannot see this (the IR only breaks in
+    the pass pipeline)."""
+
+    def test_two_level_chain_completes_the_pipeline(self):
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        n_dyn = pl.dynamic("N_DYN")
+        b_rows = pl.dynamic("B_ROWS_DYN")
+
+        @pl.jit.inline
+        def commit(
+            flat_b: pl.InOut[pl.Tensor[[b_rows, 32], pl.BF16]], x: pl.Tensor[[n_dyn, 32], pl.FP32]
+        ):
+            # Param type minted from the caller's arg (variant lane); the
+            # carried rebind's type embeds the caller-trace's local.
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="commit"):
+                for row in pl.range(4):
+                    v = pl.read(x, [row, 0])
+                    if v > pl.const(0, pl.FP32):
+                        slot = pl.cast(pl.read(x, [row + 1, 0]), pl.INDEX)
+                        if slot >= 0:
+                            tile = pl.cast(pl.tensor.slice(x, [1, 32], [row, 0]), pl.BF16)
+                            flat_b = pl.tensor.assemble(flat_b, tile, [slot, 0])
+            return flat_b
+
+        @pl.jit.inline
+        def producer(x: pl.Tensor[[n_dyn, 32], pl.FP32], y: pl.Out[pl.Tensor[[n_dyn, 32], pl.BF16]]):
+            with pl.spmd(2, name_hint="work") as tid:
+                b = pl.tile.get_block_idx()
+                pl.store(pl.cast(pl.load(x, [b * 32, 0], [32, 32]), pl.BF16), [b * 32, 0], y)
+            d = pl.tensor.dim(y, 0)  # runtime extent, unfolded in Inline bodies
+            flat = pl.reshape(y, [d, 32])
+            flat = commit(flat, x)
+            return flat, tid
+
+        @pl.jit
+        def entry(x: pl.Tensor[[n_dyn, 32], pl.FP32], y: pl.Out[pl.Tensor[[n_dyn, 32], pl.BF16]]):
+            flat, tid = producer(x, y)
+            with pl.at(level=pl.Level.CORE_GROUP, deps=[tid]):
+                pl.store(pl.cast(pl.load(x, [0, 0], [32, 32]), pl.BF16), [32, 0], y)
+            return y
+
+        prog = entry.compile_for_test(
+            torch.zeros(64, 32, dtype=torch.float32), torch.zeros(64, 32, dtype=torch.bfloat16)
+        )
+        assert isinstance(prog, ir.Program)
+
+
 class TestSpmdDepsWithoutCapture:
     """``deps=`` on the uncaptured ``pl.spmd`` forms — closed 2026-09-14.
 

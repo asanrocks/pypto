@@ -63,6 +63,12 @@ class DeepCloneMutator : public IRMutator {
     return result;
   }
 
+  /// The complete substitution table — seeded entries plus every
+  /// definition-site clone the traversal created. The post-traversal type
+  /// closure walks it to repair replacement Vars whose types still reference
+  /// pre-clone Vars.
+  [[nodiscard]] const std::unordered_map<const Var*, ExprPtr>& substitutions() const { return expr_map_; }
+
  protected:
   // Override VisitStmt_ for each statement type with DefField vars.
   // Pre-register fresh copies BEFORE calling base visitor, which handles
@@ -260,11 +266,87 @@ class DeepCloneMutator : public IRMutator {
 
 }  // namespace
 
+namespace {
+
+/// Substitute `var_map` over a type's embedded expressions (shape dims, view
+/// strides/valid shapes, pinned-MemRef slot index). Mirrors
+/// DeepCloneMutator::RemapType's structure, but substitutes through a plain
+/// map lookup so an unchanged type keeps its pointer — the mutator's RemapType
+/// routes the embedded MemRef through a fresh clone and therefore always
+/// returns a new pointer, which is useless for change detection.
+TypePtr RemapTypeViaVarMap(const TypePtr& type, const std::unordered_map<const Var*, ExprPtr>& var_map) {
+  if (!type) return type;
+  if (auto tuple_type = std::dynamic_pointer_cast<const TupleType>(type)) {
+    std::vector<TypePtr> new_types;
+    new_types.reserve(tuple_type->types_.size());
+    bool changed = false;
+    for (const auto& elem : tuple_type->types_) {
+      auto new_elem = RemapTypeViaVarMap(elem, var_map);
+      if (new_elem.get() != elem.get()) {
+        changed = true;
+      }
+      new_types.push_back(std::move(new_elem));
+    }
+    if (!changed) return type;
+    return std::make_shared<TupleType>(std::move(new_types));
+  }
+  return CloneTypeWithMemRefAndRemapExprs(
+      type, GetTypeMemRef(type), [&var_map](const ExprPtr& e) -> ExprPtr {
+        auto var = std::dynamic_pointer_cast<const Var>(e);
+        if (!var) return e;
+        auto it = var_map.find(var.get());
+        if (it == var_map.end()) return e;
+        return it->second;
+      });
+}
+
+}  // namespace
+
 DeepCloneResult DeepClone(const StmtPtr& body, const std::unordered_map<const Var*, ExprPtr>& var_map,
                           bool clone_def_vars) {
   DeepCloneMutator mutator(var_map, clone_def_vars);
   auto cloned = mutator.VisitStmt(body);
-  return {cloned, mutator.GetVarMap()};
+
+  // Close the substitution over replacement-Var types: a seeded replacement
+  // Var is constructed with the original type verbatim (the seed must exist
+  // before the traversal, but the complete substitution table only exists
+  // after it), so its type can still reference pre-clone Vars with no
+  // definition in the cloned body. Repair each such Var by remapping its
+  // type through the table, then substitute the repaired Vars through the
+  // body so defs, uses, and every type reaching them agree. Termination:
+  // a Var referenced from inside a type is an index-domain scalar whose own
+  // type embeds no expressions, so a repaired Var's type can only reference
+  // Vars that are themselves unbroken — no fixpoint is needed.
+  std::unordered_map<const Var*, VarPtr> closure_vars;
+  {
+    const auto& subs = mutator.substitutions();
+    for (const auto& [_key, val] : subs) {
+      auto fresh = std::dynamic_pointer_cast<const Var>(val);
+      if (!fresh) continue;
+      auto fixed = RemapTypeViaVarMap(fresh->GetType(), subs);
+      if (fixed.get() == fresh->GetType().get()) continue;
+      closure_vars.emplace(fresh.get(),
+                           std::make_shared<Var>(fresh->name_hint_, std::move(fixed), fresh->span_));
+    }
+  }
+  if (!closure_vars.empty()) {
+    std::unordered_map<const Var*, ExprPtr> closure;
+    closure.reserve(closure_vars.size());
+    for (const auto& [old, fresh] : closure_vars) {
+      closure.emplace(old, fresh);
+    }
+    DeepCloneMutator repair(closure, /*clone_def_vars=*/false);
+    cloned = repair.VisitStmt(cloned);
+  }
+
+  auto var_map_result = mutator.GetVarMap();
+  for (auto& [_key, val] : var_map_result) {
+    auto it = closure_vars.find(val.get());
+    if (it != closure_vars.end()) {
+      val = it->second;
+    }
+  }
+  return {cloned, var_map_result};
 }
 
 }  // namespace ir

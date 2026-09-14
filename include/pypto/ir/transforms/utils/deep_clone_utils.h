@@ -32,6 +32,14 @@ struct DeepCloneResult {
 /// at every definition site (DefField). All references to those variables within
 /// the subtree are consistently remapped to the fresh copies.
 ///
+/// The substitution is closed over Var *types*: a seeded or auto-cloned Var
+/// whose type embeds expressions (shape dims, views, pinned-MemRef slot
+/// indices) referencing other substituted Vars is rebuilt so its type points
+/// at the substituted expressions. Without the closure, an inline splice's
+/// replacement Vars keep types referencing the callee's (now out-of-scope)
+/// locals — the SSA verifier rejects the spliced body with "used outside its
+/// defining scope".
+///
 /// @param body    Statement subtree to clone
 /// @param var_map Pre-seeded substitutions. Entries map original Var pointers to
 ///               replacement expressions. Supports both Var→Var (function param

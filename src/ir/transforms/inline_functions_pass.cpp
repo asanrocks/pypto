@@ -126,22 +126,26 @@ class DefVarCollector : public IRVisitor {
   // walk defs_ordered (first-encounter order) instead — output stays
   // process-stable.
   std::unordered_set<const Var*> defs;
-  std::vector<const Var*> defs_ordered;
+  // Owning refs in first-encounter order: splice-rename tables must pin their
+  // keys, because a spliced body can be replaced (freeing its Vars) before a
+  // later pass reads the table — a freed key's address can then be reused by
+  // an unrelated live Var (see SpliceRenames).
+  std::vector<VarPtr> defs_owned;
 
   void VisitStmt_(const AssignStmtPtr& op) override {
     if (op->var_ && defs.insert(op->var_.get()).second) {
-      defs_ordered.push_back(op->var_.get());
+      defs_owned.push_back(op->var_);
     }
     IRVisitor::VisitStmt_(op);
   }
 
   void VisitStmt_(const ForStmtPtr& op) override {
     if (op->loop_var_ && defs.insert(op->loop_var_.get()).second) {
-      defs_ordered.push_back(op->loop_var_.get());
+      defs_owned.push_back(op->loop_var_);
     }
     for (const auto& v : op->return_vars_) {
       if (v && defs.insert(v.get()).second) {
-        defs_ordered.push_back(v.get());
+        defs_owned.push_back(v);
       }
     }
     IRVisitor::VisitStmt_(op);
@@ -150,7 +154,7 @@ class DefVarCollector : public IRVisitor {
   void VisitStmt_(const WhileStmtPtr& op) override {
     for (const auto& v : op->return_vars_) {
       if (v && defs.insert(v.get()).second) {
-        defs_ordered.push_back(v.get());
+        defs_owned.push_back(v);
       }
     }
     IRVisitor::VisitStmt_(op);
@@ -159,7 +163,7 @@ class DefVarCollector : public IRVisitor {
   void VisitStmt_(const IfStmtPtr& op) override {
     for (const auto& v : op->return_vars_) {
       if (v && defs.insert(v.get()).second) {
-        defs_ordered.push_back(v.get());
+        defs_owned.push_back(v);
       }
     }
     IRVisitor::VisitStmt_(op);
@@ -264,7 +268,8 @@ struct SplicedInlineBody {
 //      actual, ...)` whenever the actual arg is a Var.
 //   3. Split the cloned body into pre-return statements and the trailing
 //      return value(s); reject any non-trailing return.
-SplicedInlineBody CloneInlineBody(const FunctionPtr& callee, const std::vector<ExprPtr>& args) {
+SplicedInlineBody CloneInlineBody(const FunctionPtr& callee, const std::vector<ExprPtr>& args,
+                                  std::vector<std::pair<VarPtr, VarPtr>>* renames = nullptr) {
   INTERNAL_CHECK_SPAN(callee->params_.size() == args.size(), callee->span_)
       << "Internal error: inline call to '" << callee->name_ << "' has " << args.size()
       << " argument(s) but callee expects " << callee->params_.size()
@@ -285,15 +290,17 @@ SplicedInlineBody CloneInlineBody(const FunctionPtr& callee, const std::vector<E
   //      verbatim; only Vars NOT in the seed receive an auto-cloned copy
   //      with their original name_hint as a safety fallback.
   std::unordered_map<const Var*, ExprPtr> seed;
+  std::vector<VarPtr> owned_keys;  // callee locals seeded below — pinned for the rename table
   for (size_t i = 0; i < callee->params_.size(); ++i) {
     seed[callee->params_[i].get()] = args[i];
   }
   DefVarCollector def_collector;
   def_collector.VisitStmt(callee->body_);
-  for (const Var* v : def_collector.defs_ordered) {
-    if (seed.count(v) > 0) continue;  // param — already seeded with actual arg
+  for (const VarPtr& v : def_collector.defs_owned) {
+    if (seed.count(v.get()) > 0) continue;  // param — already seeded with actual arg
     auto fresh = std::make_shared<Var>(FreshName(v->name_hint_), v->GetType(), v->span_);
-    seed[v] = fresh;
+    seed[v.get()] = fresh;
+    owned_keys.push_back(v);  // pin: the key must outlive the splice (see SpliceRenames)
   }
 
   // 2. Deep-clone the body with substitutions applied. DeepClone visits
@@ -302,7 +309,30 @@ SplicedInlineBody CloneInlineBody(const FunctionPtr& callee, const std::vector<E
   //    is needed. clone_def_vars=true is a safety net: if DefVarCollector
   //    misses a binding kind, DeepClone still produces a fresh Var rather
   //    than leaving the callee's original Var leaking into the caller.
-  auto [renamed_body, _unused] = DeepClone(callee->body_, seed, /*clone_def_vars=*/true);
+  auto [renamed_body, clone_map] = DeepClone(callee->body_, seed, /*clone_def_vars=*/true);
+
+  // Record this splice's Var renames (callee local → fresh `_inlineN`, plus
+  // DeepClone's auto-cloned defs) for the post-fixpoint repair sweep — see
+  // SpliceRenames. Params are included: a reference to a param outside the
+  // callee (a caller local typed from the callee's return type) must resolve
+  // to the call-site arg, and single-site callees make that unambiguous.
+  if (renames != nullptr) {
+    // Param entries are keyed by the callee's param Var (owned by the callee
+    // Function, alive for the whole pass); local entries are keyed by vars
+    // pinned in `owned_keys`. DeepClone's auto-clone memo (clone_map) is
+    // deliberately NOT recorded: its entries include IterArg/MemRef
+    // passthroughs that are value-object clones, not def renames.
+    for (size_t i = 0; i < callee->params_.size(); ++i) {
+      const auto& val = seed.at(callee->params_[i].get());
+      if (auto var = std::dynamic_pointer_cast<const Var>(val)) {
+        renames->emplace_back(callee->params_[i], var);
+      }
+    }
+    for (const auto& v : owned_keys) {
+      auto var = std::dynamic_pointer_cast<const Var>(seed.at(v.get()));
+      renames->push_back({v, var});
+    }
+  }
 
   // 3. Walk renamed_body and separate trailing ReturnStmt from the rest.
   std::vector<StmtPtr> spliced;
@@ -373,8 +403,77 @@ SplicedInlineBody CloneInlineBody(const FunctionPtr& callee, const std::vector<E
 // or a MakeTuple / TupleGetItemExpr over a call), and that cannot become an
 // EvalStmt the way a call-like value can — reject it loudly instead of deleting
 // the nested call with it.
-std::vector<StmtPtr> SpliceInlineCallAsEval(const FunctionPtr& callee, const std::vector<ExprPtr>& args) {
-  auto body = CloneInlineBody(callee, args);
+// Program-wide record of every splice's Var renames, plus the post-fixpoint
+// repair that closes dangling type references over it.
+//
+// A splice renames the callee's Vars (locals to fresh `_inlineN` names, params
+// to call-site args) inside the spliced body — but references that lived
+// OUTSIDE the callee body keep pointing at the callee's originals: a caller
+// local typed from the callee's return type, or a nested callee's trace-minted
+// types (a callee traced with a dynamic-extent arg embeds the caller-trace's
+// local in its param and loop-carried types). The same-splice type closure in
+// DeepClone cannot fix those — the referenced Vars are not substitution keys
+// of the nested splice — so the renames accumulate here and one repair sweep
+// runs after the fixpoint, over the kept functions only: every recorded Var's
+// defining Inline function has been dropped, so any surviving reference is by
+// construction dangling.
+//
+// A callee spliced at multiple call sites renames the same Var to different
+// fresh copies, and a single program-wide mapping cannot disambiguate which
+// site's copy an escaping reference came from. Such keys are marked ambiguous
+// and excluded — their references stay dangling for the SSA verifier to report
+// loudly rather than being silently pointed at the wrong site's copy.
+class SpliceRenames {
+ public:
+  /// Fold the most recent splice's renames (collected in `last_splice` by
+  /// CloneInlineBody) into the program-wide table.
+  void Record() {
+    for (const auto& [key, val] : last_splice) {
+      // Pin every key: a spliced body can be replaced (freeing its Vars)
+      // before the post-fixpoint repair reads the table, and a freed key's
+      // address can be reused by an unrelated live Var — aliasing the repair
+      // into wrong substitutions. Owning refs make address reuse impossible.
+      pinned_.push_back(key);
+      if (ambiguous_.count(key.get()) > 0) continue;
+      auto [it, inserted] = renames_.emplace(key.get(), val);
+      if (!inserted && it->second.get() != val.get()) {
+        renames_.erase(it);
+        ambiguous_.insert(key.get());
+      }
+    }
+    last_splice.clear();
+  }
+
+  [[nodiscard]] bool empty() const { return renames_.empty(); }
+  [[nodiscard]] const std::unordered_map<const Var*, VarPtr>& renames() const { return renames_; }
+
+  /// Scratch list filled by the most recent CloneInlineBody call:
+  /// (callee Var, its replacement) pairs, the key as an owning ref.
+  std::vector<std::pair<VarPtr, VarPtr>> last_splice;
+
+ private:
+  std::unordered_map<const Var*, VarPtr> renames_;
+  std::unordered_set<const Var*> ambiguous_;
+  std::vector<VarPtr> pinned_;
+};
+
+// Substitutes the accumulated splice renames through a function. The base
+// IRMutator's var_remap_ machinery covers statement uses, Var/Call/IterArg
+// types, MemRef fields, and attrs, and resolves rename chains transitively
+// (a Var renamed by two chained splices maps through to the final copy).
+class RenamedVarRepair : public IRMutator {
+ public:
+  explicit RenamedVarRepair(const SpliceRenames& renames) {
+    var_remap_.reserve(renames.renames().size());
+    for (const auto& [key, val] : renames.renames()) {
+      var_remap_.emplace(key, val);
+    }
+  }
+};
+
+std::vector<StmtPtr> SpliceInlineCallAsEval(const FunctionPtr& callee, const std::vector<ExprPtr>& args,
+                                           SpliceRenames* renames) {
+  auto body = CloneInlineBody(callee, args, renames == nullptr ? nullptr : &renames->last_splice);
   for (const auto& value : body.return_values) {
     if (!value) continue;
     if (IsEffectfulCallLike(value)) {
@@ -398,8 +497,9 @@ std::vector<StmtPtr> SpliceInlineCallAsEval(const FunctionPtr& callee, const std
 // if the callee returns multiple values — multi-return goes through
 // SpliceInlineCallAsTupleSub, which avoids the dead `LHS = MakeTuple(...)`.
 std::vector<StmtPtr> SpliceInlineCallAsAssign(const FunctionPtr& callee, const std::vector<ExprPtr>& args,
-                                              const VarPtr& lhs, const Span& call_site_span) {
-  auto body = CloneInlineBody(callee, args);
+                                              const VarPtr& lhs, const Span& call_site_span,
+                                              SpliceRenames* renames) {
+  auto body = CloneInlineBody(callee, args, renames == nullptr ? nullptr : &renames->last_splice);
   INTERNAL_CHECK_SPAN(body.has_return, call_site_span)
       << "Internal error: inline function '" << callee->name_
       << "' is called for its value but has no return statement (parser should reject "
@@ -429,8 +529,9 @@ std::vector<StmtPtr> SpliceInlineCallAsAssign(const FunctionPtr& callee, const s
 // _tuple_tmp[i]`) means every LHS use is a TupleGetItemExpr — substituting
 // makes the LHS unreferenced and the binding effectively dead.
 std::vector<StmtPtr> SpliceInlineCallAsTupleSub(const FunctionPtr& callee, const std::vector<ExprPtr>& args,
-                                                std::vector<ExprPtr>& out_substitution) {
-  auto body = CloneInlineBody(callee, args);
+                                                std::vector<ExprPtr>& out_substitution,
+                                                SpliceRenames* renames) {
+  auto body = CloneInlineBody(callee, args, renames == nullptr ? nullptr : &renames->last_splice);
   INTERNAL_CHECK_SPAN(body.has_return, callee->span_)
       << "Internal error: inline function '" << callee->name_
       << "' is called for its value but has no return statement (parser should reject "
@@ -473,8 +574,8 @@ std::vector<StmtPtr> SpliceInlineCallAsTupleSub(const FunctionPtr& callee, const
 // values directly. Single-return → ReturnStmt({v}); multi-return →
 // ReturnStmt({v0, v1, ...}). No MakeTuple, no temporary.
 std::vector<StmtPtr> SpliceInlineCallAsReturn(const FunctionPtr& callee, const std::vector<ExprPtr>& args,
-                                              const Span& call_site_span) {
-  auto body = CloneInlineBody(callee, args);
+                                              const Span& call_site_span, SpliceRenames* renames) {
+  auto body = CloneInlineBody(callee, args, renames == nullptr ? nullptr : &renames->last_splice);
   INTERNAL_CHECK_SPAN(body.has_return, call_site_span)
       << "Internal error: inline function '" << callee->name_
       << "' is used as a return value but has no return statement (parser should reject "
@@ -618,8 +719,8 @@ class InlineDumpVarTransfer : public IRMutator {
 
 class InlineCallsMutator : public IRMutator {
  public:
-  explicit InlineCallsMutator(const std::unordered_map<std::string, FunctionPtr>& inline_fns)
-      : inline_fns_(inline_fns) {}
+  InlineCallsMutator(const std::unordered_map<std::string, FunctionPtr>& inline_fns, SpliceRenames* renames)
+      : inline_fns_(inline_fns), renames_(renames) {}
 
   bool Changed() const { return changed_; }
 
@@ -703,10 +804,11 @@ class InlineCallsMutator : public IRMutator {
     if (auto call = transform_utils::GetCallFromStmt(stmt)) {
       if (auto callee = LookupInlineCallee(call)) {
         call_dump_vars = call->GetAttr<std::vector<VarPtr>>(kAttrDumpVars);
+        if (renames_ != nullptr) renames_->last_splice.clear();
         if (auto assign = As<AssignStmt>(stmt)) {
-          spliced = SpliceAssignCallSite(callee, call->args_, assign->var_, assign->span_);
+          spliced = SpliceAssignCallSite(callee, call->args_, assign->var_, assign->span_, renames_);
         } else if (auto eval = As<EvalStmt>(stmt)) {
-          spliced = SpliceInlineCallAsEval(callee, call->args_);
+          spliced = SpliceInlineCallAsEval(callee, call->args_, renames_);
         }
       }
     }
@@ -718,10 +820,18 @@ class InlineCallsMutator : public IRMutator {
         if (auto call = As<Call>(ret->value_[0])) {
           if (auto callee = LookupInlineCallee(call)) {
             call_dump_vars = call->GetAttr<std::vector<VarPtr>>(kAttrDumpVars);
-            spliced = SpliceInlineCallAsReturn(callee, call->args_, ret->span_);
+            if (renames_ != nullptr) renames_->last_splice.clear();
+            spliced = SpliceInlineCallAsReturn(callee, call->args_, ret->span_, renames_);
           }
         }
       }
+    }
+    if (spliced.has_value() && renames_ != nullptr) {
+      // Fold this splice's renames into the program-wide table (see
+      // SpliceRenames) before the caller's downstream statements — later
+      // TupleGetItemExpr substitutions and subsequent splices in the same
+      // walk build on the recorded state.
+      renames_->Record();
     }
     // Carry the call-site selective-dump tags onto the spliced scopes — the
     // inline Call node (which held ``kAttrDumpVars``) is about to be destroyed,
@@ -740,14 +850,14 @@ class InlineCallsMutator : public IRMutator {
   // Function::return_types_ here: an annotation such as ``tuple[T, Scalar]``
   // is one TupleType entry even though the IR ReturnStmt has two values.
   std::vector<StmtPtr> SpliceAssignCallSite(const FunctionPtr& callee, const std::vector<ExprPtr>& args,
-                                            const VarPtr& lhs, const Span& span) {
+                                            const VarPtr& lhs, const Span& span, SpliceRenames* renames) {
     if (InlineReturnsTuple(callee)) {
       std::vector<ExprPtr> sub;
-      auto stmts = SpliceInlineCallAsTupleSub(callee, args, sub);
+      auto stmts = SpliceInlineCallAsTupleSub(callee, args, sub, renames);
       tuple_subs_[lhs.get()] = std::move(sub);
       return stmts;
     }
-    return SpliceInlineCallAsAssign(callee, args, lhs, span);
+    return SpliceInlineCallAsAssign(callee, args, lhs, span, renames);
   }
 
   FunctionPtr LookupInlineCallee(const CallPtr& call) const {
@@ -760,6 +870,7 @@ class InlineCallsMutator : public IRMutator {
 
  private:
   const std::unordered_map<std::string, FunctionPtr>& inline_fns_;
+  SpliceRenames* renames_ = nullptr;
   bool changed_ = false;
   // LHS Var → return values, populated by SpliceAssignCallSite for multi-return
   // call sites. Subsequent TupleGetItemExpr uses of the Var are substituted
@@ -839,6 +950,7 @@ Pass InlineFunctions() {
     }
 
     const size_t max_iters = inline_fns.size() + 1;
+    SpliceRenames renames;
     for (size_t iter = 0; iter < max_iters; ++iter) {
       bool any_changed = false;
 
@@ -850,7 +962,7 @@ Pass InlineFunctions() {
       }
 
       for (auto& [name, fn] : current) {
-        InlineCallsMutator mutator(latest_inline);
+        InlineCallsMutator mutator(latest_inline, &renames);
         auto new_body = mutator.VisitStmt(fn->body_);
         if (mutator.Changed()) {
           auto updated = MutableCopy(fn);
@@ -874,6 +986,18 @@ Pass InlineFunctions() {
       const auto& latest = it->second;
       if (latest->func_type_ == FunctionType::Inline) continue;
       kept_functions.push_back(latest);
+    }
+
+    // Close dangling type references over the accumulated splice renames (see
+    // SpliceRenames): every recorded Var's defining Inline function was just
+    // dropped, so any surviving reference in a kept function is dangling. Runs
+    // over signatures too — a kept function's return type may embed an inline
+    // callee's local just as its body's locals do.
+    if (!renames.empty()) {
+      RenamedVarRepair repair(renames);
+      for (auto& fn : kept_functions) {
+        fn = repair.VisitFunction(fn);
+      }
     }
 
     return std::make_shared<Program>(kept_functions, program->name_, program->span_);
