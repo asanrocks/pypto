@@ -125,6 +125,12 @@ def check_file_header(file_path: Path) -> tuple[bool, str]:
 
     actual_lines = content.split("\n")
 
+    # A leading shebang is tolerated: `#!/usr/bin/env python3` must be the
+    # first line for the interpreter to honor it, so executable scripts keep
+    # their shebang above the license header.
+    if actual_lines and actual_lines[0].startswith("#!"):
+        actual_lines = actual_lines[1:]
+
     # Check if file has enough lines
     if len(actual_lines) < len(expected_lines):
         return (
