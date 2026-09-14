@@ -256,7 +256,13 @@ divergences in the construct's logic, recorded here; nothing was edited.
    (`python/bindings/modules/ir.cpp:114`, reached from `RangeIterator.begin`,
    `constructs/loops.py:181`), while the parser raises
    `ParserSyntaxError: attrs keys must be string literals` (`ast_parser.py:2893`).
-   The tracing factory forwards the user's dict unvalidated. Filed as **F11**.
+   The tracing factory forwards the user's dict unvalidated. Filed as **F11**;
+   **State: accepted divergence under R5 — no fix** (the deciding rule is R5,
+   `docs/fix-construct-parity.md` §4: both lanes *reject* the spelling, so the
+   only difference is the diagnostic text — an internal `std::bad_cast` where
+   the parser names the offending key type — and R5 makes error-message text
+   trivial drift; the review's §7 records F11 as the same error-quality class
+   as the acceptance-only leniencies).
 2. **`pl.unroll` bound/step validation is parser-only.** `pl.unroll(n)` with a
    staged bound and `pl.unroll(0, 4, 0)` are accepted by tracing and rejected
    by the parser (`ast_parser.py:2677`, `:2684`). The C++ pass still fails
@@ -284,13 +290,16 @@ divergences in the construct's logic, recorded here; nothing was edited.
   than a construct divergence. Red check: trace any kernel containing
   `for i in pl.range(4, attrs={1: 2}):` (a `/tmp` module run with `uv run
   python`) → `RuntimeError: std::bad_cast`; the parser lane raises
-  `ParserSyntaxError: attrs keys must be string literals`. Owner undecided
-  (needs-decision on the layer): validate the key type in the Python
-  frontend's attr pass-through (`constructs/loops.py`, and the sibling
-  attrs-taking entries) or make `ConvertKwargsDict`
-  (`python/bindings/modules/ir.cpp:114`) raise `TypeError`. Frontend-only
-  fixes are the migration's rule. F-ids continue `docs/review-r10.md` §4's
-  series (last F10).
+  `ParserSyntaxError: attrs keys must be string literals`. **State: accepted
+  divergence under R5 — no fix.** Nothing is accepted here that the other lane
+  rejects, so R2 does not apply; the difference is diagnostic text, which R5
+  classifies as trivial drift (`docs/fix-construct-parity.md` §4). The two
+  candidate owners are the Python attr pass-through (`constructs/loops.py`, and
+  the sibling attrs-taking entries) and `ConvertKwargsDict`
+  (`python/bindings/modules/ir.cpp:114`, a C++/bindings layer the migration
+  must not change); either buys a clearer message for a spelling that already
+  fails loudly, which R5 does not require. No frontend edit. F-ids continue
+  `docs/review-r10.md` §4's series (last F10).
 
 ## 12. R7 verdicts — `break` / `continue`
 
@@ -623,7 +632,12 @@ blocks keep the default: a return inside a staged construct suppresses the
 host exit and both lanes keep collecting (the branch/loop/region anchors
 above). Pins rewritten into the fix's expectation as
 `test_function_level_return_drops_unreachable_tail_by_both_lanes` and
-`test_function_level_double_return_dropped_by_both_lanes`.
+`test_function_level_double_return_dropped_by_both_lanes`. **Retro-R4
+classification (H1):** the old whole-body collection was the round-trip
+reader's sanctioned behaviour (the review called it "defensible and no doc
+decides"), so this is the one B-task that changed *intended* AST-era behaviour
+— the chosen reading is now recorded in `docs/design/01-language.md` §9, next
+to B1's §8 note.
 2. **F16 — an inline callee's multi-value trailing return diverges.** The
 backend splice wires the callee's trailing values into the caller as a
 *multi-value* `ReturnStmt` (the pass's
@@ -938,7 +952,15 @@ red finding is pinned instead.
    `test_scope_mode_is_not_validated_by_tracing` — the traced scope has
    `manual is False` while `function_parser` raises `Expected
    pl.ScopeMode.<name>`, and the printed text fails to re-parse
-   (`requires @pl.function(auto_scope=False)`).
+   (`requires @pl.function(auto_scope=False)`). **State: accepted divergence
+   under R2 — no fix.** The parser's rejection is a check on its own
+   enum-literal surface, not a semantic rule, so a spelling the parser rejects
+   and tracing accepts is exactly the tracing superset R2 legalises
+   (`docs/fix-construct-parity.md` §4: "parser limitations are not parity
+   obligations"); tightening tracing to match would delete the leniency for a
+   parity goal that does not exist. The printed-form instability is the
+   separate printer-coverage sub-question §5 records (reject or teach the
+   printer — round-trip dialect, not parity). No frontend edit.
 3. **F20 — the manual-depth rules are parser-only.** The parser tracks
    `_manual_scope_depth` (`ast_parser.py:4112`/`:4133`) and rejects
    manual-in-manual, and rejects AUTO-inside-MANUAL under
@@ -964,7 +986,13 @@ red finding is pinned instead.
    `cluster` checks nothing, so `pl.graph("has space")` /
    `pl.cluster(name_hint="has space")` reach the IR and the printed form
    fails to re-parse. Red check:
-   `test_scope_name_hint_validation_is_parser_only`.
+   `test_scope_name_hint_validation_is_parser_only`. **State: accepted
+   divergence under R2 — no fix.** `_parse_scope_name_hint` is the parser's
+   own literal-syntax check; a spelling it rejects and tracing accepts is the
+   R2 superset (`docs/fix-construct-parity.md` §4), so tightening tracing
+   would remove capability for a parity goal that does not exist. The
+   printed-form instability is the printer-coverage sub-question §5 records,
+   not parity. No frontend edit.
 5. **F22 — the printer loses the yield assignment LHS inside a manual
    runtime scope.** After `convert_to_ssa`, a loop-carried value updated
    inside a manual scope yields *inside* the scope body (graph/cluster place
@@ -977,7 +1005,9 @@ red finding is pinned instead.
    RoundtripInstrument bypassed (`passes.PassContext([],
    VerificationLevel.NONE)`) both lanes' canonical IR is structurally equal,
    which localizes the gap to the printer. Printer-side; needs-decision on
-   the layer.
+   the layer. **State: fixed by A3**; the canonical anchor is
+   `test_manual_scope_in_loop_anchor` and the printer regression is
+   `test_scope_in_loop_canonical_roundtrip`.
 
 6. **F39 — a scope-level `dump_vars` attr is not print-stable** (filed by C1
    while fixing F18). `pl.dump_tag` is a trace-time marker that emits no IR
@@ -1018,7 +1048,11 @@ by C1 and F20 by C2 under the ratified R4 ruling, while findings 2 and 4
   `test_explicit_scope_dumps_anchor`.
 - **F19 — `pl.scope(mode=<non-enum>)` silently selects AUTO in a default
   `auto_scope=True` body** (finding 2). Red check and pin as above.
-  Frontend-only.
+  **State: accepted divergence under R2 — no fix.** The parser's rejection is
+  a limitation of its enum-literal surface, so tracing may legally accept the
+  spelling (`docs/fix-construct-parity.md` §4: "parser limitations are not
+  parity obligations"); the printed-form instability is the separate
+  printer-coverage sub-question §5 records, not parity.
 - **F20 — the tracing generic-scope descriptors do not track manual-scope
   nesting** (manual-in-manual; AUTO-in-manual under `auto_scope=False`)
   (finding 3). Red checks and pins as above. Frontend-only. **Fixed by
@@ -1030,7 +1064,11 @@ by C1 and F20 by C2 under the ratified R4 ruling, while findings 2 and 4
   anchored as `test_manual_scope_inside_auto_scope_anchor`.
 - **F21 — the tracing `graph`/`cluster` descriptors do not validate the
   region name / `name_hint` as an identifier** (finding 4). Red check and
-  pin as above. Frontend-only.
+  pin as above. **State: accepted divergence under R2 — no fix.** Same
+  verdict as F19: the parser's identifier check is a limitation of its
+  literal surface, and R2 (`docs/fix-construct-parity.md` §4) makes tracing a
+  legal superset. The printed-form instability is the printer-coverage
+  sub-question, not parity.
 - **F22 — the Python printer drops the `var = pl.yield_(...)` assignment LHS
   when the yield sits inside a manual `RuntimeScopeStmt` body** (finding 5).
   Red check and pin as above. Printer-side.
@@ -1102,11 +1140,13 @@ a **printer** gap, not a frontend one (F26).
 | a read nested in staged control flow (`k_carrier_read_in_staged_for`) | raw + canonical | equivalent — **F23**, fixed by A2 |
 | read inside a `pl.split_aiv` region, statement between regions (`k_carrier_split_aiv_between`) | raw | equivalent — **F23**, fixed by A2 (one carrier; the region is emitted in place) — the F1 fixture shape |
 | read first (`k_carrier_read_first`) | raw + canonical | equivalent (the boundary's other half — both lanes wrap at the same point) |
-| a body that supplies its own CORE_GROUP carrier, a lone nested `pl.at(level=pl.Level.CORE_GROUP, ...)` (`k_carrier_explicit_at` / `k_carrier_explicit_at_read`) | n/a (no shared spelling: `raw` diverges on the outer `name_hint` alone) | **bug — F36** (filed by A2; parser keeps the hint unsplit, tracing splits it) |
+| a body that supplies its own CORE_GROUP carrier, a lone nested `pl.at(level=pl.Level.CORE_GROUP, ...)` (`k_carrier_explicit_at` / `k_carrier_explicit_at_read`) | n/a (no shared spelling: `raw` diverges on the outer `name_hint` alone) | **accepted divergence — F36** (filed by A2; parser keeps the hint unsplit, tracing splits it; judged naming-only under R5 by C3 — no fix) |
+| the explicit carrier's `name_hint` under print → reparse (`k_carrier_explicit_at_read`) | n/a (both lanes lose the carrier hint; the parser lane also re-splits the outer one) | **bug — F40**, fixed by the out-of-band F40 task (the printer's for-form fall-through had no slot for the carrier's hint) |
+| `as tid` + an explicit carrier, read-first body (`k_carrier_explicit_at_read_tid`) | raw + per-lane print → reparse (the outer `name_hint` still differs — F36's accepted drift) | **bug — F44**, fixed (the `as tid` target bind runs no pre-emit flush, so the body's own region absorbs the pending carrier) |
 | `with pl.spmd(n, deps=...)` without `as tid`; same for the for-form | n/a (parser accepts, tracing rejects) | **intended divergence** — `docs/en/dev/language/02-manual_dependencies.md:36` (*'``deps=`` is accepted only on the `as tid` capture form'*) + `docs/migration-todo.md` (the docs corrected to that reading) |
 | with-form body neither reading the index nor dispatching (`k_spmd_bare_body`, `k_spmd_bare_body_single_call`) | n/a (parser rejects, tracing accepts) | **needs-decision** |
-| nested `pl.split_aiv` (`k_saiv_nested`) | n/a (parser rejects, tracing accepts) | **bug — F24** |
-| `pl.at(name_hint="has space")` (`k_at_bad_name_hint`) | n/a (parser rejects, tracing accepts) | **bug — F25** |
+| nested `pl.split_aiv` (`k_saiv_nested`) | n/a (parser rejects, tracing accepts) | **accepted divergence — F24** (R2: tracing may be a superset; no fix) |
+| `pl.at(name_hint="has space")` (`k_at_bad_name_hint`) | n/a (parser rejects, tracing accepts) | **accepted divergence — F25** (R2: tracing may be a superset; no fix) |
 | `pl.at(windowize=1)` / `allow_early_resolve=1`; a pre-built `optimizations=` list; `deps=None` | n/a (parser rejects, tracing accepts, same IR) | **needs-decision** (acceptance-only) |
 | `pl.split_aiv(4)` / missing `mode=`; a region under a function-level `pl.split(...)`; a cluster-nested `pl.spmd` with `allow_early_resolve`/`as tid`; `pl.spmd(0)` | n/a (both lanes reject) | out of scope — no accepted spelling; pinned |
 | core_num as `pl.const(4, pl.INDEX)`; `name_hint` ending in `_spmd` | raw | equivalent (check only) |
@@ -1120,7 +1160,13 @@ conformance-directory tests 355 → 407. All 272 anchors green; no red anchor is
 kept — every red finding is pinned with explicit shape assertions. The fix
 campaign's A2 promotes the four F23 pins to anchors (37 call sites / 29 anchor
 tests) and adds the parametrized print → reparse regression plus the two F36
-pins: 45 collected tests in the suite.
+pins: 45 collected tests in the suite. C3 reframes those two as F36's
+accepted-drift witness and adds F40's print pin: 46. The out-of-band F40 task
+rewrites that pin into the regression
+`test_explicit_carrier_print_keeps_the_carrier_hint` and adds F44's witness: 47.
+The F44 fix rewrites that witness into the regression
+`test_captured_spmd_explicit_carrier_wraps_once_by_both_lanes` (the suite keeps
+its 47 collected tests — the pin is renamed, not replaced).
 
 ### R11 findings (all frontends left alone)
 
@@ -1179,14 +1225,27 @@ pins: 45 collected tests in the suite.
    `split_aiv.begin` (`constructs/scopes.py:1335`) has no nesting guard, so the
    region nests, the printed text fails to re-parse, and the print → reparse
    fixpoint breaks (F12's class). Red check:
-   `test_nested_split_aiv_is_tracing_accepted`. Owner: the tracing lane.
+   `test_nested_split_aiv_is_tracing_accepted`. **State: accepted divergence
+   under R2 — no fix.** The parser's `_split_aiv_mode_stack` guard is a
+   limitation of its surface, so tracing may legally accept the nested region
+   (`docs/fix-construct-parity.md` §4: "parser limitations are not parity
+   obligations"). The printed-form break is the printer-coverage sub-question
+   §5 records (reject or teach the printer), not parity — and it is not F12's
+   class: F12's transfer was wrong code inside a non-loop region, whereas the
+   nested region is a tracing superset with no parser spelling. No frontend
+   edit.
 3. **F25 — `pl.at(name_hint=...)` is not validated as an identifier.** The
    parser runs `_parse_scope_name_hint` (`ast_parser.py:4039`);
    `at.__trace_enter__` passes the string straight to `begin_scope`, so
    `name_hint="has space"` reaches the IR and the printed text fails to
    re-parse. This is F21's root cause (the R10 `graph`/`cluster` descriptors)
    reaching the `at` descriptor in the same file. Red check:
-   `test_at_name_hint_validation_is_parser_only`. Frontend-only.
+   `test_at_name_hint_validation_is_parser_only`. **State: accepted
+   divergence under R2 — no fix.** Same rule as F21: the parser's identifier
+   check is a limitation of its literal surface, so tracing (the superset
+   lane) may accept the spelling (`docs/fix-construct-parity.md` §4). The
+   printed-form instability is the printer-coverage sub-question §5 records,
+   not parity. No frontend edit.
 4. **F26 — the printer drops the `var = pl.yield_(...)` assignment LHS when the
    yield sits inside a `SplitAivScopeStmt` body.**
    `IRPythonPrinter::VisitStmtBody` threads `return_vars` only for a direct
@@ -1216,8 +1275,78 @@ pins: 45 collected tests in the suite.
    reparses, so nothing is lost at codegen scale. Fixed only by a *third*
    static body fact from the rewriter (the parser's explicit-carrier check,
    which needs the `pl.at` level resolved) or by restating the parser's hint
-   rule. Pin: `test_carrier_explicit_at_hint_divergence` (both spellings).
-   Frontend-only. **State: filed, not fixed** (out of A2's scope).
+   rule. Pin: `test_carrier_explicit_at_hint_accepted_drift` (both spellings).
+   Frontend-only. **State: accepted divergence under R5 — no fix** (judged by
+   the fix-campaign task C3). The two IRs differ in exactly one string, the
+   outer `SpmdScopeStmt.name_hint` — the witness asserts the failing path is
+   `body[0].name_hint`, i.e. nothing else drifted. Both lanes accept, the
+   statements and the explicit carrier are identical, the hint only names the
+   outlined function (`OutlineClusterScopes` consults its `_spmd_` suffix only
+   when the hint is empty), and R5 classifies a naming-only drift as trivial
+   (`docs/fix-construct-parity.md` §4: *'trivial drift ... is fine'*). Fixing
+   it would thread a *third* static body fact (the parser's explicit-carrier
+   check, which needs the `pl.at` level resolved) through the rewriter for a
+   renamed kernel, which R5 forbids. The record's "the printed text still
+   reparses" caveat is refined by **F40** below: the text re-parses without
+   error, but the index-reading spelling is not a print → reparse fixpoint on
+   either lane.
+6. **F40 — the printer's for-form fall-through drops the explicit carrier's
+   `name_hint`** (filed by C3 while judging F36). A read-first explicit-carrier
+   body is printed by `IRPythonPrinter::VisitStmt_(SpmdScopeStmtPtr)`'s
+   `tile.get_block_idx` sniff (`python_printer.cpp:2382`) as
+   `for i in pl.spmd(n, name_hint=<the Spmd hint>)`, a shape with no slot for
+   the carrier's own hint; re-parsing synthesises the for-form carrier
+   (`name_hint` = the split-inner name, `"w"`) and, on the parser lane,
+   re-splits the outer hint (`"w"` → `"w_spmd"`) because the for-form always
+   wraps. Both lanes lose the carrier hint identically — a printer/parser-
+   coverage hole (the F39 class), not a parity divergence. Red check:
+   `test_explicit_carrier_print_drops_the_carrier_hint`. Printer-side.
+   **State: fixed** (out-of-band fix task F40; **C++ change → rebuild**). R5
+   governs and is not satisfied: both lanes carry the *same* carrier hint in the
+   IR (the user's `"c"`; only F36's outer hint differs), so no lane may move and
+   the printed text simply had no slot for it — a lossy print, the F39 class. The printer now decides
+   whether a wrap-producing header can stand in for the carrier:
+   `DerivedInCoreNameHint` mirrors the parser's
+   `_split_spmd_for_loop_name_hints` inner half (a trailing `_spmd` comes off),
+   and `HeaderReproducesCarrierHint` compares it against the InCore's own hint.
+   When they differ the header is not used for an inlined body — neither the
+   for-form sniff nor the `as tid` inlining branch — and the carrier is spelled
+   out as a nested `pl.at(level=pl.Level.CORE_GROUP, name_hint=...)` that prints
+   its own hint *and* its own `optimizations=` (the header must not repeat the
+   entry, which the parser rejects as specified twice). The pin is rewritten to
+   `test_explicit_carrier_print_keeps_the_carrier_hint` (red before the fix:
+   `assert 'w' == 'c'` on the tracing lane, plus the parser lane's outer
+   `"w"` → `"w_spmd"` re-split, both now full per-lane print → reparse
+   fixpoints). The `as tid` spelling of the same shape exposed a **separate**
+   frontend defect, filed as **F44** below and left pinned.
+7. **F44 — a captured `pl.spmd(...) as tid:` whose body supplies its own
+   CORE_GROUP carrier nests two InCore scopes on the tracing lane** (filed by
+   the out-of-band F40 task from the printer fix's `as tid` coverage). The `as
+   tid` target binding emits no IR, but it still runs the frame's pre-emit
+   flush; the wrapped with-form's pending carrier is `_carrier_flush_on_emit`,
+   so it opens there — before the body reaches its own region — and
+   `_flush_deferred_scopes`' `entering_incore` absorption branch only sees a
+   still-pending entry, so `cancel_pending_carrier` can no longer fire. The
+   tracing IR is `Spmd{InCore("w"){InCore("c"){...}}}` where the parser's
+   `_emit_spmd_body` treats the nested `pl.at` as *the* carrier and emits
+   `Spmd{InCore("c"){...}}` — the shape `cancel_pending_carrier`'s own
+   docstring says the tracing lane intends. Both lanes accept the spelling and
+   the canonical dataflow pair and the `Default` pipeline accept both shapes,
+   so the divergence is silent. Red check / pin:
+   `test_captured_spmd_explicit_carrier_double_wraps_the_tracing_lane` (asserts
+   the per-lane InCore chains `["c"]` vs `["w", "c"]`; the same pin carries
+   the `parser` lane's F40 fixpoint). Frontend-only. **State: fixed** (fix task
+   F44). The tracing lane's `_TaskIdBinding` now declares `_emits_on_bind =
+   False`, and `PtoFrame._bind_dispatch` skips the pre-emit flush for such a
+   hook — it emits no IR, so the pre-created `Scalar[TASK_ID]` Var needs no
+   scopes opened (which is the only structural read the flush exists for). The
+   pending carrier survives the target bind and the body's own CORE_GROUP
+   region is absorbed by `_flush_deferred_scopes`' `entering_incore` branch:
+   both lanes now emit `Spmd{InCore("c"){...}}`, each a print → reparse
+   fixpoint. The pin is rewritten to
+   `test_captured_spmd_explicit_carrier_wraps_once_by_both_lanes` (raw red
+   before the fix: `assert ['w', 'c'] == ['c']`). The outer `name_hint`
+   divergence (F36) and the non-captured spelling (F40) are unchanged.
 
 ### R11 no-anchor divergences (nothing edited)
 
@@ -1254,16 +1383,41 @@ pins: 45 collected tests in the suite.
   `InCoreScopeStmt`) is closed in the same change. The explicit-carrier
   spelling's remaining outer-hint divergence is filed as F36.
 - **F24 — a nested `pl.split_aiv` region is accepted by tracing and rejected
-  by the parser** (finding 2). Red check and pin as above. Frontend-only.
+  by the parser** (finding 2). Red check and pin as above. **State: accepted
+  divergence under R2 — no fix.** The parser's nesting guard is a limitation
+  of its surface, so the nested region is the tracing superset R2 legalises;
+  the printed-form break is the printer-coverage sub-question, not parity.
 - **F25 — `pl.at(name_hint=...)` identifier validation is parser-only**
-  (finding 3). Red check and pin as above. Frontend-only.
+  (finding 3). Red check and pin as above. **State: accepted divergence under
+  R2 — no fix.** Same verdict as F21: the parser's identifier check is its
+  literal surface's limitation, and R2 (`docs/fix-construct-parity.md` §4)
+  makes tracing a legal superset.
 - **F26 — the printer loses the yield assignment LHS inside a
   `SplitAivScopeStmt` body** (finding 4). Red check and pin as above.
   Printer-side. **State: fixed by A3**.
 - **F36 — the explicit-CORE_GROUP-carrier spelling splits the outer
   `pl.spmd` name hint on the tracing lane only** (finding 5; filed by the
   fix-campaign task A2 while fixing F23). Red check and pin as above.
-  Frontend-only.
+  Frontend-only. **State: accepted divergence under R5 — no fix** (finding 5;
+  judged by C3: the raw difference is the outer `name_hint` string alone, and
+  R5 makes naming-only drift trivial).
+- **F40 — the explicit-CORE_GROUP-carrier spelling's carrier hint does not
+  survive print → reparse** (finding 6; filed by C3 while judging F36). Red
+  check and pin as above. Printer-side; both lanes — not a parity item.
+  **State: fixed** (out-of-band fix task F40; C++ printer change, rebuilt): the
+  printer spells the carrier out as a nested `pl.at(level=CORE_GROUP,
+  name_hint=...)` whenever the wrap-producing header's derived name would not
+  reproduce the carrier's hint, so both lanes are print → reparse fixpoints.
+- **F44 — a captured `pl.spmd(...) as tid:` + explicit carrier nests two InCore
+  scopes on the tracing lane** (finding 7; filed by the F40 task). Red check and
+  pin as above. Frontend-only (the tracing lane's pre-emit flush opened the
+  wrapped form's pending carrier before the body's own region could absorb it).
+  **State: fixed** (fix task F44): `PtoFrame._bind_dispatch` skips the pre-emit
+  flush for a `__trace_bind__` hook that emits no IR (`_emits_on_bind = False`,
+  declared by `_TaskIdBinding`), so the target bind no longer opens the pending
+  carrier; the body's `pl.at(CORE_GROUP)` is absorbed and both lanes emit the
+  parser's single-carrier shape. The pin is rewritten to
+  `test_captured_spmd_explicit_carrier_wraps_once_by_both_lanes`.
 
 F-ids continue from F22. `scripts/review/check_construct_parity.py`'s construct
 map now points `split_aiv` at the new suite and claims

@@ -541,6 +541,8 @@ class IRPythonPrinter : public IRVisitor {
 
   // Statement body visitor with SSA-style handling
   void VisitStmtBody(const StmtPtr& body, const std::vector<VarPtr>& return_vars = {});
+  void PrintSplitAivScope(const SplitAivScopeStmtPtr& op, const std::vector<VarPtr>& return_vars = {},
+                          bool emit_indent = false);
   void PrintYieldAssignmentVars(const std::vector<VarPtr>& return_vars);
 
   // Binary/unary operator helpers (reuse precedence logic)
@@ -2456,7 +2458,12 @@ void IRPythonPrinter::VisitStmt_(const SpmdScopeStmtPtr& op) {
   DecreaseIndent();
 }
 
-void IRPythonPrinter::VisitStmt_(const SplitAivScopeStmtPtr& op) {
+void IRPythonPrinter::PrintSplitAivScope(const SplitAivScopeStmtPtr& op,
+                                         const std::vector<VarPtr>& return_vars, bool emit_indent) {
+  if (emit_indent) {
+    stream_ << GetIndent();
+    PrintLeadingComments(op);
+  }
   // Round-trips as `for aiv_id in pl.split_aiv(2, mode=pl.SplitMode.X): <body>`.
   // The region body begins with `aiv_id = tile.get_subblock_idx()`; that binding
   // is materialized as the loop variable and skipped in the body.
@@ -2477,17 +2484,24 @@ void IRPythonPrinter::VisitStmt_(const SplitAivScopeStmtPtr& op) {
   if (body_seq && body_seq->stmts_.size() > start) {
     for (size_t i = start; i < body_seq->stmts_.size(); ++i) {
       if (ShouldSuppressPlaceholder(body_seq->stmts_, i)) continue;
-      PrintStmtBlock(body_seq->stmts_[i]);
+      const bool is_last = i == body_seq->stmts_.size() - 1;
+      if (is_last) {
+        VisitStmtBody(body_seq->stmts_[i], return_vars);
+      } else {
+        PrintStmtBlock(body_seq->stmts_[i]);
+      }
       if (i + 1 < body_seq->stmts_.size()) stream_ << "\n";
     }
   } else if (!body_seq && !has_idx_binding) {
-    PrintStmtBlock(op->body_);
+    VisitStmtBody(op->body_, return_vars);
   } else {
     stream_ << GetIndent() << "pass\n";
   }
   --split_aiv_scope_depth_;
   DecreaseIndent();
 }
+
+void IRPythonPrinter::VisitStmt_(const SplitAivScopeStmtPtr& op) { PrintSplitAivScope(op); }
 
 void IRPythonPrinter::VisitStmt_(const SeqStmtsPtr& op) {
   for (size_t i = 0; i < op->stmts_.size(); ++i) {
@@ -2671,13 +2685,13 @@ void IRPythonPrinter::VisitStmtBody(const StmtPtr& body, const std::vector<VarPt
         stream_ << "\n";
       }
     }
-  } else if (auto rscope = As<RuntimeScopeStmt>(body); rscope && !rscope->manual_) {
-    // An AUTO RuntimeScopeStmt wrapping a for/if body (inserted by
-    // MaterializeRuntimeScopes): emit the `with pl.auto_scope():` header and
-    // recurse with return_vars so a trailing return-var yield *inside* the
-    // scope still prints its `var = pl.yield_(...)` assignment LHS.
+  } else if (auto split_aiv = As<SplitAivScopeStmt>(body)) {
+    PrintSplitAivScope(split_aiv, return_vars, /*emit_indent=*/true);
+  } else if (auto rscope = As<RuntimeScopeStmt>(body)) {
+    // Runtime scopes are transparent to the enclosing control-flow construct;
+    // preserve its return_vars through both AUTO and MANUAL wrappers.
     stream_ << GetIndent();
-    PrintRuntimeScopeHeader(/*manual=*/false);
+    PrintRuntimeScopeHeader(rscope->manual_);
     IncreaseIndent();
     VisitStmtBody(rscope->body_, return_vars);
     DecreaseIndent();

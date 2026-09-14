@@ -35,8 +35,7 @@ no iter_arg/phi territory: raw equality is the load-bearing half. Every anchor
 here is asserted **raw**, and **raw + post-``canonicalize()``** wherever the
 body (or an enclosing construct) carries staged control flow — the SSA pass has
 loop-carried values to derive there, and both lanes must reach the same
-canonical shape. Both regimes land green for every anchor below, with one
-exception where raw is all the harness can take (see F26 below).
+canonical shape. Both regimes land green for every anchor below.
 
 **The carrier boundary is the same static, body-wide classification on both
 lanes (F23, the migration review's F1).** The parser's
@@ -72,19 +71,15 @@ spelling's outer name hint: a body that is a lone nested
 ``pl.at(level=pl.Level.CORE_GROUP, ...)`` keeps the hint unsplit on the parser
 lane, while the tracing lane reserves the ``_spmd`` suffix.
 
-One canonical pair is a **printer** gap rather than a frontend one: a
-loop-carried value updated inside a ``pl.split_aiv`` region that sits inside
-the loop loses the ``var = pl.yield_(...)`` assignment LHS in the printer
-(**F26**), so the canonical half of ``k_saiv_in_at_staged_for`` is pinned with
-the roundtrip instrument bypassed rather than asserted through the harness.
-Both lanes' post-SSA IR is structurally equal there.
+The ``k_saiv_in_at_staged_for`` anchor also has a focused printer round-trip
+regression: its canonical loop yield is nested inside a ``pl.split_aiv`` region.
 """
 
 from __future__ import annotations
 
 import pypto.language as pl
 import pytest
-from pypto.language.diagnostics import ParserError, ParserSyntaxError
+from pypto.language.diagnostics import ParserSyntaxError
 from pypto.language.parser import function_parser
 from pypto.language.tracer.decorators.function import function_trace, trace_program
 from pypto.pypto_core import ir, passes
@@ -496,43 +491,22 @@ def test_split_aiv_in_staged_for_anchor():
 
 def test_split_aiv_in_at_staged_for_anchor():
     """A region inside a staged loop inside a CORE_GROUP scope: the region is
-    flattened in place, raw-equal on both lanes.
-
-    The canonical half cannot be asserted through the harness: after SSA the
-    loop-carried value's ``pl.yield_`` lands *inside* the ``SplitAivScopeStmt``
-    body and the printer drops the ``var = pl.yield_(...)`` assignment LHS —
-    the same defect class as F22, for a different scope kind (**F26**, pinned
-    in ``test_split_aiv_in_at_canonical_is_printer_gap``). Both lanes' canonical
-    IR is equal; the text is what fails."""
+    flattened in place and the loop-carried rebinding is equal in both the raw
+    and canonical regimes."""
     conformance(k_saiv_in_at_staged_for, build)
+    conformance(k_saiv_in_at_staged_for, build, canonical=True)
 
 
-def test_split_aiv_in_at_canonical_is_printer_gap():
-    """**F26 — a printer-side gap, both frontends agree.**
-
-    ``IRPythonPrinter::VisitStmtBody`` threads ``return_vars`` (and so prints
-    the ``var = pl.yield_(...)`` assignment LHS) only when the trailing yield is
-    the direct body or the last statement of a ``SeqStmts`` body
-    (``src/ir/transforms/python_printer.cpp:2605`` / ``:2634``); an intervening
-    scope loses it. F22 records the ``manual RuntimeScopeStmt`` instance; this
-    is the ``SplitAivScopeStmt`` instance: a loop-carried value updated inside a
-    region that sits inside the loop prints as a bare ``pl.yield_(...)`` and
-    the ``return`` names an undefined ``*_rv_*`` var, so neither the parser nor
-    the instrument can re-read the text. With the roundtrip instrument bypassed
-    the two lanes' post-SSA IR is structurally equal, which localizes the gap
-    to the printer."""
+def test_split_aiv_in_at_canonical_roundtrip():
+    """F26 regression: the canonical yield nested in a ``SplitAivScopeStmt``
+    keeps its assignment LHS so the printed program parses back identically."""
     with passes.PassContext([], passes.VerificationLevel.NONE):
         traced = canonicalize(build(k_saiv_in_at_staged_for))
-        parsed = canonicalize(function_parser(k_saiv_in_at_staged_for))
-        ir.assert_structural_equal(traced, parsed, enable_auto_mapping=True)
         program = ir.Program([traced], f"p_{traced.name}", ir.Span.unknown())
     printed = program.as_python()
-    assert "pl.yield_(" in printed
-    assert "= pl.yield_(" not in printed
-    # The bare yield leaves the loop's return var undefined, so the parser
-    # trips on it before it ever reaches the yield-arity check.
-    with pytest.raises(ParserError, match="Undefined variable"):
-        pl.parse(printed)
+    assert "= pl.yield_(" in printed
+    reparsed = pl.parse(printed)
+    ir.assert_structural_equal(program, reparsed, enable_auto_mapping=True)
 
 
 def test_split_aiv_in_incore_function_program_anchor():

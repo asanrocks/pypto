@@ -37,11 +37,9 @@ contains staged control flow (a ``for`` with a carried value, a branch with
 divergent binds) and anchors placed *inside* staged control flow are asserted
 **raw *and* post-``canonicalize()``** — raw holds (the scope is still
 transparent), and canonical is the staged-flow regime proper (the SSA pass
-promotes the shared mutable locals across the region). One anchor is raw-only:
-a scope *inside* a loop body whose rebinding is loop-carried (``k_manual_in_loop``)
-— both lanes' canonical IR is equal, but the post-SSA shape hits a printer gap
-(F22, pinned below), so the canonical half is pinned rather than asserted
-through the harness.
+promotes the shared mutable locals across the region). The loop-carried manual
+scope case (``k_manual_in_loop``) also has a focused printer round-trip
+regression because its canonical yield is nested inside the runtime scope.
 
 The variants that cannot be anchored, and why (all pinned below):
 
@@ -62,10 +60,6 @@ The variants that cannot be anchored, and why (all pinned below):
 - a non-identifier ``pl.graph`` name / ``pl.cluster(name_hint=...)``: the
   parser validates it (``_parse_scope_name_hint``, ``:4039``), the tracing
   descriptors do not — **F21**;
-- a loop-carried value updated inside a manual runtime scope: the printer
-  drops the yield assignment LHS (it keeps it only for an AUTO
-  ``RuntimeScopeStmt``) and the roundtrip instrument rejects the text —
-  **F22**, printer-side, both frontends' canonical IR equal;
 - the lenient spellings ``pl.graph(name="x")`` and
   ``pl.scope(pl.ScopeMode.MANUAL)`` are tracing-only (the parser requires the
   positional / keyword form respectively) — same IR, **needs-decision**
@@ -280,36 +274,22 @@ def test_manual_scope_around_loop_anchor():
 
 
 def test_manual_scope_in_loop_anchor():
-    """The scope sits inside the staged loop: raw-equal (the region is
-    transparent to the loop-carried rebinding).
-
-    The canonical half cannot be asserted here: after SSA the loop-carried
-    ``pl.yield_`` lands *inside* the manual ``RuntimeScopeStmt`` body, and
-    ``IRPythonPrinter::VisitStmtBody`` special-cases only the
-    ``manual_=false`` scope, so the printed text drops the
-    ``var = pl.yield_(...)`` assignment LHS and the roundtrip instrument
-    rejects it. Both lanes' canonical IR is equal — pinned as F22 in
-    ``test_scope_in_loop_canonical_is_printer_gap``."""
+    """The manual scope is transparent to the loop-carried rebinding in both
+    the raw and canonical regimes."""
     conformance(k_manual_in_loop, build)
+    conformance(k_manual_in_loop, build, canonical=True)
 
 
-def test_scope_in_loop_canonical_is_printer_gap():
-    """F22 — a loop-carried value updated inside a *manual* runtime scope
-    prints a bare ``pl.yield_(...)`` (the printer's ``VisitStmtBody`` keeps the
-    assignment LHS only for an AUTO ``RuntimeScopeStmt``,
-    ``src/ir/transforms/python_printer.cpp:2659``), and the parser rejects that
-    text. The frontends agree: with the roundtrip instrument bypassed, both
-    lanes' post-SSA IR is structurally equal."""
+def test_scope_in_loop_canonical_roundtrip():
+    """F22 regression: the canonical yield nested in a manual runtime scope
+    keeps its assignment LHS so the printed program parses back identically."""
     with passes.PassContext([], passes.VerificationLevel.NONE):
         traced = canonicalize(function_trace(k_manual_in_loop))
-        parsed = canonicalize(function_parser(k_manual_in_loop))
-        ir.assert_structural_equal(traced, parsed, enable_auto_mapping=True)
         program = ir.Program([traced], f"p_{traced.name}", ir.Span.unknown())
     printed = program.as_python()
-    assert "pl.yield_(" in printed
-    assert "= pl.yield_(" not in printed
-    with pytest.raises(ParserSyntaxError, match="assignment-form pl.yield_"):
-        parse_program(printed)
+    assert "= pl.yield_(" in printed
+    reparsed = parse_program(printed)
+    ir.assert_structural_equal(program, reparsed, enable_auto_mapping=True)
 
 
 def test_manual_scope_cond_bind_anchor():
