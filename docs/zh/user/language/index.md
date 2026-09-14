@@ -16,7 +16,7 @@
 | ---- | -------- |
 | [类型](00-types.md) | dtype、`Tensor` / `Tile` / `Scalar` / `Array` / `Tuple`、布局、动态 shape、参数方向 |
 | [函数与程序](01-functions.md) | `@pl.jit` 家族、`@pl.function`、`@pl.program`、`@pl.inline`、跨函数调用、外部 kernel |
-| [控制流](02-control-flow.md) | `pl.range` / `parallel` / `unroll` / `pipeline` / `while_`、循环携带值、`yield_`、`cond`、SSA |
+| [控制流](02-control-flow.md) | `pl.range` / `parallel` / `unroll` / `pipeline`、`if`/`else`、循环携带值、`yield_`、SSA |
 | [内存与数据搬运](03-memory.md) | 内存空间、`load` / `store` / `move`、`valid_shape` 与 `fillpad`、片上常驻 |
 | [作用域与放置](04-scopes.md) | `at` / `cluster` / `spmd` / `split_aiv` —— 代码在哪里执行 |
 | [编译期指令](05-directives.md) | tracing 下的 parser 专属诊断（`static_print` / `static_assert`）、`pl.const` |

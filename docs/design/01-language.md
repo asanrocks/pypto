@@ -447,7 +447,12 @@ predicate a host value.
 A callee is either a *sub-kernel* or an *inline callee*. The distinction
 is a property of the **callee**, decided at its definition at trace time —
 not at the call site, not by a backend pass. Trace-time execution
- determines the IR.
+ determines the IR. The same rule fixes where a function body ends: a
+**function-level `return`** ends collection on both lanes — the executing
+kernel leaves the rest of the body unreachable, so the tracing lane's host
+guard stops there and the AST parser stops collecting at the body's top-level
+`return` instead of emitting the dead tail as IR. (A `return` inside a staged
+construct is a per-branch `ReturnStmt`, §12; it does not end collection.)
 
 - **Sub-kernel:** traced independently (its own frame, its own function);
   the call site yields a call node.

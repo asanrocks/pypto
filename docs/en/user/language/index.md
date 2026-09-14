@@ -24,7 +24,7 @@ through that alias.
 | ---- | -------------- |
 | [Types](00-types.md) | dtypes, `Tensor` / `Tile` / `Scalar` / `Array` / `Tuple`, layouts, dynamic shapes, parameter directions |
 | [Functions and Programs](01-functions.md) | `@pl.jit` family, `@pl.function`, `@pl.program`, `@pl.inline`, cross-function calls, external kernels |
-| [Control Flow](02-control-flow.md) | `pl.range` / `parallel` / `unroll` / `pipeline` / `while_`, carried values, `yield_`, `cond`, SSA |
+| [Control Flow](02-control-flow.md) | `pl.range` / `parallel` / `unroll` / `pipeline`, `if`/`else`, carried values, `yield_`, SSA |
 | [Memory and Data Movement](03-memory.md) | the memory spaces, `load` / `store` / `move`, `valid_shape` and `fillpad`, L1 residency |
 | [Scopes and Placement](04-scopes.md) | `at` / `cluster` / `spmd` / `split_aiv` — where work runs |
 | [Compile-Time Directives](05-directives.md) | parser-owned diagnostics (`static_print` / `static_assert`) under tracing, `pl.const` |
