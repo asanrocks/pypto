@@ -242,6 +242,32 @@ class EffectfulCallCounter : public IRVisitor {
   }
 };
 
+// Collects the inline-function names a body calls (GlobalVar call targets
+// present in the inline set). The inliner's processing order is derived from
+// these sets: a function is spliced into only after every inline callee it
+// mentions has no inline calls left, so each callee body is cloned exactly
+// once per call site.
+class InlineCalleeCollector : public IRVisitor {
+ public:
+  explicit InlineCalleeCollector(const std::unordered_map<std::string, FunctionPtr>& inline_fns)
+      : inline_fns_(inline_fns) {}
+
+  void VisitExpr_(const CallPtr& op) override {
+    if (op) {
+      if (auto gv = As<GlobalVar>(op->op_)) {
+        if (inline_fns_.count(gv->name_) > 0) callees_.insert(gv->name_);
+      }
+    }
+    IRVisitor::VisitExpr_(op);
+  }
+
+  [[nodiscard]] const std::unordered_set<std::string>& callees() const { return callees_; }
+
+ private:
+  const std::unordered_map<std::string, FunctionPtr>& inline_fns_;
+  std::unordered_set<std::string> callees_;
+};
+
 // Is `value` ITSELF a call-like node, as opposed to merely wrapping one? Only
 // such a value can be re-emitted verbatim as an EvalStmt.
 bool IsEffectfulCallLike(const ExprPtr& value) {
@@ -949,34 +975,68 @@ Pass InlineFunctions() {
       current[fn->name_] = fn;
     }
 
-    const size_t max_iters = inline_fns.size() + 1;
     SpliceRenames renames;
-    for (size_t iter = 0; iter < max_iters; ++iter) {
-      bool any_changed = false;
 
-      // Refresh inline_fns view to point at the *latest* bodies — important
-      // because a previous iteration may have inlined Inline-calls-Inline.
-      std::unordered_map<std::string, FunctionPtr> latest_inline;
-      for (const auto& [name, fn] : inline_fns) {
-        latest_inline[name] = current[name];
-      }
+    // Splice in callees-first (topological) order with LIVE callee lookup.
+    // The previous fixpoint iterated all functions against a per-iteration
+    // snapshot of the inline bodies, so a caller was always spliced against
+    // the PRE-iteration body of its mid-level callee — a body still carrying
+    // the live call to the leaf. The surviving clone of that call was then
+    // spliced again in a later iteration, cloning the leaf body TWICE from
+    // ONE call site: the same original Var (e.g. a trace-local extent that a
+    // kept InCore callee's minted param type embeds) received two different
+    // replacement Vars, and SpliceRenames::Record dropped the key as
+    // ambiguous — leaving cross-splice type references (a kept function's
+    // signature, an op cloned by a different splice than the one renaming
+    // the extent) permanently dangling for RenamedVarRepair.
+    //
+    // Cloning each body exactly once per call site makes the rename table
+    // unambiguous by construction: every callee handed to a splice is fully
+    // expanded (no inline calls left), so the clone carries no live call to
+    // re-splice, and the recorded renames chain transitively to the copy
+    // that survives in the kept functions.
+    std::unordered_map<std::string, std::unordered_set<std::string>> callee_sets;
+    std::unordered_map<std::string, size_t> pending_callee_count;
+    std::unordered_map<std::string, std::vector<std::string>> callers_of;
+    std::vector<std::string> ready;
+    for (const auto& [name, fn] : current) {
+      InlineCalleeCollector collector(inline_fns);
+      collector.VisitStmt(fn->body_);
+      callee_sets[name] = collector.callees();
+      pending_callee_count[name] = collector.callees().size();
+      if (collector.callees().empty()) ready.push_back(name);
+      for (const auto& callee : collector.callees()) callers_of[callee].push_back(name);
+    }
 
-      for (auto& [name, fn] : current) {
-        InlineCallsMutator mutator(latest_inline, &renames);
+    std::unordered_set<std::string> expanded;  // bodies with no inline calls left
+    // Live view for the mutator: refreshed after every function update, so a
+    // caller mid-pass sees the fully-expanded body of its callee.
+    std::unordered_map<std::string, FunctionPtr> live_inline;
+    for (const auto& [name, fn] : inline_fns) {
+      live_inline[name] = current[name];
+    }
+
+    for (size_t i = 0; i < ready.size(); ++i) {
+      const std::string& name = ready[i];
+      auto& fn = current[name];
+      if (pending_callee_count[name] == 0) {
+        InlineCallsMutator mutator(live_inline, &renames);
         auto new_body = mutator.VisitStmt(fn->body_);
         if (mutator.Changed()) {
           auto updated = MutableCopy(fn);
           updated->body_ = new_body;
           fn = updated;
-          any_changed = true;
+          live_inline[name] = fn;
         }
       }
-
-      if (!any_changed) break;
-
-      INTERNAL_CHECK(iter + 1 < max_iters) << "InlineFunctions did not reach a fixpoint within " << max_iters
-                                           << " iterations; this indicates a bug or an undetected cycle";
+      expanded.insert(name);
+      for (const auto& caller : callers_of[name]) {
+        if (--pending_callee_count[caller] == 0) ready.push_back(caller);
+      }
     }
+    INTERNAL_CHECK(expanded.size() == current.size())
+        << "InlineFunctions did not reach every function (" << expanded.size() << " of " << current.size()
+        << "); this indicates a bug or an undetected cycle (DetectInlineCycles should have caught it)";
 
     // Drop inline functions and rebuild the program
     std::vector<FunctionPtr> kept_functions;

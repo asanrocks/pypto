@@ -773,6 +773,74 @@ class TestInlineSpliceTypeClosure:
         )
         assert isinstance(prog, ir.Program)
 
+    def test_two_level_chain_with_submitted_incore_closes_kept_signature(self):
+        """**The chain-ambiguity leak** — closed 2026-09-14, from the
+        pypto-lib census (dspark ``decode_layer``/``decode_fwd``: ``t_dim``/
+        ``kv_dim`` used-outside-scope in the entry after ``ConvertToSSA``).
+
+        The old fixpoint spliced every function against a per-iteration
+        *snapshot* of the inline bodies, so a two-level chain
+        (entry → mid → leaf) spliced the leaf twice from ONE call site: once
+        into the mid function, once into the entry's clone of the
+        pre-iteration mid. The two clones renamed the leaf's trace-local
+        extent Var (embedded in a *kept* InCore callee's minted param type —
+        the variant lane) to two different replacements, and
+        ``SpliceRenames::Record`` dropped the key as ambiguous — the
+        post-fixpoint ``RenamedVarRepair`` could then never close the kept
+        signature's dangling extent, and ops cloned by a different splice
+        than the one renaming the extent kept their bare references.
+
+        The fix splices in callees-first order with live callee lookup, so
+        each inline body is cloned exactly once per call site and the rename
+        table is unambiguous by construction. The pin asserts the closure
+        on the kept callee's signature — the entry-side refs close by
+        same-splice substitution either way, so the signature is the
+        observable delta (pre-fix it read ``[[t_dim, 4]]`` — a dangling
+        reference to a dropped Inline function's local)."""
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        n_dyn = pl.dynamic("N_DYN")
+
+        @pl.jit.incore
+        def _sink(local_out: pl.Out[pl.Tensor], n: pl.Scalar[pl.INT32]) -> pl.Tensor:
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="sink") as tid:
+                for row in pl.range(2):
+                    t = pl.load(local_out, [row, 0], [1, 4])
+                    pl.store(t, [row, 0], local_out)
+            return local_out
+
+        @pl.jit.inline
+        def _sub(acc: pl.Tensor, n: pl.Scalar[pl.INT32]):
+            # Param type minted from the leaf's arg (variant lane): the
+            # submit's typed result embeds the leaf's local extent.
+            out, tid = pl.submit(_sink, acc, n)
+            return out
+
+        @pl.jit.inline
+        def _leaf(x: pl.Tensor[[n_dyn, 32], pl.FP32]):
+            t_dim = pl.tensor.dim(x, 0)
+            acc = pl.tensor.create([t_dim, 4], dtype=pl.FP32)
+            acc = _sub(acc, pl.const(2, pl.INT32))
+            return acc
+
+        @pl.jit.inline
+        def _mid(x: pl.Tensor[[n_dyn, 32], pl.FP32]):
+            return _leaf(x)
+
+        @pl.jit
+        def _entry(x: pl.Tensor[[n_dyn, 32], pl.FP32]):
+            return _mid(x)
+
+        prog = _entry.compile_for_test(torch.zeros(64, 32, dtype=torch.float32))
+        assert isinstance(prog, ir.Program)
+        # The kept InCore callee's signature must not reference the dropped
+        # leaf's local: every extent is a renamed copy of the surviving
+        # spliced body (pre-fix: the bare ``t_dim`` dangled unrepairably).
+        sink = prog.get_function("_sink")
+        sink_text = sink.as_python()
+        assert "[[t_dim, " not in sink_text and "[[t_dim," not in sink_text, sink_text
+        assert "t_dim_inline" in sink_text, sink_text
+
 
 class TestCarryInitDtypeConflict:
     """A loop-carry whose rebind dtype differs from its pre-loop init is a
