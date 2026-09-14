@@ -39,8 +39,8 @@ def _conv_kernel(shape: tuple[int, ...], kernel_depth: int, stride: int, padding
         patches: pl.InOut[pl.Tensor],
         out: pl.Out[pl.Tensor],
     ):
-        _, padded_positions = patches.shape
-        out_channels, padded_reduction = weight.shape
+        _, padded_positions = pl.static_shape(patches)
+        out_channels, padded_reduction = pl.static_shape(weight)
         with pl.at(level=pl.Level.CORE_GROUP):
             p = pl.cast(pl.arange(0, [1, padded_positions]), pl.FP32)
             batch = pl.cast(
@@ -76,7 +76,9 @@ def _conv_kernel(shape: tuple[int, ...], kernel_depth: int, stride: int, padding
                 index = pl.add(pl.mul(index, height), safe_y)
                 index = pl.add(pl.mul(index, width), safe_x)
                 values = pl.gather(src, index=pl.cast(index, pl.INT32))
-                values = pl.cast(pl.mul(pl.cast(values, pl.FP32), valid), pl.FP16)
+                # gather's index= overload already yields FP32; the old
+                # same-dtype cast is rejected by op validation.
+                values = pl.cast(pl.mul(values, valid), pl.FP16)
                 patches = pl.assemble(patches, values, [k, 0])
 
         with pl.at(level=pl.Level.CORE_GROUP):
@@ -181,7 +183,7 @@ def _grid_kernel(align_corners: bool, border: bool):
 
     @pl.jit
     def grid_sample(src: pl.Tensor, grid: pl.Tensor, out: pl.Out[pl.Tensor]):
-        _, _, points = grid.shape
+        _, _, points = pl.static_shape(grid)
         for batch in pl.range(batches):
             for channel in pl.range(channels):
                 with pl.at(level=pl.Level.CORE_GROUP):

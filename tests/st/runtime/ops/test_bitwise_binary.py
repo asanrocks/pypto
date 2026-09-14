@@ -15,6 +15,8 @@ import pypto.language as pl
 import pytest
 import torch
 from harness.core.harness import DataType, PTOTestCase, TensorSpec
+from pypto import ir
+from pypto.language.tracer.decorators.jit import _eager_trace_record
 
 M = 16
 N = 64
@@ -149,7 +151,11 @@ def _make_program(
                 lhs.dtype,
                 pl.MemorySpace.Vec,
                 pl.TileView(valid_shape=[valid_rows, valid_cols]),
-            ] = pl.tile.create([M, N], dtype=lhs.dtype, target_memory=pl.MemorySpace.Vec)
+            ] = pl.tile.set_validshape(
+                pl.tile.create([M, N], dtype=pl_dtype, target_memory=pl.MemorySpace.Vec),
+                valid_rows,
+                valid_cols,
+            )
             return pl.store(pl.tile.xor(lhs_tile, rhs_tile, tmp), [0, 0], out)
 
         @pl.jit
@@ -257,7 +263,11 @@ def _make_program(
                 lhs.dtype,
                 pl.MemorySpace.Vec,
                 pl.TileView(valid_shape=[valid_rows, valid_cols]),
-            ] = pl.tile.create([M, N], dtype=lhs.dtype, target_memory=pl.MemorySpace.Vec)
+            ] = pl.tile.set_validshape(
+                pl.tile.create([M, N], dtype=pl_dtype, target_memory=pl.MemorySpace.Vec),
+                valid_rows,
+                valid_cols,
+            )
             return pl.store(pl.tile.xors(lhs_tile, scalar, tmp), [0, 0], out)
 
         @pl.jit
@@ -281,7 +291,11 @@ def _make_program(
             lhs.dtype,
             pl.MemorySpace.Vec,
             pl.TileView(valid_shape=[valid_rows, valid_cols]),
-        ] = pl.tile.create([M, N], dtype=lhs.dtype, target_memory=pl.MemorySpace.Vec)
+        ] = pl.tile.set_validshape(
+            pl.tile.create([M, N], dtype=pl_dtype, target_memory=pl.MemorySpace.Vec),
+            valid_rows,
+            valid_cols,
+        )
         return pl.store(pl.tile.xors(lhs_tile, scalar_value, tmp), [0, 0], out)
 
     @pl.jit
@@ -292,6 +306,15 @@ def _make_program(
         return xors_ssa_kernel(lhs, out)
 
     return xors_ssa_program
+
+
+def _program(fn: ir.Function) -> ir.Program:
+    """The eager-lane program route: the entry plus every callee its
+    decoration trace reached (the eager record's assembly — the same
+    functions the lazy lane's ``compile()`` would assemble)."""
+    record = _eager_trace_record(fn)
+    callees = list(record.assembly.functions) if record is not None else []
+    return ir.Program([fn, *callees], fn.name, fn.span)
 
 
 class BitwiseCase(PTOTestCase):
@@ -331,13 +354,15 @@ class BitwiseCase(PTOTestCase):
         return specs
 
     def get_program(self) -> Any:
-        return _make_program(
-            self.op_name,
-            self.dtype,
-            self.valid_shape,
-            self.scalar,
-            self.scalar_encoding,
-        ).specialize()
+        return _program(
+            _make_program(
+                self.op_name,
+                self.dtype,
+                self.valid_shape,
+                self.scalar,
+                self.scalar_encoding,
+            )
+        )
 
     def compute_expected(self, tensors: dict[str, torch.Tensor], params=None) -> None:
         rows, cols = self.valid_shape
