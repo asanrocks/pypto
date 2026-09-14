@@ -62,8 +62,8 @@ def per_rank(
 
 @pl.jit.host
 def window_program(
-    x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
-    y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
     """Host orchestrator: one window buffer, one view per rank, one dispatch per rank."""
     data_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)

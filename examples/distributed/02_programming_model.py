@@ -72,12 +72,15 @@ def device_orch(
 
 @pl.jit.host
 def host_orch(
-    x: pl.Tensor[[N_RANKS, ROWS, COLS], pl.FP32],
-    y: pl.Out[pl.Tensor[[N_RANKS, ROWS, COLS], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
     """Level 1 — the host orchestrator (host CPU): control plane, one launch per rank."""
     for r in pl.range(pld.world_size()):
-        device_orch(x[r], y[r], r, device=r)
+        # ``r`` is INDEX-typed (a loop index); cast it to INT32 here because the
+        # chip-level cast to FP32 cannot take an INDEX value (index<->float
+        # casts are unsupported in scalar codegen).
+        device_orch(x[r], y[r], pl.cast(r, target_type=pl.INT32), device=r)
 
 
 def main() -> int:

@@ -141,7 +141,7 @@ def per_rank_builtin(
 
 @pl.jit.host
 def barrier_program_hand(
-    y: pl.Out[pl.Tensor[[N_RANKS, N_RANKS, 1], pl.INT32]],
+    y: pl.Out[pl.Tensor],
 ):
     signal_buf = pld.alloc_window_buffer([N_RANKS, 1], dtype=pl.INT32)
     for r in pl.range(pld.world_size()):
@@ -151,8 +151,8 @@ def barrier_program_hand(
 
 @pl.jit.host
 def barrier_program_builtin(
-    x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
-    y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
     data_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)
     signal_buf = pld.alloc_window_buffer([N_RANKS, 1], dtype=pl.INT32)

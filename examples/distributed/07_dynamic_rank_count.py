@@ -154,8 +154,8 @@ def per_rank_get(
 
 @pl.jit.host
 def ring_put(
-    x: pl.Tensor[[NR, 1, SIZE], pl.FP32],
-    y: pl.Out[pl.Tensor[[NR, 1, SIZE], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
     """Host orchestrator: the leading world dim is the dynamic rank count."""
     src_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)
@@ -170,8 +170,8 @@ def ring_put(
 
 @pl.jit.host
 def ring_get(
-    x: pl.Tensor[[NR, 1, SIZE], pl.FP32],
-    y: pl.Out[pl.Tensor[[NR, 1, SIZE], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
     """Host orchestrator: the leading world dim is the dynamic rank count."""
     src_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)

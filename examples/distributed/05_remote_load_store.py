@@ -108,8 +108,8 @@ def per_rank_store(
 
 @pl.jit.host
 def ring_shift_load(
-    x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
-    y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
     data_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)
     signal_buf = pld.alloc_window_buffer([N_RANKS, 1], dtype=pl.INT32)
@@ -121,8 +121,8 @@ def ring_shift_load(
 
 @pl.jit.host
 def ring_shift_store(
-    x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
-    y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
     data_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)
     signal_buf = pld.alloc_window_buffer([N_RANKS, 1], dtype=pl.INT32)

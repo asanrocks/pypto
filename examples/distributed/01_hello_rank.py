@@ -69,12 +69,22 @@ def per_rank(
 
 @pl.jit.host
 def hello_rank(
-    x: pl.Tensor[[N_RANKS, ROWS, COLS], pl.FP32],
-    y: pl.Out[pl.Tensor[[N_RANKS, ROWS, COLS], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
-    """Host orchestrator: launch ``per_rank`` once per rank, pinned to ``device=r``."""
+    """Host orchestrator: launch ``per_rank`` once per rank, pinned to ``device=r``.
+
+    Bare parameter annotations keep the entry on the jit's lazy lane: an
+    entry that dispatches other jit kernels must assemble the multi-function
+    program at call time, which only the lazy lane does (a fully annotated
+    entry traces at decoration to a bare ``ir.Function`` carrying no
+    callees).
+    """
     for r in pl.range(pld.world_size()):
-        per_rank(x[r], y[r], r, device=r)
+        # ``r`` is INDEX-typed (a loop index); cast it to INT32 here because the
+        # chip-level cast to FP32 in ``add_rank`` cannot take an INDEX value
+        # (index<->float casts are unsupported in scalar codegen).
+        per_rank(x[r], y[r], pl.cast(r, target_type=pl.INT32), device=r)
 
 
 def main() -> int:

@@ -148,8 +148,8 @@ def per_rank_get(
 
 @pl.jit.host
 def ring_put(
-    x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
-    y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
     src_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)
     dst_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)
@@ -163,8 +163,8 @@ def ring_put(
 
 @pl.jit.host
 def ring_get(
-    x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
-    y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],
+    x: pl.Tensor,
+    y: pl.Out[pl.Tensor],
 ):
     src_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)
     dst_buf = pld.alloc_window_buffer([1, SIZE], dtype=pl.FP32)

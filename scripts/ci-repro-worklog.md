@@ -122,6 +122,30 @@ Environment repairs (`env`):
 
 Round-2 result: clang-tidy PASS (299s), codegen-tests PASS (62 passed).
 
+## Round 3 — examples-tests + docs-examples (the a2a3sim ladder)
+
+Repo findings (`fixed`):
+
+- **All seven `@pl.jit` distributed examples (01–07) were still on the
+  specializer-era host-compile surface**: they call
+  `kernel.compile(x, y, config=...)`, which only the lazy jit lane offers,
+  but their host entries were fully annotated — the tracing jit's eager
+  lane traces those at decoration and returns a bare `ir.Function` with
+  no `.compile`. Ported each host entry to **bare `pl.Tensor` /
+  `pl.Out[pl.Tensor]` parameters** (the manual's own prescription: "an
+  entry that dispatches other jit kernels wants the lazy lane — bare
+  `pl.Tensor` parameters — where `compile()` and `compile_for_test()`
+  assemble the multi-function program for you"); the original
+  `.compile(...)` + `compiled(...)` example code then works unchanged.
+- **`examples/distributed/01` and `02` pass the loop variable as a rank
+  value** — under tracing, `pl.range` yields an INDEX-typed scalar and the
+  chip-level `pl.cast(rank, FP32)` fails (scalar codegen forbids
+  index↔float casts by design). Both now cast `r` to INT32 at the host
+  boundary, where index→int casts are legal.
+
+Round-3 result: examples-tests PASS (60 invocations, 414s), docs-examples
+PASS (40/40 blocks, 223s).
+
 ## Round 4 — the device tier (--device)
 
 Script bugs (`fixed` in `scripts/ci-repro`):
