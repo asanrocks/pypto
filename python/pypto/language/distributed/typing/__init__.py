@@ -30,7 +30,7 @@ from .distributed_tensor import DistributedTensor
 # ``TensorType``; it must be matched first or the plain ``TensorType``
 # branch swallows it — the silent-downgrade failure mode the live
 # ``_call_facade`` chain had. Idempotent; runs at package import.
-register_facade(_ir.DistributedTensorType, lambda e: DistributedTensor(expr=e))
-register_facade(_ir.CommCtxType, lambda e: CommCtx(expr=e))
+register_facade(_ir.DistributedTensorType, DistributedTensor)
+register_facade(_ir.CommCtxType, CommCtx)
 
 __all__ = ["CommCtx", "DistributedTensor"]

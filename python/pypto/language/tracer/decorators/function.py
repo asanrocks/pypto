@@ -52,7 +52,11 @@ from pypto.language.tracer.return_contract import (
     same_return_types,
 )
 from pypto.language.tracer.semantics import PtoSema
-from pypto.language.typing import annotation_to_return_types, annotation_to_type
+from pypto.language.typing import (
+    annotation_to_return_slots,
+    annotation_to_type,
+    facade_class_for_type,
+)
 from pypto.language.typing.arg_direction import param_directions, unmangle_hints, unmangle_param_name
 from pypto.pypto_core import ir
 
@@ -311,10 +315,66 @@ def _trace_with_annotations(  # noqa: PLR0913 - one kwarg per trace fact
     finally:
         reset_active_frame(_token)
     fn = sema.result()
-    declared_return_types = annotation_to_return_types(return_type)
-    if declared_return_types and not same_return_types(fn.return_types, declared_return_types):
-        fn = rebuild_with_return_types(fn, declared_return_types)
-    return fn
+    return _apply_return_contract(fn, return_type)
+
+
+def _apply_return_contract(fn: ir.Function, return_type: object) -> ir.Function:
+    """Pin the declared ``->`` onto a completed trace, reconciling
+    under-specified slots.
+
+    A fully-concrete contract is the existing lane: pinned onto the
+    Function when the traced types differ (the declared signature *is* the
+    signature). A contract containing **bare facade classes** (``->
+    pl.Tensor``; ``-> tuple[pl.Tensor, pl.Scalar[pl.TASK_ID]]`` — the
+    corpus's submit-style multi-return) is under-specified: each bare
+    slot's shape and dtype come from the traced return and its kind is
+    class-checked against the declared facade (typing from values — a
+    bare class states no shape, so it cannot lie, it under-specifies).
+    Concrete slots in a mixed contract are checked slot-wise. An extern
+    stub has no body to derive from, so a bare slot there is loud — extern
+    contracts must be concrete."""
+    slots = annotation_to_return_slots(return_type)
+    if slots is None:
+        return fn
+    if not any(isinstance(slot, type) for slot in slots):
+        declared_return_types = typing.cast("list[ir.Type]", slots)
+        if declared_return_types and not same_return_types(fn.return_types, declared_return_types):
+            fn = rebuild_with_return_types(fn, declared_return_types)
+        return fn
+    if fn.attrs is not None and EXTERNAL_SOURCE_ATTR in fn.attrs:
+        raise TypeError(
+            f"kernel {fn.name!r}: a bare facade class in the return contract "
+            f"{return_type!r} cannot be derived — an extern stub has no body; "
+            "annotate the return fully (pl.Tensor[[shape], dtype])"
+        )
+    actual = list(fn.return_types) or return_value_types(fn)
+    if len(actual) != len(slots):
+        raise TypeError(
+            f"kernel {fn.name!r}: the declared `->` {return_type!r} has "
+            f"{len(slots)} slot(s) but the traced body returns {len(actual)} value(s)"
+        )
+    composed: list[ir.Type] = []
+    for i, (slot, traced) in enumerate(zip(slots, actual)):
+        if isinstance(slot, type):
+            facade = facade_class_for_type(traced)
+            if facade is None or not issubclass(facade, slot):
+                raise TypeError(
+                    f"kernel {fn.name!r}: return slot {i} is declared "
+                    f"{slot.__name__} (a bare facade class) but the traced body "
+                    f"returns {traced} — the declared kind does not match the "
+                    "traced value"
+                )
+            composed.append(traced)
+        else:
+            if not _declared_return_matches(slot, traced):
+                raise TypeError(
+                    f"kernel {fn.name!r}: return slot {i} is declared {slot} "
+                    f"but the traced body returns {traced} (a contract with "
+                    "under-specified slots is checked slot-wise; a mismatch is "
+                    "a loud 'the `->` was a lie')"
+                )
+            composed.append(slot)
+    return rebuild_with_return_types(fn, composed)
 
 
 def trace(

@@ -892,3 +892,69 @@ class TestCadenceUpstreamSurface:
                     )
 
         assert isinstance(k, ir.Function)
+
+
+class TestBareReturnContract:
+    """The under-specified return contract: a bare facade class (``-> pl.Tensor``;
+    a bare element of ``tuple[pl.Tensor, pl.Scalar[pl.TASK_ID]]`` — the corpus's
+    submit-style multi-return) states the value's *kind* only. Shape and dtype
+    are derived from the traced body and the kind is class-checked (typing from
+    values: the annotation states no shape, so it cannot lie, it under-specifies).
+    Before the fix the bare *element* form raised ``cannot derive an IR type from
+    annotation`` at decoration while the top-level bare form silently degraded
+    to an unchecked empty contract — an internal inconsistency the corpus never
+    met because the AST-era specializer never converted annotations at
+    decoration time."""
+
+    def test_bare_tensor_in_tuple_multi_return(self):
+        """The corpus shape: dspark/mtp ``decode_swa``-style helpers declare
+        ``-> tuple[pl.Tensor, pl.Scalar[pl.TASK_ID]]`` — a bare Tensor element
+        beside a concrete TASK_ID scalar. The composed contract pins the traced
+        types; the scalar slot stays checked."""
+
+        @pl.jit.inline
+        def submit_style(
+            x: pl.Tensor[[64], pl.FP32],
+        ) -> tuple[pl.Tensor, pl.Scalar[pl.TASK_ID]]:
+            tids = pl.array.create(2, pl.TASK_ID)
+            for i in pl.parallel(2):
+                with pl.spmd(2, name_hint="producer") as tid:
+                    tids[i] = tid  # type: ignore[reportArgumentType]  # parallel() loop var stub
+            return pl.add(x, x), tids[0]
+
+        fn = submit_style.fn
+        assert isinstance(fn, ir.Function)
+        assert len(fn.return_types) == 2
+        assert isinstance(fn.return_types[0], ir.TensorType)
+        assert fn.return_types[1] == ir.ScalarType(pl.TASK_ID)
+
+    def test_top_level_bare_tensor_return(self):
+        """``-> pl.Tensor`` (top-level) — the same rule at one slot: derived
+        shape/dtype, class-checked kind. No longer a silent empty contract."""
+
+        @pl.function
+        def single(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
+            return pl.add(x, x)
+
+        assert isinstance(single, ir.Function)
+        assert len(single.return_types) == 1
+        assert isinstance(single.return_types[0], ir.TensorType)
+
+    def test_bare_kind_mismatch_is_loud(self):
+        """A bare ``-> pl.Scalar`` over a tensor-returning body is the loud
+        'the `->` was a lie' — the class check, not dead text."""
+
+        with pytest.raises(TypeError, match="declared kind does not match"):
+
+            @pl.function
+            def wrong(x: pl.Tensor[[64], pl.FP32]) -> pl.Scalar:
+                return pl.add(x, x)
+
+    def test_bare_arity_mismatch_is_loud(self):
+        """A one-slot bare contract over a two-value body is loud."""
+
+        with pytest.raises(TypeError, match="slot"):
+
+            @pl.function
+            def pair(x: pl.Tensor[[64], pl.FP32]) -> pl.Tensor:
+                return pl.add(x, x), pl.sub(x, x)

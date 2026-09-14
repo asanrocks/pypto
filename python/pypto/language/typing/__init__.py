@@ -36,9 +36,11 @@ from pypto.language.typing.tensor import Tensor
 from pypto.language.typing.tile import Tile
 from pypto.language.typing.tuple import Tuple
 from pypto.language.typing.type_utils import (  # the facade-conversion funnel
+    annotation_to_return_slots,
     annotation_to_return_types,
     annotation_to_type,
     as_int,
+    facade_class_for_type,
     from_int,
     to_expr,
     to_int,
@@ -68,7 +70,9 @@ __all__ = [
     "Tensor",
     "Tile",
     "Tuple",
+    "annotation_to_return_slots",
     "annotation_to_return_types",
+    "facade_class_for_type",
     "annotation_to_type",
     "as_int",
     "dynamic",

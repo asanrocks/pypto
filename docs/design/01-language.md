@@ -505,10 +505,26 @@ def pair(x: pl.Tensor) -> tuple[pl.Tensor, pl.Tensor]:
 ```
 
 The source rewriter must not reinterpret CST shape as a different value
-type. At the kernel boundary, the tracing frontend and the AST parser
+ type. At the kernel boundary, the tracing frontend and the AST parser
 lower the elements to the IR's multi-value `ReturnStmt`; neither frontend
 creates a fictional staged-tuple value. They must agree on the IR
 dataflow, while only the AST parser owns printer-output round trips.
+
+### Under-specified return contracts: bare facade classes
+
+A return contract may **under-specify**: a bare facade class
+(`pl.Tensor` unsubscripted — the top-level `-> pl.Tensor`, or an element
+of a flat `tuple[pl.Tensor, pl.Scalar[pl.TASK_ID]]`) states the value's
+*kind* only. The kind is class-checked against the traced return, and
+the shape and dtype are **derived from the body** — typing from values:
+a bare class states no shape, so it cannot lie; it under-specifies. This
+extends the parser's declared-wins/absent-derives return rule to element
+granularity: a concrete slot is checked against the trace as always, a
+bare slot takes the traced type, and a kind or arity mismatch is loud
+("the `->` was a lie"), never a silent degradation to an unchecked
+empty contract. Extern stubs are the exception: their bodies are the
+`...` signature-only placeholder, so an extern return contract must be
+fully concrete — there is nothing to derive from.
 
 > **Deferred.** Inline-callee trace-time dispatch is not implemented
 > (§15). Until it lands, callees marked `inline=True` are traced as

@@ -43,9 +43,9 @@ of that B-axis reality, not a type hole.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from functools import cache
-from typing import TYPE_CHECKING, Protocol, cast, get_args, get_origin, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeGuard, cast, get_args, get_origin, runtime_checkable
 
 from pypto.pypto_core import DataType
 from pypto.pypto_core import arith as _arith
@@ -60,6 +60,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "_UnwrapsToExpr",
+    "annotation_to_return_slots",
     "annotation_to_return_types",
     "annotation_to_type",
     "apply_result_type",
@@ -71,6 +72,7 @@ __all__ = [
     "to_expr_unchecked",
     "to_int",
     "to_int_unchecked",
+    "facade_class_for_type",
     "wrap_expr",
 ]
 
@@ -159,33 +161,35 @@ def to_expr_unchecked(x: _UnwrapsToExpr) -> Expr:
 # type via ``register_facade`` so ``typing`` never imports ``distributed``
 # (no cycle).
 
-# (``ir.Type`` subclass, facade factory). Insertion order is not load-bearing
+# (``ir.Type`` subclass, facade class). Insertion order is not load-bearing
 # — ``register_facade`` inserts subclasses before bases, and ``wrap_expr``
 # scans in registry order (subclasses precede bases).
-_REGISTRY: list[tuple[type[_ir.Type], Callable[[Expr], _UnwrapsToExpr]]] = []
+_REGISTRY: list[tuple[type[_ir.Type], type]] = []
 
 
-def register_facade(type_cls: type[_ir.Type], factory: Callable[[Expr], _UnwrapsToExpr]) -> None:
-    """Register an ``ir.Type`` subclass → facade factory for ``wrap_expr``.
+def register_facade(type_cls: type[_ir.Type], facade: type) -> None:
+    """Register an ``ir.Type`` subclass → facade class for ``wrap_expr``.
 
-    The distributed tier calls this at import time to insert
-    ``DistributedTensorType`` (before ``TensorType`` — pybind registers it
-    as a ``TensorType`` subclass, so the plain branch would swallow it)
-    and ``CommCtxType``. Idempotent. Subclasses are inserted
+    The class (not a factory) is stored: ``wrap_expr`` constructs
+    ``facade(expr=...)`` and the bare-return-contract check reads the class
+    for the kind comparison. The distributed tier calls this at import time
+    to insert ``DistributedTensorType`` (before ``TensorType`` — pybind
+    registers it as a ``TensorType`` subclass, so the plain branch would
+    swallow it) and ``CommCtxType``. Idempotent. Subclasses are inserted
     before their registered bases so the ``isinstance`` scan sees them
     first.
     """
     for i, (t, _) in enumerate(_REGISTRY):
         if t is type_cls:
-            _REGISTRY[i] = (type_cls, factory)
+            _REGISTRY[i] = (type_cls, facade)
             return
     # Insert before the first registered type that type_cls is a strict
     # subclass of, so subclasses precede bases in the scan.
     for i, (t, _) in enumerate(_REGISTRY):
         if type_cls is not t and issubclass(type_cls, t):
-            _REGISTRY.insert(i, (type_cls, factory))
+            _REGISTRY.insert(i, (type_cls, facade))
             return
-    _REGISTRY.append((type_cls, factory))
+    _REGISTRY.append((type_cls, facade))
 
 
 @cache
@@ -206,13 +210,27 @@ def _ensure_base_registry() -> None:
 
     _REGISTRY.extend(
         [
-            (_ir.TensorType, lambda e: Tensor(expr=e)),
-            (_ir.TileType, lambda e: Tile(expr=e)),
-            (_ir.ScalarType, lambda e: Scalar(expr=e)),
-            (_ir.ArrayType, lambda e: Array(expr=e)),
-            (_ir.PtrType, lambda e: Ptr(expr=e)),
+            (_ir.TensorType, Tensor),
+            (_ir.TileType, Tile),
+            (_ir.ScalarType, Scalar),
+            (_ir.ArrayType, Array),
+            (_ir.PtrType, Ptr),
         ]
     )
+
+
+def facade_class_for_type(t: _ir.Type) -> type | None:
+    """The facade class ``wrap_expr`` would produce for a value of type *t*
+    (MRO-sorted registry lookup — a pybind subclass matches before its
+    base). The bare-return-contract check compares this class against the
+    declared bare facade class, so ``-> pl.Tensor`` accepts a traced
+    ``DistributedTensorType`` (the subclass) exactly like a concrete
+    ``-> pl.Tensor[[...], ...]`` would."""
+    _ensure_base_registry()
+    for type_cls, facade in _REGISTRY:
+        if isinstance(t, type_cls):
+            return facade
+    return None
 
 
 def wrap_expr(expr: Expr, t: _ir.Type) -> _UnwrapsToExpr:
@@ -227,9 +245,9 @@ def wrap_expr(expr: Expr, t: _ir.Type) -> _UnwrapsToExpr:
     special-cased (the multi-return lane).
     """
     _ensure_base_registry()
-    for type_cls, factory in _REGISTRY:
+    for type_cls, facade in _REGISTRY:
         if isinstance(t, type_cls):
-            return factory(expr)
+            return facade(expr=expr)
     if isinstance(t, _ir.TupleType):
         from pypto.language.typing.tuple import Tuple  # noqa: PLC0415
 
@@ -399,7 +417,10 @@ def annotation_to_return_types(annotation: object) -> list[_ir.Type]:
     ``pl.Tuple[...]`` is a structural tuple annotation and therefore remains
     one ``TupleType`` return. Python's builtin ``tuple[T1, T2]`` spelling is
     the flat multi-return syntax used by the parser, so its elements become
-    individual function return types.
+    individual function return types. A bare facade class (``pl.Tensor``)
+    is not accepted here — use :func:`annotation_to_return_slots`, the
+    under-specification-aware form the return-contract reconciliation
+    consumes.
     """
     try:
         return [annotation_to_type(annotation)]
@@ -410,6 +431,61 @@ def annotation_to_return_types(annotation: object) -> list[_ir.Type]:
         if not elements or elements[-1] is Ellipsis:
             raise TypeError("tuple return annotations must list concrete facade element types") from None
         return [annotation_to_type(element) for element in elements]
+
+
+def _is_bare_facade_class(annotation: object) -> TypeGuard[type]:
+    """A bare facade *class* (``pl.Tensor`` unsubscripted) — the
+    under-specified annotation form."""
+    from pypto.language.distributed.typing import DistributedTensor  # noqa: PLC0415
+    from pypto.language.typing.array import Array  # noqa: PLC0415
+    from pypto.language.typing.ptr import Ptr  # noqa: PLC0415
+    from pypto.language.typing.scalar import Scalar  # noqa: PLC0415
+    from pypto.language.typing.tensor import Tensor  # noqa: PLC0415
+    from pypto.language.typing.tile import Tile  # noqa: PLC0415
+
+    return isinstance(annotation, type) and issubclass(
+        annotation, (Tensor, Tile, Scalar, Array, Ptr, DistributedTensor)
+    )
+
+
+def annotation_to_return_slots(annotation: object) -> list[_ir.Type | type] | None:
+    """The declared return contract as *slots* — the under-specification-
+    aware form of :func:`annotation_to_return_types`.
+
+    A fully-concrete facade converts to its ``ir.Type``; a **bare facade
+    class** (``pl.Tensor``, unsubscripted) is kept as the class itself — an
+    under-specified slot whose shape and dtype are derived from the traced
+    body and whose *kind* is class-checked against it (typing from values:
+    a bare class states no shape, so it cannot lie — it under-specifies).
+    ``None`` means no annotation. Anything else that cannot convert raises
+    ``TypeError`` exactly like the concrete form. Bare classes are legal at
+    both granularities — the top-level ``-> pl.Tensor`` and elements of a
+    flat ``tuple[pl.Tensor, pl.Scalar[...]]`` — the parser's
+    declared-wins/absent-derives rule extended to element granularity.
+    """
+    if annotation is None:
+        return None
+    if _is_bare_facade_class(annotation):
+        top: list[_ir.Type | type] = [annotation]
+        return top
+    try:
+        return [annotation_to_type(annotation)]
+    except TypeError:
+        if get_origin(annotation) is not tuple:
+            # The old concrete form's behavior: an uninterpretable return
+            # annotation (``-> None`` resolves to ``NoneType``; a host-only
+            # annotation) is an empty contract — void, not an error.
+            return []
+        elements = get_args(annotation)
+        if not elements or elements[-1] is Ellipsis:
+            raise TypeError("tuple return annotations must list facade element types") from None
+        slots: list[_ir.Type | type] = []
+        for element in elements:
+            if _is_bare_facade_class(element):
+                slots.append(element)
+            else:
+                slots.append(annotation_to_type(element))
+        return slots
 
 
 def annotation_to_type(facade: object) -> _ir.Type:
