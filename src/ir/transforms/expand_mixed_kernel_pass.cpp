@@ -1631,6 +1631,21 @@ struct ExpandedKernel {
   std::optional<FunctionPtr> group_func;  // nullopt when existing Group caller will be rewritten
 };
 
+// Align a pre-built fresh-param list with DeepClone's type-closure repair.
+// The cloned body references the repaired Vars (a seeded replacement whose
+// type embedded a pre-clone Var — e.g. a tensor param shaped [t_dim, 128]
+// where t_dim is a sibling scalar param — is rebuilt so the type points at
+// the clone's t_dim). A Function built from the pre-repair seeds would leave
+// those body uses free Vars: codegen resolves the param view under the seed's
+// identity and the body's tload fails "Tensor view not found for parameter".
+void ApplySeedFixups(std::vector<VarPtr>& params, const std::unordered_map<const Var*, VarPtr>& fixups) {
+  if (fixups.empty()) return;
+  for (auto& param : params) {
+    auto it = fixups.find(param.get());
+    if (it != fixups.end()) param = it->second;
+  }
+}
+
 ExpandedKernel ExpandMixedFunction(const FunctionPtr& func, bool create_group, const AivPlacement& placement,
                                    bool had_regions) {
   // A tile.transpose that swaps the split axis cannot be split correctly:
@@ -1823,8 +1838,9 @@ ExpandedKernel ExpandMixedFunction(const FunctionPtr& func, bool create_group, c
   // applies the repoint.
   auto aic_body_stmt = apply_tpop_remap(MakeBody(aic_final, func->span_), aic_tpop_remap);
   RemapDanglingGmRefsToParam(aic_body_stmt, aic_map, gm_origin_map, func);
-  auto [aic_cloned_body, aic_clone_map_unused] = DeepClone(aic_body_stmt, aic_map);
+  auto [aic_cloned_body, aic_clone_map_unused, aic_seed_fixups] = DeepClone(aic_body_stmt, aic_map);
   (void)aic_clone_map_unused;
+  ApplySeedFixups(aic_params, aic_seed_fixups);
   auto aic_func = std::make_shared<Function>(aic_name, aic_params, func->param_directions_,
                                              std::vector<TypePtr>{}, aic_cloned_body, func->span_,
                                              FunctionType::AIC, std::nullopt, std::nullopt, func->attrs_);
@@ -1879,8 +1895,9 @@ ExpandedKernel ExpandMixedFunction(const FunctionPtr& func, bool create_group, c
     RemapDanglingGmRefsToParam(aiv_body_stmt, aiv_map, gm_origin_map, func);
   }
 
-  auto [aiv_cloned_body, aiv_clone_map_unused] = DeepClone(aiv_body_stmt, aiv_map);
+  auto [aiv_cloned_body, aiv_clone_map_unused, aiv_seed_fixups] = DeepClone(aiv_body_stmt, aiv_map);
   (void)aiv_clone_map_unused;
+  ApplySeedFixups(aiv_params, aiv_seed_fixups);
   auto aiv_attrs = func->attrs_;
   if (needs_dual_aiv_dispatch) {
     aiv_attrs.erase(std::remove_if(aiv_attrs.begin(), aiv_attrs.end(),
@@ -2210,6 +2227,7 @@ FunctionPtr BuildGroupAbiAdapter(const FunctionPtr& group, const WrapperCallInfo
   if (!peer_renames.empty()) {
     adapter_body = PeerFuncRewriter(peer_renames).VisitStmt(adapter_body);
   }
+  ApplySeedFixups(adapter_params, cloned.seed_fixups);
 
   return std::make_shared<Function>(adapter_name, std::move(adapter_params), group->param_directions_,
                                     callee->return_types_, std::move(adapter_body), callee->span_,

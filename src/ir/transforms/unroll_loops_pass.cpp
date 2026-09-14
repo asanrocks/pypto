@@ -95,7 +95,8 @@ class LoopUnrollMutator : public IRMutator {
       auto const_expr = std::make_shared<ConstInt>(i, DataType::INDEX, op->loop_var_->span_);
       std::unordered_map<const Var*, ExprPtr> sub_map;
       sub_map[op->loop_var_.get()] = const_expr;
-      auto [cloned_body, def_var_map] = DeepClone(op->body_, sub_map, /*clone_def_vars=*/false);
+      auto [cloned_body, def_var_map, _unused_fixups] =
+          DeepClone(op->body_, sub_map, /*clone_def_vars=*/false);
       unrolled.push_back(VisitStmt(cloned_body));
     };
 

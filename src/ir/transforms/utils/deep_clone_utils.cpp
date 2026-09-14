@@ -346,7 +346,21 @@ DeepCloneResult DeepClone(const StmtPtr& body, const std::unordered_map<const Va
       val = it->second;
     }
   }
-  return {cloned, var_map_result};
+
+  // Surface the closure repair for seeded replacements: the caller pre-built
+  // those Vars (fresh params) and cannot see that the body now references the
+  // repaired ones. Keyed by the seeded replacement Var itself, so a caller
+  // holding its param vector can look each entry up directly.
+  std::unordered_map<const Var*, VarPtr> seed_fixups;
+  for (const auto& [_key, val] : var_map) {
+    auto fresh = std::dynamic_pointer_cast<const Var>(val);
+    if (!fresh) continue;
+    auto it = closure_vars.find(fresh.get());
+    if (it != closure_vars.end()) {
+      seed_fixups.emplace(fresh.get(), it->second);
+    }
+  }
+  return {cloned, var_map_result, std::move(seed_fixups)};
 }
 
 }  // namespace ir

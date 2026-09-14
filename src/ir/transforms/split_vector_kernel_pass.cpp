@@ -195,6 +195,49 @@ TypePtr WithZeroValidShape(const TypePtr& type, const Span& span) {
 
 using ExprReplacementMap = std::unordered_map<const Var*, ExprPtr>;
 
+// Fresh params with types closed over the replacement map.
+//
+// The base IRMutator resolves a var_remap_ hit transitively: visiting the
+// seeded replacement re-walks its type and MINTS a new Var when the type
+// still embeds a pre-clone Var (a tensor param shaped [t_dim_old, 4096]
+// beside the cloned t_dim param). A body substituted with such a map then
+// references the minted Var — not the pre-built param — leaving the body's
+// uses free relative to the new function's signature (codegen: "Tensor view
+// not found for parameter"). Pre-closing each param's type over the map
+// makes the seeded replacement stable: its type embeds only post-clone Vars,
+// so the transitive resolution returns it verbatim.
+template <typename MapT>
+std::vector<VarPtr> MakeClosedFreshParams(const FunctionPtr& func, MapT& replacements) {
+  std::vector<VarPtr> new_params;
+  new_params.reserve(func->params_.size());
+  std::vector<const Var*> orig_ptrs;
+  orig_ptrs.reserve(func->params_.size());
+  for (const auto& param : func->params_) {
+    auto new_param = std::make_shared<Var>(param->name_hint_, param->GetType(), param->span_);
+    new_params.push_back(new_param);
+    orig_ptrs.push_back(param.get());
+    replacements[param.get()] = new_param;
+  }
+  // Fixpoint for param-type chains (a shape embedding another param whose
+  // own type embeds a third); index-domain scalar params embed no
+  // expressions, so this converges in at most a couple of rounds.
+  for (size_t round = 0; round < new_params.size(); ++round) {
+    bool changed = false;
+    for (size_t i = 0; i < new_params.size(); ++i) {
+      // new_params[i] is never a key (keys are the original params), so this
+      // substitution performs only the type-closing walk.
+      auto closed = As<Var>(transform_utils::Substitute(new_params[i], replacements));
+      if (closed && closed != new_params[i]) {
+        new_params[i] = closed;
+        replacements[orig_ptrs[i]] = closed;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return new_params;
+}
+
 ExprPtr SubstituteExprIfNeeded(const ExprPtr& expr, const ExprReplacementMap& replacements) {
   if (replacements.empty() || !expr) return expr;
   return transform_utils::Substitute(expr, replacements);
@@ -506,13 +549,7 @@ FunctionPtr ProcessStandaloneSplitFunction(const FunctionPtr& func, SplitMode mo
 
   std::unordered_map<const Var*, TileInfo> tile_vars;
   std::unordered_map<const Var*, VarPtr> var_replacements;
-  std::vector<VarPtr> new_params;
-  new_params.reserve(func->params_.size());
-  for (const auto& param : func->params_) {
-    auto new_param = std::make_shared<Var>(param->name_hint_, param->GetType(), param->span_);
-    new_params.push_back(new_param);
-    var_replacements[param.get()] = new_param;
-  }
+  std::vector<VarPtr> new_params = MakeClosedFreshParams(func, var_replacements);
 
   auto injected = InjectSubblockIdx(func, is_aiv);
 
@@ -523,7 +560,7 @@ FunctionPtr ProcessStandaloneSplitFunction(const FunctionPtr& func, SplitMode mo
   if (!var_replacements.empty()) {
     new_body = transform_utils::Substitute(new_body, var_replacements);
   }
-  auto [cloned_body, clone_map_unused] = DeepClone(new_body);
+  auto [cloned_body, clone_map_unused, _unused_fixups] = DeepClone(new_body);
   (void)clone_map_unused;
 
   auto new_func = MutableCopy(func);
@@ -539,14 +576,8 @@ FunctionPtr ProcessNoSplitDualAivFunction(const FunctionPtr& func) {
   INTERNAL_CHECK(RequiresNoSplitDualAivSync(func))
       << "Internal error: ProcessNoSplitDualAivFunction requires dual-dispatch AIV marker";
 
-  std::unordered_map<const Var*, ExprPtr> param_replacements;
-  std::vector<VarPtr> new_params;
-  new_params.reserve(func->params_.size());
-  for (const auto& param : func->params_) {
-    auto new_param = std::make_shared<Var>(param->name_hint_, param->GetType(), param->span_);
-    new_params.push_back(new_param);
-    param_replacements[param.get()] = new_param;
-  }
+  ExprReplacementMap param_replacements;
+  std::vector<VarPtr> new_params = MakeClosedFreshParams(func, param_replacements);
 
   auto injected = InjectSubblockIdx(func, /*is_aiv=*/true);
   INTERNAL_CHECK(!injected.body_stmts.empty())
@@ -558,7 +589,7 @@ FunctionPtr ProcessNoSplitDualAivFunction(const FunctionPtr& func) {
   ExprReplacementMap lane1_replacements = param_replacements;
   auto lane1_stmts = BuildNoSplitLane1ReplayStmts(hoisted_prefix.branch_stmts, lane1_replacements);
   auto lane1_body = loop_repair::MakeBody(lane1_stmts, func->span_);
-  auto [lane1_cloned_body, lane1_clone_map_unused] = DeepClone(lane1_body);
+  auto [lane1_cloned_body, lane1_clone_map_unused, _unused_fixups] = DeepClone(lane1_body);
   (void)lane1_clone_map_unused;
   lane1_body = lane1_cloned_body;
 
@@ -575,7 +606,7 @@ FunctionPtr ProcessNoSplitDualAivFunction(const FunctionPtr& func) {
   if (!param_replacements.empty()) {
     new_body = transform_utils::Substitute(new_body, param_replacements);
   }
-  auto [cloned_body, clone_map_unused] = DeepClone(new_body);
+  auto [cloned_body, clone_map_unused, _unused_fixups2] = DeepClone(new_body);
   (void)clone_map_unused;
 
   auto new_func = MutableCopy(func);

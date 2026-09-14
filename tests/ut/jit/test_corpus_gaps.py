@@ -461,6 +461,10 @@ class TestSpmdWithFormBodyShape:
 # class-scope name is invisible to method annotations anyway).
 _HS_T = pl.dynamic("T_HOST_SURFACE")
 
+# W12 pins (TestMixedLaneParamTypeClosure): the sibling-scalar shape that
+# forces a lane param's type through the substitution closure.
+_W12_T = pl.dynamic("T_W12_MIXED_LANE")
+
 
 @pl.jit.incore
 def _hs_writer(x: pl.Tensor[[_HS_T, 64], pl.FP32], y: pl.Tensor[[_HS_T, 64], pl.FP16]):
@@ -840,6 +844,119 @@ class TestInlineSpliceTypeClosure:
         sink_text = sink.as_python()
         assert "[[t_dim, " not in sink_text and "[[t_dim," not in sink_text, sink_text
         assert "t_dim_inline" in sink_text, sink_text
+
+
+class TestMixedLaneParamTypeClosure:
+    """An outlined lane's param list must close over its body's substitution.
+
+    Closed 2026-09-14, from the pypto-lib census (W12: the 5 residual dspark
+    files failed PTO codegen with ``Tensor view not found for parameter``).
+    Both lane-splitting transforms pre-build fresh params that share the
+    original (pre-clone) types, then rewrite the lane body through a
+    substitution seeded old-param → fresh-param. A tensor param whose shape
+    embeds a *sibling scalar param* verbatim (``[t_dim, 4096]`` — dim 0 is
+    exactly the scalar, not an arithmetic expression over it) forces the
+    substitution machinery to rebuild that param:
+
+    * **ExpandMixedKernel** — ``DeepClone``'s post-traversal type closure
+      repairs a seeded replacement Var whose type references pre-clone Vars;
+      the AIV function was still built from the pre-repair seeds, so the
+      body's uses of ``raw_valid`` (dspark ``decode_hca``/``decode_fwd``:
+      the ``hca_raw_attn`` valid-mask row) were free Vars — printed
+      ``__FREE_VAR`` and rejected by codegen's ``GetOrCreateTensorView``.
+    * **SplitVectorKernel** (no-split dual AIV dispatch) — the base
+      ``IRMutator`` resolves a ``var_remap_`` hit transitively and MINTS a
+      new Var when the seeded replacement's type still embeds a pre-clone
+      Var, so ``Substitute(body, param_replacements)`` left the body on the
+      minted Var (dspark ``dspark_drafter``/``dspark_prefill``: the
+      ``dspark_main_proj`` store destination) — again free relative to the
+      pre-built ``new_params``.
+
+    The corpus shape both times: a ``t_dim = pl.tensor.dim(x, 0)`` runtime
+    scalar beside a ``pl.create_tensor([t_dim, K])`` local captured by the
+    spmd block. The pins compile through the Default pipeline (the IR only
+    breaks there — trace-level assertions cannot see it) and assert no
+    ``__FREE_VAR`` survives, the printer's marker for exactly the use
+    codegen rejects."""
+
+    def test_dual_dispatch_lane_keeps_store_param_bound(self):
+        """The ``dspark_main_proj`` shape: cube matmul → cross-core boundary →
+        AIV cast/store writing the ``[t_dim, K]`` Out param — the AIV half is
+        dual-dispatch split by SplitVectorKernel, whose lane replay must keep
+        the store destination on the function's own param."""
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        @pl.jit
+        def entry(
+            hidden: pl.Tensor[[_W12_T, 64], pl.BF16],
+            weight: pl.Tensor[[32, 64], pl.BF16],
+            out: pl.Out[pl.Tensor[[_W12_T, 32], pl.BF16]],
+        ) -> pl.Tensor[[_W12_T, 32], pl.BF16]:
+            t_dim = pl.tensor.dim(hidden, 0)
+            projected = pl.create_tensor([t_dim, 32], dtype=pl.BF16)
+            for proj_idx in pl.spmd(2, name_hint="w12_main_proj"):
+                t0 = proj_idx * 16
+                rows = pl.min(16, t_dim - t0)
+                h = pl.slice(hidden, [16, 64], [t0, 0], valid_shape=[rows, 64])
+                w = weight[0:32, 0:64]
+                acc = pl.matmul(h, w, b_trans=True, out_dtype=pl.FP32)
+                v = pl.cast(acc, target_type=pl.BF16, mode="rint")
+                v = pl.set_validshape(v, rows, 32)
+                projected[t0 : t0 + 16, 0:32] = v
+            out[:] = projected
+            return out
+
+        prog = entry.compile_for_test(
+            torch.zeros(32, 64, dtype=torch.bfloat16),
+            torch.zeros(32, 64, dtype=torch.bfloat16),
+            torch.zeros(32, 32, dtype=torch.bfloat16),
+        )
+        assert isinstance(prog, ir.Program)
+        text = ir.python_print(prog)
+        assert "w12_main_proj_aiv" in text, text  # the dual-dispatch lane exists
+        assert "__FREE_VAR" not in text, text
+
+    def test_split_aiv_lane_keeps_in_param_bound(self):
+        """The ``hca_raw_attn`` shape: an In tensor param shaped ``[t_dim, K]``
+        whose only use is inside the ``pl.split_aiv`` region — ExpandMixedKernel
+        must bind the AIV half's view for it, not leave the body on the
+        pre-closure seed."""
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        @pl.jit
+        def entry(
+            q: pl.Tensor[[_W12_T, 64], pl.BF16],
+            kv: pl.Tensor[[64, 32], pl.BF16],
+            scores: pl.Out[pl.Tensor[[_W12_T, 32], pl.FP32]],
+            biased: pl.Out[pl.Tensor[[_W12_T, 32], pl.FP32]],
+        ) -> tuple[pl.Tensor[[_W12_T, 32], pl.FP32], pl.Tensor[[_W12_T, 32], pl.FP32]]:
+            t_dim = pl.tensor.dim(q, 0)
+            valid = pl.create_tensor([t_dim, 32], dtype=pl.FP32)
+            with pl.spmd(2, name_hint="w12_raw_attn"):
+                task = pl.tile.get_block_idx()
+                q_t = pl.load(q, [task * 16, 0], [16, 64], target_memory=pl.MemorySpace.Mat)
+                kv_t = pl.load(kv, [0, 0], [64, 32], target_memory=pl.MemorySpace.Mat)
+                s = pl.matmul(q_t, kv_t, out_dtype=pl.FP32)
+                pl.store(s, [task * 16, 0], scores)
+                for aiv in pl.split_aiv(2, mode=pl.SplitMode.NONE):
+                    # t_dim in scalar arithmetic: the runtime extent is captured
+                    # as a sibling Scalar param of the outlined kernel, the shape
+                    # ``[t_dim, 32]`` then embedding that param's Var.
+                    last = t_dim - 16
+                    v = pl.load(valid, [last, 0], [16, 32], target_memory=pl.MemorySpace.Vec)
+                    pl.store(pl.add(v, v), [task * 16, 0], biased)
+            return scores, biased
+
+        prog = entry.compile_for_test(
+            torch.zeros(32, 64, dtype=torch.bfloat16),
+            torch.zeros(64, 32, dtype=torch.bfloat16),
+            torch.zeros(32, 32, dtype=torch.float32),
+            torch.zeros(32, 32, dtype=torch.float32),
+        )
+        assert isinstance(prog, ir.Program)
+        text = ir.python_print(prog)
+        assert "w12_raw_attn_aiv" in text, text  # the mixed kernel was lane-split
+        assert "__FREE_VAR" not in text, text
 
 
 class TestCarryInitDtypeConflict:

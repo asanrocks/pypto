@@ -825,7 +825,7 @@ FunctionPtr LowerExplicitRegionFunction(const FunctionPtr& func) {
          "plain @pl.function / @pl.jit (Opaque) so OutlineIncoreScopes lifts it, or drop the "
          "scope from inside the region.";
 
-  auto [cloned_body, clone_map_unused] = DeepClone(new_body);
+  auto [cloned_body, clone_map_unused, _unused_fixups] = DeepClone(new_body);
   (void)clone_map_unused;
 
   auto attrs = func->attrs_;
@@ -965,7 +965,7 @@ FunctionPtr LowerFunction(const FunctionPtr& func, SplitMode mode) {
   if (!var_replacements.empty()) {
     new_body = transform_utils::Substitute(new_body, var_replacements);
   }
-  auto [cloned_body, clone_map_unused] = DeepClone(new_body);
+  auto [cloned_body, clone_map_unused, _unused_fixups] = DeepClone(new_body);
   (void)clone_map_unused;
 
   auto new_func = MutableCopy(func);

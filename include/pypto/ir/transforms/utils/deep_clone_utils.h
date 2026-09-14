@@ -26,6 +26,13 @@ struct DeepCloneResult {
   /// Mapping from original Var pointers to their fresh definition-site clones.
   /// Does not include pre-seeded substitutions that map to non-Var expressions (e.g. ConstInt).
   std::unordered_map<const Var*, VarPtr> var_map;
+  /// Seeded replacement Vars that the type-closure repair rebuilt, mapped to
+  /// the repaired Var. A caller that pre-builds replacement Vars (e.g. fresh
+  /// function params) and constructs a Function from them MUST apply this
+  /// map to its param list: the cloned body references the repaired Vars, so
+  /// keeping the pre-repair ones leaves the body's uses free (unbound)
+  /// relative to the new function's signature.
+  std::unordered_map<const Var*, VarPtr> seed_fixups;
 };
 
 /// Deep-clone a statement subtree, creating fresh Var/IterArg/MemRef objects

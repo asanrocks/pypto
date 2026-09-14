@@ -335,7 +335,7 @@ SplicedInlineBody CloneInlineBody(const FunctionPtr& callee, const std::vector<E
   //    is needed. clone_def_vars=true is a safety net: if DefVarCollector
   //    misses a binding kind, DeepClone still produces a fresh Var rather
   //    than leaving the callee's original Var leaking into the caller.
-  auto [renamed_body, clone_map] = DeepClone(callee->body_, seed, /*clone_def_vars=*/true);
+  auto [renamed_body, clone_map, _unused_fixups] = DeepClone(callee->body_, seed, /*clone_def_vars=*/true);
 
   // Record this splice's Var renames (callee local → fresh `_inlineN`, plus
   // DeepClone's auto-cloned defs) for the post-fixpoint repair sweep — see
