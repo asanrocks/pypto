@@ -546,7 +546,14 @@ def task_dummy(*, deps: Sequence[Scalar | Array | None]) -> Scalar:
     ``pl.submit``)."""
     actual_span = _get_span_or_capture(None, frame_offset=1)
     base = _ir_core.create_op_call("system.task_dummy", [], {}, actual_span)
-    dep_exprs = [d.unwrap() for d in deps if d is not None]  # type: ignore[union-attr]
+    # The shared ``deps=`` coercion (the parser's Form-1 desugaring, ported):
+    # a per-element TASK_ID read (``arr[i]``) folds into a synthesized array
+    # so ``manual_dep_edges`` stays Var-only — the same contract ``pl.submit``
+    # / ``pl.spmd`` / ``pl.at`` honor (the migration guide's "existing
+    # dependency lists keep working" promise covers this op too).
+    from pypto.language.constructs.submit import _coerce_deps  # noqa: PLC0415 - avoid an import cycle
+
+    dep_exprs = _coerce_deps(deps, "pl.system.task_dummy")
     attrs: list[tuple[str, Any]] = [("dummy_task", True)]
     if dep_exprs:
         attrs.append(("manual_dep_edges", dep_exprs))

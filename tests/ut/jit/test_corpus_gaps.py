@@ -748,6 +748,27 @@ class TestSpmdDepsFromTaskIdArray:
 
         assert isinstance(k, ir.Function)
 
+    def test_task_dummy_deps_accept_task_id_array_element(self):
+        """``pl.system.task_dummy(deps=[arr[i]])`` — the same Form-1 element
+        read through the dependency-only barrier. ``manual_dep_edges`` is
+        Var-only, so the per-element read must fold through the shared
+        ``deps=`` coercion (``_coerce_deps``) exactly like the with-form's
+        ``deps=``; a clean trace is the oracle. Corpus shape:
+        ``prefill_sparse_attn``'s wave-completion fence and the dspark MoE
+        scatter fan-ins."""
+
+        @pl.function
+        def k(y: pl.Out[pl.Tensor[[64], pl.FP32]]):
+            tids = pl.array.create(2, pl.TASK_ID)
+            for i in pl.parallel(2):
+                with pl.spmd(2, name_hint="producer") as tid:
+                    tids[i] = tid  # type: ignore[reportArgumentType]  # parallel() loop var stub
+            fence = pl.system.task_dummy(deps=[tids[0], None])
+            with pl.spmd(2, name_hint="consumer", deps=[fence]) as tid:
+                pass
+
+        assert isinstance(k, ir.Function)
+
 
 class TestTileSubscriptWrite:
     def test_tile_setitem_lowering(self):
