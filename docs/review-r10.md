@@ -11,8 +11,8 @@ cold-start and writes it back in the same commit as its work.
 
 ## 0. Fact base
 
-| | |
-| --- | --- |
+| Field | Value |
+| ----- | ----- |
 | Base ref | `origin/main` = `8ecc5d19f0ac1062ae6779ba8aca8cee75c22667` |
 | Head at seed | `3020f8650` |
 | Size | 54 commits, 530 files, +56929 / −10793 |
@@ -86,7 +86,7 @@ specializer-mechanics coverage, which `AGENTS.md` assigns to this runtime.
 suites, not specializer-mechanics suites:
 
 | File | Sites |
-| --- | --- |
+| ---- | ----- |
 | `tests/ut/ir/transforms/test_block_nz_tensor_views.py` | 9 |
 | `tests/ut/ir/transforms/test_narrow_loop_carry_valid_shape.py` | 7 |
 | `tests/ut/ir/transforms/test_auto_tile_matmul_acc_mn.py` | 6 |
@@ -357,7 +357,7 @@ non-allowlisted usages"; the rows were reworded. Fix: exclude
 ## 5. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
-| --- | --- | --- | --- | --- | --- |
+| ----- | ---- | ----- | ----- | ------ | ------ |
 | 0 | seed tracker + oracles | — (orchestrator) | done | `1acbadcc8` | oracles frozen: R1 red 34, R2 red 167, R4 red 2 |
 | 0.1 | churn-oracle scope fix | — (orchestrator) | done | `cce8029da` | R2 red restored to the seed 167/38; the tooling had been auditing itself (`scripts/review/comment_churn_allowlist.txt` reported as churn) |
 | 0.2 | F5 fix: R1 oracle off markdown | — (orchestrator) | done | `07132dfb2` | the tracker's own prose can no longer flip R1 red; markdown removed from the oracle's code set. **Note:** that commit's message also claims it recorded the R2 verification block and filed F10 — the edit was lost to a failed multi-edit call, so only the oracle fix and ledger rows landed. Both are recorded now |
@@ -427,7 +427,7 @@ After: `88 usages (88 allowlisted, 0 candidates)`, PASS, exit 0.
 `program_ast`: 0 hits before and after (nothing to do).
 
 | File | Sites | Verdict | Change |
-| --- | --- | --- | --- |
+| ---- | ----- | ------- | ------ |
 | `tests/ut/ir/transforms/test_block_mx_scale_tensor_views.py` | 1 | unnecessary | frozen `@pl.jit_specializer` kernel → `@pl.program` class + `_run`; the `_bind_args_from_signature` + `_compile_to_program` pair (which built the IR through `pl.parse`) is gone. 10/10 tests, same as HEAD |
 | `tests/ut/codegen/test_matmul_init_cond.py` | 1 | unnecessary | `@pl.jit` + `kernel.compile(..., config=RunConfig(codegen_only=True, save_kernels=True, ...))`. The two trip-count worlds are now the annotation: a host `int` (baked) vs bare `pl.Scalar` + `pl.runtime(4, pl.INDEX)` (a runtime scalar, and bare is what keeps the kernel on the lazy lane). Added the world pin `("to %arg3 step" in mlir) == runtime_bound`, because the annotations — not the removed `pl.RUNTIME` sentinel — now select the world; without it the parametrization is unverifiable. 14/14 tests |
 | `tests/ut/ir/transforms/test_lower_auto_vector_split.py` | 2 | unnecessary | `@pl.jit` (eager) + `PassManager.get_strategy(Default).run_passes(ir.Program([fn], fn.name, fn.span))` with the a2a3 backend pinned inline; `lower(config=RunConfig(platform="a2a3"))` and the now-unused `RunConfig` import are gone. Assertions unchanged, 2/2 e2e tests |
@@ -496,7 +496,7 @@ future comment churn in them. No other hunk changes classification.
 #### Unnecessary — restored (10 files, 32 lines)
 
 | File | Lines | What was restored | Why |
-| --- | --- | --- | --- |
+| ---- | ----- | ----------------- | --- |
 | `python/pypto/ir/formatter.py` | 4 | `You should not use` → `You may not use`; `MERCHANTABILITY OR` → `MERCHANTABILITY, OR` | License template drift, unrelated to any dialect or vocabulary decision — and it violates the repo's own header lint (evidence below) |
 | `python/pypto/language/parser/diagnostics/__init__.py` | 4 | `free software:` → `free software,`; `MERCHANTABILITY OR` → `MERCHANTABILITY, OR` | same |
 | `python/pypto/language/typing/tuple.py` | 2 | `free software;` → `free software,` | same |
@@ -518,7 +518,7 @@ not part of `./scripts/gate`.) Evidence for `typing/scalar.py`:
 #### Necessary — allowlisted (28 files, 133 lines)
 
 | File | Lines | Reason |
-| --- | --- | --- |
+| ---- | ----- | ------ |
 | `examples/models/03_flash_attention.py` | 6 | Body rewritten to derived loop carries + staged joins (`pl.yield_` → rebinding); the three comments described the retired yield/SSA-phi shape |
 | `examples/models/02_vector_dag.py` | 2 | New comment for the new `pl.const(1.0, pl.FP32)` staged-scalar spelling in the same hunk |
 | `examples/intermediate/06_dyn_valid_shape.py` | 3 | `lower` → `compile_for_test` (API renamed by the changeset) |
@@ -551,7 +551,7 @@ not part of `./scripts/gate`.) Evidence for `typing/scalar.py`:
 #### Needs-decision (escalate; recorded, not edited)
 
 | File | Lines | Question |
-| --- | --- | --- |
+| ---- | ----- | -------- |
 | `tests/ut/jit/test_qwen3_decode.py` | 12 | The module-cache comment was replaced wholesale (upstream: "Module-level memoization keeps the non-trivial full-pipeline lowering to one run…") with the `compile_for_test` rename *plus* six new lines of rationale for a fixture-scoped (rather than `scope="class"`) fixture — conftest autouse ordering and the `PYPTO_PROG_BUILD_DIR` redirect. The rename is required; the added rationale is new information the migration did not need, but it documents non-obvious ordering, which `docs/guide-comments.md`'s Comment Rules ask for. Arguable either way, so the file is allowlisted and this row is left for the orchestrator. |
 
 One entry per line was appended to `scripts/review/comment_churn_allowlist.txt`,
@@ -594,7 +594,7 @@ origin/main..HEAD | rg '^[0-9a-f]+ spec\('`.
 After: **13 `spec(` commits**; the review changes only this tracker record.
 
 | Commit / minimal unit | Verdict | Decision |
-| --- | --- | --- |
+| --------------------- | ------- | -------- |
 | `d3bd63e67` ST dialect rewrites | `necessary` | The carry/const rewrites, closure-callee captures, eager/lazy compile-for-test adapters, explicit tpop producers, and tracing-owned assertions are required for the ST suites to leave the parser-era lane. |
 | `d3bd63e67` `return_style_add` and its end-to-end dispatch test | `unnecessary` | This is a regression test for the pre-existing return-style dispatch fix (`f6109f786`), not an ST dialect rewrite. Recorded as F7. |
 | `b9cb6f04b` example dialect rewrites other than `03_flash_attention.py`'s algorithm hunk | `necessary` | The examples replace parser-era loop channels and `lower()`, state typed staged values, capture program callees, and adapt tracing execution. |
@@ -639,7 +639,7 @@ The R4 oracle undercounts because a design-doc mention satisfies it;
 every user-visible capability is findable" and is the criterion used here.
 
 | Name | Doc anchor | Anchor real? | Verdict |
-| --- | --- | --- | --- |
+| ---- | ---------- | ------------ | ------- |
 | `static_dim` | none (planner-only: `docs/migration-todo.md`) | — | `unnecessary` — documented |
 | `static_shape` | none (planner-only) | — | `unnecessary` — documented |
 | `expand` | `docs/design/03-entrance.md` §7, `docs/design/04-migration-guide.md` | design docs only → no user-manual span, gate red | `unnecessary` — documented |
@@ -686,5 +686,5 @@ upstream text this changeset made stale: the control-flow index rows
 **Needs-decision (recorded, not edited).**
 
 | Location | Question |
-| --- | --- |
+| -------- | -------- |
 | `docs/en/user/language/index.md:27`, `docs/zh/user/language/index.md:19` | The two index rows list `while_`, `yield_`, `cond` as control-flow coverage; `while_`/`cond` are gone. `yield_` is still exported (deprecated alias), so only those two are stale. Docs prose is out of scope for this review (§2) — fix in a docs pass, not here. |

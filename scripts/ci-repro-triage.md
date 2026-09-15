@@ -70,7 +70,7 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   `tests/` is a separate campaign, explicitly out of scope here). The four
   checkers above also green when run directly.
 - Notes: do not "fix" pyright errors; do not touch `python/pypto/` typing.
-- Completion: red reproduced before edits (9 headers, 8 broad raises, 7 bare op-name literals, and 2 missing docs code-span symbols). Canonical headers, concrete exception classes, registry-backed op-name constants, and explicit `pl.static_dim`/`pl.static_shape` docs spans now pass all four direct checkers. Hook auto-fixes from the repro were retained, including EOF/clang-format/markdownlint changes; the pre-commit run passes the custom checks, EOF, clang-format, cpplint, ruff, and format hooks. The repro still reports markdownlint failure on the existing large review tables and the separate pyright debt (503 errors); neither was expanded into this task.
+- Completion: red reproduced before edits (9 headers, 8 broad raises, 7 bare op-name literals, and 2 missing docs code-span symbols). Canonical headers, concrete exception classes, registry-backed op-name constants, and explicit `pl.static_dim`/`pl.static_shape` docs spans now pass all four direct checkers. Hook auto-fixes from the repro were retained, and the three affected review documents now satisfy `tests/lint/.markdownlint.yaml`: MD056 is 0 and MD060 is 0. The prescribed repro passes every pre-commit hook except the separate pyright debt (503 errors), which remains out of scope.
 
 ## T2 — port 3 doc examples to the tracing-era spelling — state: open
 

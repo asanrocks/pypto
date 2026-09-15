@@ -52,7 +52,7 @@ compared end to end.**
 **77 anchors across 14 of the 20 conformance suites:**
 
 | Suite | Anchors | Suite | Anchors |
-| --- | --- | --- | --- |
+| ----- | ------- | ----- | ------- |
 | `test_while_logical` | 16 | `test_spmd_with_form` | 4 |
 | `test_subscript_read` | 12 | `test_spmd_submit_only_kwargs` | 4 |
 | `test_at_const` | 10 | `test_at_predicate` | 4 |
@@ -97,7 +97,7 @@ from a 21-item `rg -l` list on the easiest task in the campaign.
 ## 5. Wave 1 — structural core (answers the question directly)
 
 | Task | Construct | Today | Gap to close |
-| --- | --- | --- | --- |
+| ---- | --------- | ----- | ------------ |
 | R5 | `if` / `else` / `elif` | `test_if` 7 | `elif` chains; host-vs-staged predicate dispatch; `if` nested in `while`/`spmd` |
 | R6 | `for` + iterators | `test_for` 7 | `range` kwarg forms; `parallel` / `unroll` / `pipeline` + stage pinning; target forms (single, tuple, computed) |
 | R7 | `break` / `continue` | 2 in `test_for`, some in `test_while_logical` | nested loops; deferred staged exit ordering; exits inside `while` |
@@ -107,7 +107,7 @@ from a 21-item `rg -l` list on the easiest task in the campaign.
 ## 6. Wave 2 — region and remaining surface
 
 | Task | Construct |
-| --- | --- |
+| ---- | --------- |
 | R10 | generic scopes: `scope`, `manual_scope`, `graph`, `cluster` |
 | R11 | `spmd` (with-form vs for-form, tid capture), `split_aiv`, CORE_GROUP carrier — the migration review's F1 lives here — plus the `at` family |
 | R12 | statement handlers: `static_print`, `static_assert`, `dump_tag`, `set_cache_policy`, `func_attrs`, `optimizations` (**0 anchors today**) |
@@ -173,7 +173,7 @@ host predicate: same source, deliberately different IR (`docs/design/01-language
 §5), so the anchor rule does not apply and a shape-pinning test replaces it.
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | `if` / `else`, per-branch locals (existing `k_merge`, `k_else_passthrough`, `k_nested`) | raw + canonical | equivalent (pre-existing anchors, unchanged) |
 | `if` / `else` / `elif` chain with trailing `else` (`k_elif_chain`) | raw + canonical | equivalent |
 | `if` / `elif` chain with no `else` (`k_elif_no_else`) | raw + canonical | equivalent |
@@ -214,7 +214,7 @@ have). Canonical is the staged-flow regime: the SSA pass derives the same
 loop-carried value from the same update on both sides.
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | `pl.range` 1-arg / staged bound (`k_loop_accum`, `k_loop_staged_bound`) | raw + canonical | equivalent (pre-existing anchors, unchanged) |
 | `pl.range(start, stop)` (`k_range_start_stop`) | raw + canonical | equivalent |
 | `pl.range(start, stop, step)` (`k_range_start_stop_step`) | raw + canonical | equivalent |
@@ -333,7 +333,7 @@ carries host-valued state — a separate, unshared regime. That arm is behaviora
 (`test_native_break_cleans_stale_constructs_in_staged_if`), never anchorable.
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | bare `break` / `continue` in a staged `for` (existing `k_loop_break`, `k_loop_continue`) | raw + canonical | equivalent (pre-existing anchors, unchanged) |
 | bare `break` in a staged `while` (existing `k_while_break`) | raw | equivalent (pre-existing anchor, unchanged) |
 | `break` / `continue` inside a staged `if` inside a staged `for` (`k_break_in_if_in_for`, `k_continue_in_if_in_for`) | raw + canonical | equivalent |
@@ -465,7 +465,7 @@ one exception is the type-changing rebind inside a loop — raw-equal, but its
 canonical half is red on **both** lanes (F14).
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | tensor subscript write, partial / bare / full-axis (`k_tensor_write_*`) | raw | equivalent |
 | tile subscript write (`k_tile_write`) | raw | equivalent |
 | array write, const and staged index (`k_array_write_*`) | raw | equivalent |
@@ -542,7 +542,7 @@ return_var or phi), canonical is the staged-flow regime proper (the SSA pass
 joins the per-path returns of a function whose branches each return).
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | trailing single return (`k_trailing_return`) | raw | equivalent |
 | multi-value `return a, b` (`k_multi_value_return`) | raw | equivalent |
 | staged scalar return (`k_scalar_return`) | raw | equivalent |
@@ -879,7 +879,7 @@ the post-SSA text cannot be re-parsed, so the canonical half is pinned rather
 than asserted through the harness.
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | `with pl.scope(mode=pl.ScopeMode.MANUAL):` straight-line (`k_scope_manual`) | raw | equivalent |
 | statements around the scope (`k_scope_manual_fence`) | raw | equivalent |
 | manual `pl.scope` wrapping a staged `for` (`k_scope_manual_around_loop`) | raw + canonical | equivalent |
@@ -1105,7 +1105,7 @@ canonical shape. The one canonical pair that cannot go through the harness is
 a **printer** gap, not a frontend one (F26).
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | for-form bare (no hint) (`k_spmd_for`) | raw | equivalent |
 | for-form + `name_hint` + loop var used (`k_spmd_for_named`) | raw | equivalent |
 | for-form + `sync_start=True` (`k_spmd_for_sync`) | raw | equivalent |
@@ -1453,7 +1453,7 @@ attrs — additionally assert post-`canonicalize()`, the staged-flow regime prop
 `pl.func_attr` is raw-only: `convert_to_ssa` never touches `Function.attrs`.
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | `pl.static_print("label", x)` / f-string form (`k_static_print_*`) | raw | equivalent |
 | `pl.static_assert(True)` / `(True, "msg")` / literal comparison (`k_static_assert_*`) | raw | equivalent |
 | both diagnostics inside a staged `pl.range` (`k_static_diag_in_loop`) | raw + canonical | equivalent |
@@ -1516,7 +1516,7 @@ parse time). The retained deprecated `pl.yield_` alias is a raw anchor. The
 `pl.intrin.*` assembly spellings themselves have no parser anchor.
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | `pl.submit` two-target baseline and scalar `deps=` chain (`SubmitBasic`, `SubmitDeps`) | raw | equivalent |
 | `deps=[arr[i], ...]`, whole TASK_ID array, and Python comprehension (`SubmitDepsPerElement`, `SubmitDepsWholeArray`, `SubmitDepsComprehension`) | raw | equivalent |
 | `dumps=[...]`, `allow_early_resolve=`, valid `predicate=`, `timing_slot=`, and round-trip `attrs=` (`SubmitDumps`, `SubmitEarlyResolve`, `SubmitPredicate`, `SubmitTimingSlot`, `SubmitAttrsRoundTrip`) | raw | equivalent |
@@ -1541,7 +1541,7 @@ rejection / divergence pins above. Its raw dependency-array cases are
 intentional raw-only anchors for the verifier reason stated above.
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | annotated `self.<kernel>(...)` dispatch (`KernelDispatchProgram`) | raw | equivalent |
 | `self.<kernel>(...)` inside a staged loop (`KernelDispatchLoop`) | raw + canonical | equivalent |
 | call-site `attrs={...}` metadata (`CallMetadataProgram`) | raw | equivalent |
@@ -1558,7 +1558,7 @@ required two-way binding / post-inline setup; the immutable harness cannot
 resolve test-module closure bindings when it calls `function_parser` itself.
 
 | Variant | Regime | Verdict |
-| --- | --- | --- |
+| ------- | ------ | ------- |
 | retained `pl.yield_()` compatibility alias (`k_yield_alias`) | raw | equivalent |
 | `pl.intrin.carry` / `pl.intrin.yield_` / `pl.intrin.leak` | n/a (no shared spelling) | out of scope — assembly channels are tracing-owned; the ownership boundary is `docs/design/01-language.md:671-678` and `docs/design/04-migration-guide.md:457-461` |
 | `pl.intrin.free_var` and `pl.intrin.transmute` | n/a (no shared spelling) | out of scope — tracing-only assembly declarations, pinned by `test_assembly_intrin_has_no_parser_spelling` |
@@ -1604,7 +1604,7 @@ tests, all green**.
 ## 20. Round ledger
 
 | Round | Task | Model | State | Commit | Result |
-| --- | --- | --- | --- | --- | --- |
+| ----- | ---- | ----- | ----- | ------ | ------ |
 | 0 | seed this tracker | — (orchestrator) | done | `d60a4b303` | plan, contract, evidence base |
 | 0 | parity inventory oracle | — (orchestrator) | done | *(this commit)* | `scripts/review/check_construct_parity.py`; 0 stale, 10/16 constructs without anchors, 4 unclaimed structural parser handlers, 17 unclaimed public tracing entries. The gap table in section 5 is now data, not hypothesis |
 | 1 | R5 `if` / `else` / `elif` | worker session | done | *(this commit)* | 13 new anchors in `test_if.py` (suite 7 → 20 call sites; 70 → 83 across `test_*.py`), all green. **No `F*` task**: no red anchor. One intended divergence pinned (host predicate dispatch). |
