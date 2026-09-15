@@ -523,13 +523,26 @@ class _JitSpecializer:
         from pypto.runtime.runner import run_config_compile_identity  # noqa: PLC0415 — torch is a runner dep
 
         parts: list[Any] = []
-        for arg in bridged:
+        for name, arg in zip(self._param_names, bridged):
             if isinstance(arg, RuntimeScalar):
                 # The entry runtime-scalar marker: type-only — one artifact
                 # serves every value (the whole point of the spelling).
                 parts.append(("runtime_scalar", str(arg.dtype)))
             elif is_staged(arg) and isinstance(arg, Tensor):
-                parts.append((tuple(map(str, arg.shape or ())), str(arg.dtype), str(arg.layout)))
+                declared = self._param_hints.get(name)
+                declared_shape = getattr(declared, "shape", None)
+                shape = tuple(arg.shape or ())
+                if declared_shape is not None and len(declared_shape) == len(shape):
+                    # A declared dynamic extent is part of the artifact's
+                    # runtime contract, not its specialization key. The
+                    # eager record already preserves that extent in the IR;
+                    # keying it by each concrete dispatch shape would rebuild
+                    # an equivalent binary for every batch size.
+                    shape = tuple(
+                        None if isinstance(declared_dim, ir.Var) or hasattr(declared_dim, "_ir_var") else dim
+                        for declared_dim, dim in zip(declared_shape, shape)
+                    )
+                parts.append((tuple(map(str, shape)), str(arg.dtype), str(arg.layout)))
             else:
                 parts.append((type(arg).__name__, arg))
         parts.append(run_config_compile_identity(config))

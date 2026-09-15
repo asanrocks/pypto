@@ -116,18 +116,33 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
 - Green check: the affected cross_core tests pass on device.
 - Completion: Confirmed the red check with `task-submit --device auto --timeout 900 --max-time 600 --run "cd /data/wangmingzhe/workspace/subprojects/pypto-2 && .venv/bin/python -m pytest tests/st/runtime/cross_core/test_cross_core_dynamic_valid_shape.py::TestCrossCoreDynamicValidShape::test_c2v_tpop_dynamic_valid_shape -v --platform=a2a3"`: tracing failed with `InvalidOperationError: tpop_from_aic() missing 1 required positional argument: 'shape'`. The intrinsic declaration and commit `5a9c6d280` show that `shape` and `dtype` are intentional required value-producer inputs, so the seven stale call sites were updated to pass the physical `[ROWS, COLS]` shape and `pl.FP32`. The three stale strict xfails in `test_cross_core_split_parity.py` were removed because the explicit full-box shape makes all six parity regimes pass. Focused device evidence passed 4/4; the affected four-file family passed 18/18. A broader 57-item cross-core run passed 52, with three of those now-removed xfails passing and one unrelated grouped-tpop test failing with `ACL_ERROR_RT_AICPU_EXCEPTION (507018)`; that failure is tracked separately as T9.
 
-## T6 — `.warmup` on eagerly-traced `ir.Function` (9 st failures) — state: open
+## T6 — `.warmup` on eagerly-traced `ir.Function` (stale baseline) — state: done
 
 - Mode: triage, then fix if mechanical. Model: openai/gpt-5.6-luna.
 - Allowed paths: `tests/st/runtime/framework_and_models/test_jit.py` (and
   the jit decorator surface only if the verdict points there).
-- Red check: 9 failures in that file — `.warmup` and friends called on
-  eagerly-traced `ir.Function` objects; the lazy-lane surface moved.
-- Triage question: which lane do these tests mean to exercise? If they
-  test the lazy jit surface, port them to the lazy spelling (bare
-  `pl.Tensor` params); if they test eager artifacts, drop the moved
-  methods. Confirm intent from the assertions before editing.
-- Green check: the 9 tests pass on device (bounded task-submit).
+- Red check: the documented count was stale on the current checkout. The
+  focused device run collected 10 tests and produced 7 failures, including
+  `.warmup` on an eagerly-traced `_JitSpecializer`, specializer-only
+  persistent-artifact assertions, a lazy traced facade read through
+  `a.shape`, and dynamic eager dispatch creating two cache entries.
+- Triage verdict: process-persistent artifact reuse and device-free
+  `.warmup` belong to the quarantined `pl.jit_specializer` surface; the
+  tracing `pl.jit` surface provides compile/dispatch and
+  `compile_for_test`. The remaining tests exercise tracing lazy dispatch
+  and eager dynamic-artifact reuse.
+- Green check: the 8 retained tracing-jit tests pass on device via bounded
+  `task-submit`.
+- Completion: Removed the two specializer-only ST tests and their helper,
+  changed the lazy add fixture to use `pl.tensor.dim` with a fixed
+  `[128, 128]` tile and runtime `valid_shape`, and normalized declared
+  dynamic dimensions to `None` in the tracing jit cache key. Before edits,
+  `task-submit --device auto --max-time 600 --run "cd
+  /data/wangmingzhe/workspace/subprojects/pypto-2 && .venv/bin/python -m
+  pytest tests/st/runtime/framework_and_models/test_jit.py --platform=a2a3
+  -v"` reported 7 failed, 3 passed; after edits the same bounded command
+  reported 8 passed. Device-free focused jit checks passed 33/33 and Ruff
+  passed for both changed source files. No new task was discovered.
 
 ## T1 — port 20+4 codegen tests off `_JitSpecializer` — state: open
 
