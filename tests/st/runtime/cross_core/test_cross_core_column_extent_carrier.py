@@ -88,7 +88,7 @@ def _program(vr: int, vc: int) -> Any:
             buf = pl.reserve_buffer(name="slot_buf", size=BUF, base=0x2000)
             pl.aiv_initialize_pipe(dir_mask=1, slot_size=SLOT, c2v_consumer_buf=buf)
             popped: pl.Tile[[ROWS, COLS], pl.FP32, pl.Mem.Vec, pl.TileView(valid_shape=[vr, vc])] = (
-                pl.tpop_from_aic(split=1)
+                pl.tpop_from_aic([ROWS, COLS], dtype=pl.FP32, split=1)
             )
             incremented: pl.Tile[[ROWS, COLS], pl.FP32] = pl.add(popped, 1.0)
             pl.tfree_to_aic(popped)

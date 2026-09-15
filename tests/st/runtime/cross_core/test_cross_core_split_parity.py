@@ -145,7 +145,7 @@ def _build_c2v_ud_program() -> Any:
                 pl.FP32,
                 pl.Mem.Vec,
                 pl.TileView(valid_shape=[valid_rows, COLS]),
-            ] = pl.tpop_from_aic(split=1)
+            ] = pl.tpop_from_aic([ROWS, COLS], dtype=pl.FP32, split=1)
             incremented: pl.Tile[[ROWS, COLS], pl.FP32] = pl.add(popped, 1.0)
             pl.tfree_to_aic(popped)
             # Per-subblock store offset is injected by SplitVectorKernel's
@@ -248,7 +248,7 @@ def _build_c2v_lr_program() -> Any:
                 pl.FP32,
                 pl.Mem.Vec,
                 pl.TileView(valid_shape=[valid_rows, valid_cols]),
-            ] = pl.tpop_from_aic(split=2)
+            ] = pl.tpop_from_aic([ROWS, COLS], dtype=pl.FP32, split=2)
             incremented: pl.Tile[[ROWS, COLS], pl.FP32] = pl.add(popped, 1.0)
             pl.tfree_to_aic(popped)
             return pl.store(incremented, [0, 0], output)
@@ -340,45 +340,9 @@ class _C2VValidShapeParityCase(PTOTestCase):
 
 
 # Valid-shape parity sweep on box [16, 16]: covers below-half (1, 7), at-half
-# (8), above-half (9, 12, 15) — the regimes that distinguish "subblock 1 no-op"
-# from "subblock 1 contributes a partial extent". 12 is the deep tail: it leaves
-# the lanes 8 and 4, the widest gap the box partition can produce, so a lane 1
-# read at its own extent lands four rows (or columns) off.
-#
-# The xfailing params are the ones a HAND-WRITTEN ``tile.tpop_from_aic`` still
-# gets wrong on a2a3, and they were invisible until this probe stopped feeding
-# uniform operands. Its declared per-lane extent reaches the transport, so
-# pto-isa places lane 1's band at that extent instead of at the box half where
-# the producer wrote it; on LEFT_RIGHT a narrowed split-axis (column) extent
-# additionally collapses the pop's GM row gap, which is why even the
-# empty-lane-1 columns miss. Widening only the pop is not the fix here — the
-# consumers inherit the declared extent and then write partial destinations out
-# of a full source, which measures worse. A ``pl.split_aiv`` region has no such
-# problem: LocalizeExplicitBoundaryValid keeps the boundary op full-width and
-# moves the lane extent onto the consumers.
-_UNPLACEABLE = "runtime split-axis extent on a hand-written tpop: lane 1's band is placed at its own extent"
-
-_UP_DOWN_PARITY_CASES = [
-    (1, 16, "vr1", False),
-    (7, 16, "vr7", False),
-    (8, 16, "vr8", False),
-    (9, 16, "vr9", True),
-    (12, 16, "vr12", True),
-    (15, 16, "vr15", True),
-]
-
-
-def _sweep_params(cases):
-    """(vr, vc) params, with the known-unplaceable extents marked xfail."""
-    return [
-        pytest.param(
-            vr,
-            vc,
-            id=name,
-            marks=[pytest.mark.xfail(strict=True, reason=_UNPLACEABLE)] if broken else [],
-        )
-        for vr, vc, name, broken in cases
-    ]
+# (8), and above-half (9, 12, 15). The tpop declares the full physical box;
+# SplitVectorKernel localizes the runtime valid extent for each AIV subblock,
+# keeping the transport geometry independent of the per-lane extent.
 
 
 class TestSplitParityRuntime:
@@ -386,7 +350,11 @@ class TestSplitParityRuntime:
 
     @pytest.mark.platforms("a2a3")
     @pytest.mark.parametrize("platform", [pytest.param("a2a3", id="a2a3")])
-    @pytest.mark.parametrize("vr,vc", _sweep_params(_UP_DOWN_PARITY_CASES))
+    @pytest.mark.parametrize(
+        "vr,vc",
+        [(1, 16), (7, 16), (8, 16), (9, 16), (12, 16), (15, 16)],
+        ids=["vr1", "vr7", "vr8", "vr9", "vr12", "vr15"],
+    )
     def test_up_down_valid_shape_parity(self, test_runner, vr, vc, platform):
         case = _C2VValidShapeParityCase(vr, vc, pl.SplitMode.UP_DOWN, platform=platform)
         result = test_runner.run(case)

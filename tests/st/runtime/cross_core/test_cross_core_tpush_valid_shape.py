@@ -112,7 +112,7 @@ class C2VTpushValidShapeTestCase(PTOTestCase):
                     pl.FP32,
                     pl.Mem.Vec,
                     pl.TileView(valid_shape=[valid_rows, COLS]),
-                ] = pl.tpop_from_aic(split=1)
+                ] = pl.tpop_from_aic([ROWS, COLS], dtype=pl.FP32, split=1)
                 incremented: pl.Tile[[ROWS, COLS], pl.FP32] = pl.add(popped, 1.0)
                 pl.tfree_to_aic(popped)
                 return pl.store(incremented, [subblock_idx * VALID_ROWS, 0], output)
@@ -225,7 +225,9 @@ class V2SetValidShapeOnVectorTestCase(PTOTestCase):
                 c2v_buf = pl.reserve_buffer(name="c2v_slot_buffer", size=BUFFER_SIZE_BYTES, base=0x2000)
                 pl.aiv_initialize_pipe(dir_mask=1, slot_size=SLOT_SIZE_BYTES, c2v_consumer_buf=c2v_buf)
 
-                popped: pl.Tile[[ROWS, COLS], pl.FP32, pl.Mem.Vec, pl.TileView()] = pl.tpop_from_aic(split=1)
+                popped: pl.Tile[[ROWS, COLS], pl.FP32, pl.Mem.Vec, pl.TileView()] = pl.tpop_from_aic(
+                    [ROWS, COLS], dtype=pl.FP32, split=1
+                )
                 # set_validshape requires a locally allocated source tile (PTOAS
                 # rejects a raw tpop/FIFO-slot tile), so narrow a compute result.
                 incremented: pl.Tile[[ROWS, COLS], pl.FP32, pl.Mem.Vec] = pl.add(popped, 1.0)

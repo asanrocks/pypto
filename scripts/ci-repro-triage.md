@@ -99,7 +99,7 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   prose unchanged. The prescribed command now passes parity and all 40/40
   runnable docs examples.
 
-## T5 — `tpop_from_aic()` required `shape` arg (16 st failures) — state: open
+## T5 — `tpop_from_aic()` required `shape` arg (16 st failures) — state: done
 
 - Mode: triage, then fix if the verdict is mechanical. Model:
   openai/gpt-5.6-luna.
@@ -114,6 +114,7 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   (→ fix the signature/default)? Check the intrinsic's declaration and
   recent history before deciding.
 - Green check: the affected cross_core tests pass on device.
+- Completion: Confirmed the red check with `task-submit --device auto --timeout 900 --max-time 600 --run "cd /data/wangmingzhe/workspace/subprojects/pypto-2 && .venv/bin/python -m pytest tests/st/runtime/cross_core/test_cross_core_dynamic_valid_shape.py::TestCrossCoreDynamicValidShape::test_c2v_tpop_dynamic_valid_shape -v --platform=a2a3"`: tracing failed with `InvalidOperationError: tpop_from_aic() missing 1 required positional argument: 'shape'`. The intrinsic declaration and commit `5a9c6d280` show that `shape` and `dtype` are intentional required value-producer inputs, so the seven stale call sites were updated to pass the physical `[ROWS, COLS]` shape and `pl.FP32`. The three stale strict xfails in `test_cross_core_split_parity.py` were removed because the explicit full-box shape makes all six parity regimes pass. Focused device evidence passed 4/4; the affected four-file family passed 18/18. A broader 57-item cross-core run passed 52, with three of those now-removed xfails passing and one unrelated grouped-tpop test failing with `ACL_ERROR_RT_AICPU_EXCEPTION (507018)`; that failure is tracked separately as T9.
 
 ## T6 — `.warmup` on eagerly-traced `ir.Function` (9 st failures) — state: open
 
@@ -181,6 +182,14 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   environment.
 - Deliverable: which comparisons fail, tolerance vs real-divergence, and
   whether the numbers match a known family.
+
+## T9 — grouped tpop/tfree reordered artifact AICPU exception — state: open
+
+- Mode: triage. Model: openai/gpt-5.6-luna.
+- Allowed paths: `tests/st/runtime/cross_core/test_cross_core_grouped_tpop_tfree.py` (and the owning runtime surface only if triage identifies it).
+- Red check: the full `tests/st/runtime/cross_core/` run on `a2a3` fails `TestCrossCoreGroupedTpopTfree::test_v2c_updown_consecutive_tpop_then_tfree_reordered_artifact[a2a3]` during device execution with `ACL_ERROR_RT_AICPU_EXCEPTION (507018)` after the reordered PTO artifact is rebuilt. The other selected tests passed.
+- Triage question: determine whether the failure is a grouped-artifact/runtime regression or a device/infrastructure failure; do not bundle it with the T5 API migration.
+- Green check: the representative grouped-tpop/tfree test passes on device.
 
 ## Explicitly out of scope (no task)
 

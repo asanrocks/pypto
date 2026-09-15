@@ -114,7 +114,7 @@ class C2VDynamicTpopValidShapeTestCase(PTOTestCase):
                     pl.FP32,
                     pl.Mem.Vec,
                     pl.TileView(valid_shape=[valid_rows, VALID_COLS]),
-                ] = pl.tpop_from_aic(split=1)
+                ] = pl.tpop_from_aic([ROWS, COLS], dtype=pl.FP32, split=1)
                 incremented: pl.Tile[[ROWS, COLS], pl.FP32] = pl.add(popped, 1.0)
                 pl.tfree_to_aic(popped)
                 return pl.store(incremented, [0, 0], output)
@@ -251,7 +251,7 @@ class C2VDynamicTpushValidShapeTestCase(PTOTestCase):
                     pl.FP32,
                     pl.Mem.Vec,
                     pl.TileView(valid_shape=[valid_rows, VALID_COLS]),
-                ] = pl.tpop_from_aic(split=1)
+                ] = pl.tpop_from_aic([ROWS, COLS], dtype=pl.FP32, split=1)
                 incremented: pl.Tile[[ROWS, COLS], pl.FP32] = pl.add(popped, 1.0)
                 pl.tfree_to_aic(popped)
                 return pl.store(incremented, [0, 0], output)
