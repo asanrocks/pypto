@@ -76,6 +76,7 @@ from pypto.language.tracer.decorators.function import (
 from pypto.language.tracer.return_contract import pin_derived_return_types
 from pypto.language.typing._runtime_scalar import RuntimeScalar
 from pypto.language.typing.arg_direction import param_directions, unmangle_hints, unmangle_param_name
+from pypto.language.typing.dynamic import DynVar
 from pypto.language.typing.scalar import RUNTIME, Scalar
 from pypto.language.typing.tensor import Tensor
 from pypto.pypto_core import ir
@@ -1000,7 +1001,21 @@ def _variant_key_part(annotation: Any) -> Any:
     serves every value, the whole point of the spelling. A raw staged
     expression (``ir.Expr``) or an unmapped staged kind falls back to its
     raw printed text: the printer is the lossless round-trip serializer, so
-    raw text equality is structural equality."""
+    raw text equality is structural equality.
+
+    A shape extent is NOT keyable by its printed text: two distinct
+    caller-trace locals spelled the same (every attention helper's
+    ``kv_dim = pl.tensor.dim(x, 0)`` feeding ``pl.create_tensor``) print
+    identically, and a text-keyed dedupe handed the later callers the first
+    caller's variant — whose signature embeds the first caller's ``kv_dim``
+    Var. The inline splice then renamed that Var into every caller's branch
+    and ConvertToSSA rejected the body with ``used outside its defining
+    scope``. So extents key on identity, not text: constants by value, a
+    ``pl.dynamic`` symbol by its underlying Var (same name → same object,
+    the shared-by-name registry — deliberate sharing survives), every other
+    Var / arithmetic expression by object identity (``unique_id`` / ``id``):
+    a variant baked against one caller's extent Var is only reusable at
+    call sites passing that same object."""
     if isinstance(annotation, (bool, int, float)):
         return ("host", type(annotation).__name__, annotation)
     if isinstance(annotation, ir.Expr):
@@ -1009,12 +1024,41 @@ def _variant_key_part(annotation: Any) -> Any:
     dtype = getattr(annotation, "dtype", None)
     if dtype is not None:
         shape = getattr(annotation, "shape", None)
-        extents = tuple(str(e) for e in shape) if shape is not None else ()
+        extents = tuple(_extent_key_part(e) for e in shape) if shape is not None else ()
         return ("facade", type(annotation).__name__, dtype, extents)
-    from pypto.language.typing import annotation_to_type  # noqa: PLC0415 — cycle-free laziness
+    from pypto.language.typing import annotation_to_type  # noqa: PLC0415 - cycle-free laziness
 
     with raw_print():
         return ("raw", str(annotation_to_type(annotation)))
+
+
+def _extent_key_part(extent: Any) -> Any:
+    """One shape extent's variant-key component (see ``_variant_key_part``).
+
+    Annotation-mode extents arrive as plain ints, ``ir.ConstInt`` (value),
+    ``DynVar`` wrappers / ``ir.Var`` (extent symbols and caller-trace
+    locals), or arithmetic ``ir.Expr`` over them; runtime facades carry no
+    shape at all (``Tensor.shape`` is ``None`` in expr mode) and never reach
+    this helper.
+    """
+    if isinstance(extent, bool):
+        return ("const", "bool", extent)
+    if isinstance(extent, int):
+        return ("const", "int", extent)
+    if isinstance(extent, ir.ConstInt):
+        return ("const", "ConstInt", extent.value)
+    var = extent.unwrap() if isinstance(extent, DynVar) else extent
+    if isinstance(var, ir.Var):
+        # ``unique_id`` is the sanctioned same-object key (Var's binding):
+        # same-name pl.dynamic symbols unwrap to one Var (shared by design),
+        # while two callers' same-named locals keep distinct ids.
+        return ("var", var.unique_id)
+    if isinstance(var, ir.Expr):
+        # A compound extent (e.g. ``(t + 15) // 16 * 16``) embeds its
+        # caller's Vars; only the same expression object is the same extent.
+        return ("expr", id(var))
+    with raw_print():
+        return ("raw", str(extent))
 
 
 def _staged_declared(hint: Any) -> bool:

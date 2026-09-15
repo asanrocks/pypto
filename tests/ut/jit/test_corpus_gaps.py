@@ -1470,3 +1470,90 @@ class TestStagedIfHostJoinLiterals:
 
         prog = entry.compile_for_test(torch.zeros(4, dtype=torch.float32))
         assert isinstance(prog, ir.Program)
+
+
+class TestVariantKeyExtentIdentity:
+    """A variant must not be shared across callers with same-named extent
+    locals — closed 2026-09-14, from the pypto-lib census (dspark
+    ``prefill_layer``: ``Variable 'kv_dim_inline…' used outside its defining
+    scope`` after ``ConvertToSSA``; the W15 alternates —
+    ``PREFILL_SWA_CP_KV_T_DYN`` and ``tensor.dim shape is neither Var nor
+    ConstInt`` at ``rmsnorm.py:104`` — are the same disease under other
+    extent spellings).
+
+    The variant lane re-traces an eagerly traced callee with the call-site
+    argument types and dedupes on the variant key. ``_variant_key_part``
+    keyed a tensor facade's extents by their *printed text*, and ``str`` of
+    an extent ``Var`` is its bare name — so the three attention callers
+    (``prefill_attention_{swa,csa,hca}_cp``), which all spell
+    ``kv_dim = pl.tensor.dim(x_hc_full, 0)`` feeding
+    ``pl.create_tensor([kv_dim, …])``, produced identical keys and shared
+    ONE ``hc_pre``/``hc_post``/``rms_norm`` variant whose signature embedded
+    the first caller's ``kv_dim`` Var. The inline splice renamed that Var
+    (single call site, unambiguous) and the program-wide ``RenamedVarRepair``
+    stamped it into every caller's branch; ``ConvertToSSA`` then rejected the
+    sibling branches' copies with the scope violation — the entry could never
+    compile. Extents now key on identity (constants by value, ``pl.dynamic``
+    symbols by their shared underlying Var, everything else by object
+    identity), so each caller bakes its own variant.
+
+    The corpus shape: a runtime-scalar ``if`` selecting between two inline
+    callers whose same-named ``kv_dim`` locals both feed a shared inline
+    helper's argument type. The pin compiles (the IR only breaks in the pass
+    pipeline) and asserts the helper became one variant per caller."""
+
+    def test_same_named_caller_locals_bake_distinct_variants(self):
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        n_dyn = pl.dynamic("VK_N_DYN")
+
+        @pl.jit.inline
+        def _fill(post: pl.Tensor, x: pl.Tensor[[n_dyn, 8], pl.FP32], w: pl.Tensor[[4], pl.FP32]):
+            # ``post``'s type is minted from the caller's arg (variant lane):
+            # its dim-0 extent is the caller-trace's ``kv_dim`` local. The
+            # post-assemble read is what makes a leaked extent LOUD — the
+            # SSA verifier visits type-embedded vars only of Vars used as
+            # expressions (``VisitVarLike_``), so an assign-only leak stays
+            # silent.
+            t_dim = pl.tensor.dim(x, 0)
+            s = pl.read(w, [0])
+            if t_dim > 8:
+                post = pl.tensor.assemble(post, pl.tensor.slice(x, [8, 8], [0, 0]), [0, 0])
+            v = pl.read(post, [0, 0])
+            pl.tensor.write(w, [1], v + s)
+            return post
+
+        @pl.jit.inline
+        def _kind_a(x: pl.Tensor[[n_dyn, 8], pl.FP32], w: pl.Tensor[[4], pl.FP32]):
+            kv_dim = pl.tensor.dim(x, 0)
+            buf = pl.tensor.create([kv_dim, 8], dtype=pl.FP32)
+            return _fill(buf, x, w)
+
+        @pl.jit.inline
+        def _kind_b(x: pl.Tensor[[n_dyn, 8], pl.FP32], w: pl.Tensor[[4], pl.FP32]):
+            # Same source spelling as _kind_a: pre-fix, both call sites keyed
+            # ("kv_dim", "8") and shared _kind_a's _fill variant, so the
+            # spliced body in this branch kept the OTHER branch's extent Var
+            # in the assemble result's type.
+            kv_dim = pl.tensor.dim(x, 0)
+            buf = pl.tensor.create([kv_dim, 8], dtype=pl.FP32)
+            return _fill(buf, x, w)
+
+        @pl.jit
+        def _entry(
+            x: pl.Tensor[[n_dyn, 8], pl.FP32], w: pl.Tensor[[4], pl.FP32], kind: pl.Scalar[pl.INT32]
+        ) -> pl.Scalar[pl.FP32]:
+            # Sibling scopes under a runtime-scalar staged if (the corpus's
+            # ``layer_id`` dispatch).
+            if kind == 0:
+                _kind_a(x, w)
+            else:
+                _kind_b(x, w)
+            return pl.read(x, [0, 0])
+
+        prog = _entry.compile_for_test(
+            torch.zeros(64, 8, dtype=torch.float32),
+            torch.zeros(4, dtype=torch.float32),
+            pl.runtime(0, pl.INT32),
+        )
+        assert isinstance(prog, ir.Program)
