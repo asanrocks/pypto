@@ -46,6 +46,8 @@ from pypto.pypto_core import ir, passes
 
 from ._harness import canonicalize
 
+_TENSOR_ADDS = ir.get_op("tensor.adds").name
+
 
 def _body_stmts(fn: ir.Function) -> list[ir.Stmt]:
     """A function body's statement list (a single stmt is not wrapped)."""
@@ -402,12 +404,12 @@ def test_inline_dead_tail_after_trailing_return_by_both_lanes():
     prog = ir.Program([trace(caller), callee_new], "p", ir.Span.unknown())
     spliced = passes.inline_functions()(prog)["caller"]
     (new_ret,) = [s for s in _body_stmts(spliced) if isinstance(s, ir.ReturnStmt)]
-    assert new_ret.value[0].op.name == "tensor.adds"
+    assert new_ret.value[0].op.name == _TENSOR_ADDS
 
     helper = inline(h_dead_tail)
     ast_caller = function_parser(caller)
     (ast_ret,) = [s for s in _body_stmts(ast_caller) if isinstance(s, ir.ReturnStmt)]
-    assert ast_ret.value[0].op.name == "tensor.adds"
+    assert ast_ret.value[0].op.name == _TENSOR_ADDS
     ir.assert_structural_equal(spliced, ast_caller, enable_auto_mapping=True)
 
 
@@ -433,12 +435,12 @@ def test_inline_dead_tail_nested_return_by_both_lanes():
     prog = ir.Program([trace(caller), callee_new], "p", ir.Span.unknown())
     spliced = passes.inline_functions()(prog)["caller"]
     (new_ret,) = [s for s in _body_stmts(spliced) if isinstance(s, ir.ReturnStmt)]
-    assert new_ret.value[0].op.name == "tensor.adds"
+    assert new_ret.value[0].op.name == _TENSOR_ADDS
 
     helper = inline(h_dead_tail_nested)
     ast_caller = function_parser(caller)
     (ast_ret,) = [s for s in _body_stmts(ast_caller) if isinstance(s, ir.ReturnStmt)]
-    assert ast_ret.value[0].op.name == "tensor.adds"
+    assert ast_ret.value[0].op.name == _TENSOR_ADDS
     ir.assert_structural_equal(spliced, ast_caller, enable_auto_mapping=True)
 
 

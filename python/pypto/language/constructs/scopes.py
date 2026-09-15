@@ -197,9 +197,7 @@ def _explicit_dump_attrs(dumps: list[Tensor] | None, owner: str) -> list[tuple[s
         return []
     for t in dumps:
         if not hasattr(t, "unwrap"):
-            raise TypeError(
-                f"{owner}(dumps=[...]) entries must be staged (outer-scope) values, got {t!r}"
-            )
+            raise TypeError(f"{owner}(dumps=[...]) entries must be staged (outer-scope) values, got {t!r}")
     return [("dump_vars", [t.unwrap() for t in dumps])]
 
 

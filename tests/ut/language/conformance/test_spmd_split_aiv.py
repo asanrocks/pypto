@@ -93,6 +93,9 @@ from pypto.pypto_core import ir, passes
 
 from ._harness import canonicalize, conformance, program_conformance
 
+_TILE_GET_SUBBLOCK_IDX = ir.get_op("tile.get_subblock_idx").name
+_TILE_GET_BLOCK_IDX = ir.get_op("tile.get_block_idx").name
+
 build = function_trace
 
 
@@ -123,7 +126,7 @@ def _assert_subblock_idx_prologue(region: ir.SplitAivScopeStmt) -> None:
     body = region.body
     first = body.stmts[0] if isinstance(body, ir.SeqStmts) else body
     assert isinstance(first, ir.AssignStmt), type(first).__name__
-    assert isinstance(first.value, ir.Call) and first.value.op.name == "tile.get_subblock_idx"
+    assert isinstance(first.value, ir.Call) and first.value.op.name == _TILE_GET_SUBBLOCK_IDX
 
 
 def _stmts(fn: ir.Function) -> list[ir.Stmt]:
@@ -292,7 +295,7 @@ def test_spmd_for_loop_var_binds_block_idx():
     assert isinstance(prologue, (ir.AssignStmt, ir.SeqStmts)), type(prologue).__name__
     first = prologue.stmts[0] if isinstance(prologue, ir.SeqStmts) else prologue
     assert isinstance(first, ir.AssignStmt)
-    assert isinstance(first.value, ir.Call) and first.value.op.name == "tile.get_block_idx"
+    assert isinstance(first.value, ir.Call) and first.value.op.name == _TILE_GET_BLOCK_IDX
 
 
 # ===========================================================================
@@ -788,7 +791,7 @@ def test_explicit_carrier_print_keeps_the_carrier_hint():
         prologue = reparsed_carrier.body
         first = prologue.stmts[0] if isinstance(prologue, ir.SeqStmts) else prologue
         assert isinstance(first, ir.AssignStmt)
-        assert isinstance(first.value, ir.Call) and first.value.op.name == "tile.get_block_idx", lane
+        assert isinstance(first.value, ir.Call) and first.value.op.name == _TILE_GET_BLOCK_IDX, lane
         assert first.var.name_hint == "i", lane  # the body itself survived the round trip
         # The whole statement survives, outer hint included: the for-form's
         # implicit re-split ("w" -> "w_spmd") is gone with it.

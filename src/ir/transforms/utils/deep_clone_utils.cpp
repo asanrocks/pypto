@@ -290,14 +290,13 @@ TypePtr RemapTypeViaVarMap(const TypePtr& type, const std::unordered_map<const V
     if (!changed) return type;
     return std::make_shared<TupleType>(std::move(new_types));
   }
-  return CloneTypeWithMemRefAndRemapExprs(
-      type, GetTypeMemRef(type), [&var_map](const ExprPtr& e) -> ExprPtr {
-        auto var = std::dynamic_pointer_cast<const Var>(e);
-        if (!var) return e;
-        auto it = var_map.find(var.get());
-        if (it == var_map.end()) return e;
-        return it->second;
-      });
+  return CloneTypeWithMemRefAndRemapExprs(type, GetTypeMemRef(type), [&var_map](const ExprPtr& e) -> ExprPtr {
+    auto var = std::dynamic_pointer_cast<const Var>(e);
+    if (!var) return e;
+    auto it = var_map.find(var.get());
+    if (it == var_map.end()) return e;
+    return it->second;
+  });
 }
 
 }  // namespace

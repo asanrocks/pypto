@@ -498,7 +498,7 @@ class RenamedVarRepair : public IRMutator {
 };
 
 std::vector<StmtPtr> SpliceInlineCallAsEval(const FunctionPtr& callee, const std::vector<ExprPtr>& args,
-                                           SpliceRenames* renames) {
+                                            SpliceRenames* renames) {
   auto body = CloneInlineBody(callee, args, renames == nullptr ? nullptr : &renames->last_splice);
   for (const auto& value : body.return_values) {
     if (!value) continue;

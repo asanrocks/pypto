@@ -1436,7 +1436,8 @@ Both sides read before verdicting: the parser's `_handle_static_print`
 and `_parse_optimizations_list` (`:3821`) / `_parse_spmd_optimizations_list`
 (`:3908`) / `_handle_at_optimizations_kw` (`:3809`); the tracing lane's
 `compat/diagnostics.py` (the two no-ops), the `DumpTagMarker` (`typing/tensor.py:374`)
-+ `Sema.record_dump_tag` (`semantics.py:363`) + `Marker.__call__`
+
+- `Sema.record_dump_tag` (`semantics.py:363`) + `Marker.__call__`
 (`op/marker.py:340`), the `CachePolicyDecl` (`typing/tensor.py:388`) +
 `Sema.route_cache_policy` (`semantics.py:1095`) + `_DeferredDeclarableScope`,
 `constructs/func_attrs.py` + `TraceContext.collect_func_attr` (`protocol.py:383`),

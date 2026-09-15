@@ -279,7 +279,7 @@ Keep a dimension static when it really is fixed. A static extent is a number the
 can plan around — tiling choices, unroll factors, static bound checks — and a dynamic one
 withholds it.
 
-Both raise when an extent is dynamic — the spelling states "this operand is static". For a
+Both `pl.static_dim` and `pl.static_shape` raise when an extent is dynamic — the spelling states "this operand is static". For a
 staged runtime extent use `pl.dim` (the same reader as `pl.tensor.dim`) instead, as in
 [Dynamic shapes](#dynamic-shapes) above.
 

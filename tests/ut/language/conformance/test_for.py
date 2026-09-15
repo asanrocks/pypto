@@ -31,6 +31,7 @@ tracing surface deliberately lacks
 
 import pypto.language as pl
 import pytest
+from pypto.language.diagnostics import ParserSyntaxError
 from pypto.language.parser import function_parser
 from pypto.language.tracer.decorators.function import function_trace
 from pypto.language.tracer.semantics import PtoSema
@@ -488,5 +489,5 @@ def test_bare_tuple_target_rejected_by_both_lanes():
     unpackable sequence."""
     with pytest.raises(TypeError, match="cannot unpack"):
         build(k_bare_tuple_target)
-    with pytest.raises(Exception, match="Iter args must be a tuple"):
+    with pytest.raises(ParserSyntaxError, match="Iter args must be a tuple"):
         function_parser(k_bare_tuple_target)

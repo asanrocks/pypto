@@ -1248,9 +1248,7 @@ class ASTParser:
             hint=hint,
         )
 
-    def _parse_body_siblings(
-        self, body: Sequence[ast.stmt], *, stop_after_return: bool = False
-    ) -> None:
+    def _parse_body_siblings(self, body: Sequence[ast.stmt], *, stop_after_return: bool = False) -> None:
         """Parse a block's body stmts, applying stale-pending sweeps between siblings.
 
         The inter-sibling sweep catches tail-of-block comments that live in the

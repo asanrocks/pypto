@@ -2,13 +2,9 @@
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
 # Please refer to the License for details. You may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software distributed under the License is
-# distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and limitations under the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
 """Structural: the statement-position handlers + function attrs + optimization
@@ -69,7 +65,7 @@ from __future__ import annotations
 
 import pypto.language as pl
 import pytest
-from pypto.language.diagnostics import ParserError, ParserSyntaxError
+from pypto.language.diagnostics import InvalidOperationError, ParserError, ParserSyntaxError
 from pypto.language.parser import function_parser, program_parser
 from pypto.language.tracer.decorators.function import function_trace, trace_program
 from pypto.pypto_core import ir
@@ -451,7 +447,7 @@ def test_cache_policy_first_argument_must_be_a_name():
     no binding). Pinned, not an anchor — the error types differ."""
     with pytest.raises(ParserSyntaxError, match="must be a bare variable name"):
         function_parser(k_cache_policy_first_arg_not_name)
-    with pytest.raises(Exception, match="names a bound tensor variable"):
+    with pytest.raises(InvalidOperationError, match="names a bound tensor variable"):
         function_trace(k_cache_policy_first_arg_not_name)
 
 
@@ -614,9 +610,9 @@ def test_func_attr_decorator_only_key_rejected_by_both_lanes():
 def test_func_attr_int_list_rejected_by_both_lanes():
     """An arbitrary-key integer list reaches the builder's attr coercion on both
     lanes and is rejected there (not a frontend divergence)."""
-    with pytest.raises(Exception, match="Unsupported list element type for key: dims"):
+    with pytest.raises(ParserSyntaxError, match="Unsupported list element type for key: dims"):
         function_parser(k_func_attr_int_list)
-    with pytest.raises(Exception, match="Unsupported list element type for key: dims"):
+    with pytest.raises(TypeError, match="Unsupported list element type for key: dims"):
         function_trace(k_func_attr_int_list)
 
 

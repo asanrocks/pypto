@@ -615,8 +615,8 @@ class SSAConverter {
         for (const auto& [pre_key, pre_val] : before) {
           if (pre_key->name_hint_ != key->name_hint_) continue;
           CHECK_SPAN(false, key->span_)
-              << "ConvertToSSA: loop-carry '" << key->name_hint_ << "' rebinds as "
-              << CarryTypeDesc(type) << " inside the loop, but its pre-loop initialization has type "
+              << "ConvertToSSA: loop-carry '" << key->name_hint_ << "' rebinds as " << CarryTypeDesc(type)
+              << " inside the loop, but its pre-loop initialization has type "
               << CarryTypeDesc(pre_val->GetType())
               << " — the carry derivation is type-exact. Initialize the accumulator with the "
                  "carried dtype (e.g. pl.const(0, <carried dtype>)) or make the rebind's operator "
@@ -774,8 +774,8 @@ class SSAConverter {
         for (const auto& [pre_key, pre_val] : before) {
           if (pre_key->name_hint_ != key->name_hint_) continue;
           CHECK_SPAN(false, key->span_)
-              << "ConvertToSSA: loop-carry '" << key->name_hint_ << "' rebinds as "
-              << CarryTypeDesc(type) << " inside the loop, but its pre-loop initialization has type "
+              << "ConvertToSSA: loop-carry '" << key->name_hint_ << "' rebinds as " << CarryTypeDesc(type)
+              << " inside the loop, but its pre-loop initialization has type "
               << CarryTypeDesc(pre_val->GetType())
               << " — the carry derivation is type-exact. Initialize the accumulator with the "
                  "carried dtype (e.g. pl.const(0, <carried dtype>)) or make the rebind's operator "

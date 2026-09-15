@@ -2402,8 +2402,7 @@ void IRPythonPrinter::VisitStmt_(const SpmdScopeStmtPtr& op) {
     // here, from ``incore``, or they are lost. When the carrier is spelled out
     // instead, the nested InCore prints its own markers and re-printing them
     // here would duplicate them.
-    const bool inlines_incore_body =
-        SpmdInlineBodyRebuildsCarrier(incore) && !carrier_hint_needs_spelling;
+    const bool inlines_incore_body = SpmdInlineBodyRebuildsCarrier(incore) && !carrier_hint_needs_spelling;
     PrintScopeCachePolicyStmts(op);
     if (inlines_incore_body) {
       PrintScopeCachePolicyStmts(incore);

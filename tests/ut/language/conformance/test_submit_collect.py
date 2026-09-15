@@ -514,15 +514,11 @@ class SpmdSubmitSync:
 
 class SpmdSubmitMetadata:
     @pl.function
-    def stage(
-        self, x: pl.Tensor[[16], pl.INT32], rc: pl.Tensor[[16], pl.INT32]
-    ) -> pl.Tensor[[16], pl.INT32]:
+    def stage(self, x: pl.Tensor[[16], pl.INT32], rc: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
         return pl.add(x, rc)
 
     @pl.function(type=pl.FunctionType.Orchestration)
-    def main(
-        self, x: pl.Tensor[[16], pl.INT32], rc: pl.Tensor[[16], pl.INT32]
-    ) -> pl.Tensor[[16], pl.INT32]:
+    def main(self, x: pl.Tensor[[16], pl.INT32], rc: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
         out, tid = pl.spmd_submit(
             self.stage,
             x,
@@ -864,9 +860,7 @@ class SubmitBoolArg:
     parameter."""
 
     @pl.function
-    def stage(
-        self, x: pl.Tensor[[16], pl.INT32], flag: pl.Scalar[pl.BOOL]
-    ) -> pl.Tensor[[16], pl.INT32]:
+    def stage(self, x: pl.Tensor[[16], pl.INT32], flag: pl.Scalar[pl.BOOL]) -> pl.Tensor[[16], pl.INT32]:
         return pl.add(x, x)
 
     @pl.function(type=pl.FunctionType.Orchestration)
@@ -1100,9 +1094,7 @@ class SubmitPredicateNoDep:
         return rc
 
     @pl.function
-    def stage(
-        self, x: pl.Tensor[[16], pl.INT32], rc: pl.Tensor[[16], pl.INT32]
-    ) -> pl.Tensor[[16], pl.INT32]:
+    def stage(self, x: pl.Tensor[[16], pl.INT32], rc: pl.Tensor[[16], pl.INT32]) -> pl.Tensor[[16], pl.INT32]:
         return pl.add(x, rc)
 
     @pl.function(type=pl.FunctionType.Orchestration)

@@ -48,6 +48,7 @@ spelling at all (out of scope; pinned by ``tests/ut/jit/test_param_worlds.py``).
 
 import pypto.language as pl
 import pytest
+from pypto.language.diagnostics import InvalidOperationError, ParserTypeError
 from pypto.language.parser import function_parser
 from pypto.language.tracer.decorators.function import function_trace
 from pypto.pypto_core import ir
@@ -266,7 +267,7 @@ def test_typechange_rebind_in_loop_shared_free_var():
     conformance(k_typechange_rebind_in_loop, build)  # raw: both lanes identical
     for build_fn in (build, function_parser):
         with pytest.raises(
-            Exception,
+            ValueError,
             match="used outside its defining scope|used before definition|loop-carry 'a' rebinds as",
         ):
             canonicalize(build_fn(k_typechange_rebind_in_loop))
@@ -462,7 +463,7 @@ def test_host_param_world_rejected_by_both_lanes():
 
     with pytest.raises(TypeError, match="annotation"):
         function_trace(kernel)
-    with pytest.raises(Exception, match="annotation"):
+    with pytest.raises(ParserTypeError, match="annotation"):
         function_parser(kernel)
 
 
@@ -478,9 +479,9 @@ def test_runtime_marker_has_no_kernel_body_spelling():
         n = pl.runtime(5)
         return pl.add(x, n)
 
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         function_trace(kernel)
-    with pytest.raises(Exception, match="runtime"):
+    with pytest.raises(InvalidOperationError, match="runtime"):
         function_parser(kernel)
 
 

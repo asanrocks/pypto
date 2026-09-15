@@ -740,9 +740,7 @@ class TestInlineSpliceTypeClosure:
         b_rows = pl.dynamic("B_ROWS_DYN")
 
         @pl.jit.inline
-        def commit(
-            flat_b: pl.InOut[pl.Tensor[[b_rows, 32], pl.BF16]], x: pl.Tensor[[n_dyn, 32], pl.FP32]
-        ):
+        def commit(flat_b: pl.InOut[pl.Tensor[[b_rows, 32], pl.BF16]], x: pl.Tensor[[n_dyn, 32], pl.FP32]):
             # Param type minted from the caller's arg (variant lane); the
             # carried rebind's type embeds the caller-trace's local.
             with pl.at(level=pl.Level.CORE_GROUP, name_hint="commit"):
@@ -807,7 +805,7 @@ class TestInlineSpliceTypeClosure:
 
         @pl.jit.incore
         def _sink(local_out: pl.Out[pl.Tensor], n: pl.Scalar[pl.INT32]) -> pl.Tensor:
-            with pl.at(level=pl.Level.CORE_GROUP, name_hint="sink") as tid:
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="sink") as _tid:
                 for row in pl.range(2):
                     t = pl.load(local_out, [row, 0], [1, 4])
                     pl.store(t, [row, 0], local_out)
@@ -983,7 +981,7 @@ class TestCarryInitDtypeConflict:
                 m = pl.max(m, x)
             return m
 
-        with pytest.raises(ValueError, match="loop-carry 'm' rebinds as Scalar\[INDEX\].*Scalar\[INT32\]"):
+        with pytest.raises(ValueError, match=r"loop-carry 'm' rebinds as Scalar\[INDEX\].*Scalar\[INT32\]"):
             entry.compile_for_test(torch.zeros(8, dtype=torch.int32))
 
     def test_matching_init_dtype_still_compiles(self):
