@@ -182,7 +182,7 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   the 62 collected, so the count did not grow). Ruff check and format pass
   on the six changed files.
 
-## T4 — ptoas `pto.tmul` element-type mismatch — state: open
+## T4 — ptoas `pto.tmul` element-type mismatch — state: done (verdict)
 
 - Mode: **read-only** (no edits; findings + evidence only). Model:
   volce/glm-5.3.
@@ -190,11 +190,42 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   grid kernels; the `tmul` op typing surface for reading.
 - Red check: after Round 4's shape/cast fixes, the kernels trace cleanly
   but fail at ptoas with `pto.tmul` src0/src1 element-type mismatch.
-- Deliverable: a verdict — kernel-side bug (illegal dtype mix reaches
-  `tmul`) vs op-typing move (the op's element-type rule changed) — with
-  the minimal reproducing IR and the ptoas error text. Bounded device run
-  only as needed for the repro.
-- This needs the op owner's attention; the verdict unblocks them.
+- **Verdict: kernel-side bug, not an op-typing move.** Commit `8e7c5e9dd`
+  (Round 4's port) removed the conv kernel's inner `pl.cast(values,
+  pl.FP32)` on the false premise that flat-form `pl.gather` already yields
+  FP32 — the op's documented contract is "dtype follows input", and an
+  FP16 source yields an FP16 tile. Without the widening cast,
+  `pl.mul(values, valid)` is FP16×FP32: IR typing promotes the result
+  without inserting operand converts, and ptoas rejects the emitted
+  `pto.tmul` ("expects src0 and src1 to have the same element type").
+  Verified against ptoas 0.45–0.61 — the rule never moved. Restoring the
+  original cast compiles the full conv kernel clean through ptoas
+  host-side; the grid kernel (FP32 source) was never affected. The
+  one-line fix is T11.
+- Evidence: full session `.sessions/T4-tmul-triage.session` (host-side
+  repro scripts under `/tmp`, ptoas version matrix, minimal mixed-dtype
+  IR, restored-cast compile).
+
+## T11 — restore the conv kernel's widening cast — state: in-progress
+
+- Mode: mutating. Origin: discovered by T4. Fixed in-session by the
+  orchestrator (one line + comment; below worker-launch overhead).
+- Scope: `tests/st/runtime/ops/test_gather_composite_scenarios.py`.
+- Red check: the conv st cases fail at ptoas with the `pto.tmul`
+  element-type mismatch (see T4).
+- Green check: the gather-composite st cases (conv + grid) pass on
+  device.
+
+## T12 — mixed-element-type tile-tile elementwise ops fail only at ptoas — state: open
+
+- Mode: owner decision (op owner). Origin: discovered by T4.
+- Finding: a mixed-dtype tile-tile `tile.mul` (e.g. FP16×FP32) passes IR
+  verification — `DeduceTileOpElementwiseBinaryType`
+  (`src/ir/op/tile_ops/elementwise.cpp`) promotes the result without
+  inserting operand converts — and only fails in ptoas.
+- Options: reject mixed element types at IR typing (loud at trace time,
+  like same-dtype casts), or have codegen insert a `tcvt` on the narrower
+  operand.
 
 ## T7 — l3 tensor collectives on two-card runs (~17 failures) — state: open
 

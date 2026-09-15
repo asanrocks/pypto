@@ -76,9 +76,11 @@ def _conv_kernel(shape: tuple[int, ...], kernel_depth: int, stride: int, padding
                 index = pl.add(pl.mul(index, height), safe_y)
                 index = pl.add(pl.mul(index, width), safe_x)
                 values = pl.gather(src, index=pl.cast(index, pl.INT32))
-                # gather's index= overload already yields FP32; the old
-                # same-dtype cast is rejected by op validation.
-                values = pl.cast(pl.mul(values, valid), pl.FP16)
+                # flat-form gather's dtype follows input, so an FP16 source
+                # yields an FP16 tile — widen it before the FP32 valid-mask
+                # mul (mixed-dtype tile mul only fails at ptoas; see T4 in
+                # scripts/ci-repro-triage.md).
+                values = pl.cast(pl.mul(pl.cast(values, pl.FP32), valid), pl.FP16)
                 patches = pl.assemble(patches, values, [k, 0])
 
         with pl.at(level=pl.Level.CORE_GROUP):
