@@ -104,7 +104,6 @@ def _unwrap_join_poison(value: object) -> object:
     return value.value if isinstance(value, _JoinPoisonedHost) else value
 
 
-
 @runtime_checkable
 class LoopTransfer(Protocol):
     """The staged loop's native-transfer callbacks.

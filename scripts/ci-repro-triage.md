@@ -166,7 +166,7 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
 - Green check: codegen-tests stage PASS (62 passed at Round-2 baseline;
   count may grow with the ported tests).
 - Completion: red reproduced before edits (exactly the documented 20 failed
-  + 4 errored, all with `AttributeError` on `.name`/`.span` in
+  and 4 errored, all with `AttributeError` on `.name`/`.span` in
   `tests/st/codegen/dsl/`). Root cause refined: the six files had already
   been migrated to `@pl.jit` in `481ec526e`, but `d955eb1aa` ("serve the
   eager lane's host surface from the decoration record") changed the eager
