@@ -58,6 +58,52 @@ _WITH = "with"
 _LOOP_KINDS = frozenset({_FOR, _WHILE})
 _CF_KINDS = frozenset({_IF, _FOR, _WHILE})
 
+# Sentinel for "no binding" in branch-local merges: a branch mapping may hold
+# any host object, including None, so plain ``dict.get`` defaults cannot tell
+# an absent binding from a bound None.
+_UNBOUND = object()
+
+
+class _JoinPoisonedHost:
+    """A host value whose staged-if join is control-dependent.
+
+    Stored in the merged locals in place of the raw literal. The merge
+    itself cannot know whether the name is read after the join — per-branch
+    host scratch is legal (guide §4.3) — so the rejection is deferred to the
+    first instrumented read past the join. Any unconditional rebind
+    overwrites the wrapper, restoring plain sequential host semantics.
+    """
+
+    __slots__ = ("value", "detail")
+
+    def __init__(self, value: object, detail: str) -> None:
+        self.value = value
+        self.detail = detail
+
+    def __repr__(self) -> str:  # never leaks into user-facing messages unwrapped
+        return repr(self.value)
+
+
+def _host_literals_agree(a: object, b: object) -> bool:
+    """Whether two host values are provably the same literal.
+
+    The join check only needs "same on every path"; an equality that cannot
+    be decided (an object whose ``==`` raises or returns a non-bool, e.g. a
+    numpy array) counts as disagreement — the name is then rejected loudly
+    at its first post-join read instead of silently committing one branch's
+    value.
+    """
+    try:
+        return bool(a == b)
+    except Exception:  # noqa: BLE001 - undecided equality is disagreement
+        return False
+
+
+def _unwrap_join_poison(value: object) -> object:
+    """The raw host literal behind a join-poisoned binding (identity otherwise)."""
+    return value.value if isinstance(value, _JoinPoisonedHost) else value
+
+
 
 @runtime_checkable
 class LoopTransfer(Protocol):
@@ -655,11 +701,28 @@ class Interpreter(Generic[V]):
     def _route_read(self, name: str) -> object:
         for mapping in reversed(self._branch_locals):
             if name in mapping:
-                return mapping[name]
+                return self._join_visible(name, mapping[name])
         frame = self._current_frame()
         if name in frame.ns:
-            return frame.ns[name]
+            return self._join_visible(name, frame.ns[name])
         raise UnboundLocalError(f"local variable '{name}' referenced before assignment")
+
+    @staticmethod
+    def _join_visible(name: str, value: object) -> object:
+        """Reject the first read of a join-poisoned host literal.
+
+        The merge deferred the control-dependence rejection to here: a
+        per-branch host scratch name that is never read after the join stays
+        legal, and this is the point where the wrong-literal inline would
+        otherwise happen.
+        """
+        if isinstance(value, _JoinPoisonedHost):
+            raise TypeError(
+                f"staged if join: {name!r} {value.detail} — every read after "
+                "the join would silently inline one branch's literal. Bind a "
+                f"typed constant instead: {name} = pl.const(..., dtype)"
+            )
+        return value
 
     def _current_frame(self) -> _InvocationFrame[V]:
         if not self._frames:
@@ -848,6 +911,19 @@ class Interpreter(Generic[V]):
         binds are visible in one chain; this catches the cross-branch case
         where the then mapping was swapped out at ``enter_else``.
 
+        The merge also poisons a host literal whose join value would be
+        control-dependent: host values emit no IR, so a host value that
+        differs between the branches (or is rebound on one branch against a
+        different pre-if value) silently keeps one branch's literal at the
+        join, and downstream host control flow then constant-folds on it —
+        wrong numerics with no diagnostic. The rejection is deferred to the
+        name's first instrumented read past the join (``_join_visible``):
+        per-branch host scratch that is never read after the join is legal,
+        and any unconditional rebind clears the poison. Host literals that
+        agree on every path are path-independent and stay silent; the fix
+        for a disagreement is the guide's §4.3 spelling, a typed constant
+        bound on every path.
+
         The merged values themselves are otherwise unchecked: a name bound
         on only some paths has no value on the missing path, and that
         unsoundness is rejected by the IR verifier's use-after-def check at
@@ -870,8 +946,58 @@ class Interpreter(Generic[V]):
             union.update(mapping)
         if not union:
             return
+        self._poison_control_dependent_host_literals(union, then, else_)
         target = self._branch_locals[-1] if self._branch_locals else self._current_frame().ns
         target.update(union)
+
+    def _poison_control_dependent_host_literals(
+        self, union: dict[str, object], then: dict[str, object], else_: dict[str, object] | None
+    ) -> None:
+        """Replace control-dependent host literals in ``union`` with join poison.
+
+        The union merge keeps one branch's binding (the else value when both
+        branches bind, the single branch's value otherwise), which is exactly
+        the wrong semantics for a *host* value: it emits no IR, so no pass
+        can rebuild the join — every post-join host read constant-folds on
+        the kept literal regardless of the staged predicate. The typed-
+        staged-initialization guards catch the staged↔host flips at bind
+        time; this is the host→host case, visible only here, at the join.
+
+        Both branches binding the *same* host literal is path-independent
+        and stays silent. A name first bound on one branch only (no pre-if
+        value) keeps its documented delegation to the use-site checks.
+        """
+        staged_query = self._frame().is_staged
+        for name, bound in union.items():
+            if isinstance(bound, _JoinPoisonedHost) or staged_query(bound):
+                continue  # already poisoned by a nested join, or staged (P2 convergence)
+            then_value = _unwrap_join_poison(then.get(name, _UNBOUND))
+            else_value = _unwrap_join_poison(else_.get(name, _UNBOUND)) if else_ is not None else _UNBOUND
+            if then_value is not _UNBOUND and else_value is not _UNBOUND:
+                if (
+                    not staged_query(then_value)
+                    and not staged_query(else_value)
+                    and not _host_literals_agree(then_value, else_value)
+                ):
+                    union[name] = _JoinPoisonedHost(
+                        bound,
+                        "is a host value that differs between this if's branches "
+                        f"(then {then_value!r}, else {else_value!r})",
+                    )
+                continue
+            # One branch binds: a rebind of the pre-if value is equally
+            # control-dependent. Both branch mappings are popped by now, so
+            # ``current_binding`` sees exactly the pre-if value.
+            _, prior_raw = self.current_binding(name)
+            prior = _unwrap_join_poison(prior_raw) if prior_raw is not None else _UNBOUND
+            if prior is _UNBOUND or staged_query(prior):
+                continue  # first bind (delegated), or the bind-time guards own the flip
+            if not _host_literals_agree(bound, prior):
+                union[name] = _JoinPoisonedHost(
+                    bound,
+                    f"is a host value rebound on only one branch of this if "
+                    f"({bound!r} there, {prior!r} before the if)",
+                )
 
     def eval_and(self, a: object, thunk: Callable[[], object]) -> object:
         """Evaluate ``and`` with a lazy right-hand thunk.

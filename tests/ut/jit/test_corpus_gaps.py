@@ -805,7 +805,7 @@ class TestInlineSpliceTypeClosure:
 
         @pl.jit.incore
         def _sink(local_out: pl.Out[pl.Tensor], n: pl.Scalar[pl.INT32]) -> pl.Tensor:
-            with pl.at(level=pl.Level.CORE_GROUP, name_hint="sink") as _tid:
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="sink") as tid:  # noqa: F841 - unused capture mirrors the corpus shape
                 for row in pl.range(2):
                     t = pl.load(local_out, [row, 0], [1, 4])
                     pl.store(t, [row, 0], local_out)
@@ -1332,3 +1332,141 @@ class TestInlineForwardReference:
 
         with pytest.raises(NameError, match="nowhere"):
             _ = broken.fn
+
+
+class TestStagedIfHostJoinLiterals:
+    """A host literal crossing a staged ``if`` join must be loud, not merged.
+
+    Closed 2026-09-14, from the pypto-lib device sweep (W16: both "numerical
+    failure" files were one frontend disease). ``_merge_branch_locals``
+    committed branch-local bindings by dict-union, so a **host** value
+    assigned inside a staged ``if`` silently kept one branch's literal at the
+    join — the then value for a then-only rebind, the else value when both
+    branches rebound — and downstream host control flow then constant-folded
+    on that literal: wrong numerics with no diagnostic. Host values emit no
+    IR, so no pass can rebuild the join; the parser-era frontend promoted
+    these sites to ``pl.Scalar`` + phi, which is why the same sources were
+    green under the CI-ref compiler:
+
+    * dspark ``decode_compressor_ratio4`` — ``state_half = 0`` before the
+      ``if state_idx >= COMPRESS_RATIO:`` staged if, ``state_half =
+      HEAD_DIM`` on the then path only: the join kept ``512``, so every pool
+      window slot read the back state half (93.4% ``kv`` mismatch).
+    * mtp ``prefill_swa`` (``_cp_swa_stage_sources``) — ``source_kind =
+      1/0`` bound in both branches: the join kept the else ``0``, the
+      ``if source_kind == 1:`` host branch folded away, and the predecessor
+      overlay staging path was deleted from the trace (38% ``x_out``
+      mismatch).
+
+    The corpus-side fix was the guide §4.3 respell (``pl.const`` bound on
+    every path); this pin keeps the frontend itself loud, mirroring the
+    staged/host flip the merge already rejected."""
+
+    def test_then_only_host_rebind_is_loud(self):
+        """The ``state_half`` shape: a pre-if host value rebound on the then
+        path only — pre-fix the join silently kept ``512``."""
+
+        def make():
+            @pl.jit
+            def entry(x: pl.Tensor[[4], pl.FP32]) -> pl.Scalar:
+                v = pl.read(x, [0])
+                state_half = 0  # host literal
+                if v > pl.const(0, pl.FP32):  # staged predicate
+                    state_half = 512  # host literal rebind, then path only
+                return pl.const(state_half, pl.INDEX)  # read after the join
+
+            return entry
+
+        with pytest.raises(
+            TypeError,
+            match="staged if join: 'state_half' is a host value rebound on only one branch",
+        ):
+            make()
+
+    def test_both_branch_host_disagreement_is_loud(self):
+        """The ``source_kind`` shape: both branches rebind a host literal to
+        different values — pre-fix the join silently kept the else value."""
+
+        def make():
+            @pl.jit
+            def entry(x: pl.Tensor[[4], pl.FP32]) -> pl.Scalar:
+                v = pl.read(x, [0])
+                source_kind = 0  # host literal
+                if v > pl.const(0, pl.FP32):  # staged predicate
+                    source_kind = 1
+                else:
+                    source_kind = 0
+                if source_kind == 1:  # host control flow after the join
+                    return pl.const(101, pl.INDEX)
+                return pl.const(202, pl.INDEX)
+
+            return entry
+
+        with pytest.raises(
+            TypeError,
+            match="staged if join: 'source_kind' is a host value that differs between this if's branches",
+        ):
+            make()
+
+    def test_const_respell_still_compiles(self):
+        """The guide §4.3 fix stays green: a typed constant bound on every
+        path is staged, so the join is the pass's convergence domain, not the
+        merge's."""
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        @pl.jit
+        def entry(x: pl.Tensor[[4], pl.FP32]) -> pl.Scalar:
+            v = pl.read(x, [0])
+            source_kind = pl.const(0, pl.INDEX)
+            if v > pl.const(0, pl.FP32):
+                source_kind = pl.const(1, pl.INDEX)
+            else:
+                source_kind = pl.const(0, pl.INDEX)
+            if source_kind == 1:  # staged predicate now, not host folding
+                return pl.const(101, pl.INDEX)
+            return pl.const(202, pl.INDEX)
+
+        prog = entry.compile_for_test(torch.zeros(4, dtype=torch.float32))
+        assert isinstance(prog, ir.Program)
+
+    def test_branch_host_scratch_not_read_after_join_stays_legal(self):
+        """The rejection is scoped to the read, not the bind: per-branch
+        host scratch (shape computation read only inside its own branch) is
+        the documented-legal pattern — the merge defers the rejection to the
+        first instrumented read past the join, and none happens here."""
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        @pl.jit
+        def entry(x: pl.Tensor[[8, 8], pl.FP32], out: pl.Out[pl.Tensor[[8, 8], pl.FP32]]):
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="scratch"):
+                v = pl.read(x, [0, 0])
+                if v > pl.const(0, pl.FP32):
+                    cols = 4  # host scratch, same-branch reads only
+                    t = pl.load(x, [0, 0], [1, cols])
+                    pl.store(t, [0, 0], out)
+                else:
+                    cols = 8
+                    t = pl.load(x, [0, 0], [1, cols])
+                    pl.store(t, [0, 0], out)
+            return out
+
+        prog = entry.compile_for_test(
+            torch.zeros(8, 8, dtype=torch.float32), torch.zeros(8, 8, dtype=torch.float32)
+        )
+        assert isinstance(prog, ir.Program)
+
+    def test_agreeing_host_literals_stay_silent(self):
+        """A host value that is the same literal on every path is
+        path-independent — the merge stays silent for it."""
+        import torch  # noqa: PLC0415 - runtime bridge for compile_for_test
+
+        @pl.jit
+        def entry(x: pl.Tensor[[4], pl.FP32]) -> pl.Scalar:
+            v = pl.read(x, [0])
+            state_half = 0  # host literal
+            if v > pl.const(0, pl.FP32):
+                state_half = 0  # same literal: no control dependence
+            return pl.const(state_half, pl.INDEX)
+
+        prog = entry.compile_for_test(torch.zeros(4, dtype=torch.float32))
+        assert isinstance(prog, ir.Program)
