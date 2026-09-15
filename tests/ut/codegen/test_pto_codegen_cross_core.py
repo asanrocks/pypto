@@ -1509,10 +1509,14 @@ class TestCrossCoreTpushTpopCodegen:
                 received: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Vec] = pl.tpop_from_aic(
                     shape=[16, 16], dtype=pl.FP32, split=0
                 )
+                # Typed constants, not host literals: a host literal that
+                # differs between the branches is control-dependent, and its
+                # first post-join read is rejected (the wrong-numerics class
+                # the join poison closes).
                 if flag == 0:
-                    scale = 1.0
+                    scale = pl.const(1.0, pl.FP32)
                 else:
-                    scale = 2.0
+                    scale = pl.const(2.0, pl.FP32)
                 scaled = pl.tile.muls(received, scale)
                 updated: pl.Tensor[[16, 16], pl.FP32] = pl.store(scaled, [0, 0], output)
                 pl.tfree_to_aic(received)
