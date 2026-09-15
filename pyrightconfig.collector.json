@@ -7,7 +7,7 @@
     "reportUnnecessaryTypeIgnoreComment": true,
     "include": [
         "python/pypto/language/tracer/collector",
-        "python/pypto/language/tracer/protocol.py",
+        "python/pypto/language/protocol.py",
         "python/pypto/language/tracer/semantics.py",
         "python/pypto/language/tracer/constructs.py",
         "python/pypto/language/constructs"
