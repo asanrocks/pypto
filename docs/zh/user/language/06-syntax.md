@@ -28,7 +28,7 @@ import pypto.language as pl
 
 <!-- doctest: run -->
 ```python
-@pl.jit.incore
+@pl.function(type=pl.FunctionType.InCore)
 def head(x: pl.Tensor[[128, 64], pl.FP32],
          out: pl.Out[pl.Tensor[[16, 64], pl.FP32]]):
     top = x[0:16, :]                        # stages pl.tensor.slice(x, [16, 64], [0, 0])

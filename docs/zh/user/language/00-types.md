@@ -164,13 +164,13 @@ N = pl.dynamic("N")
 TILE = 32                       # the physical tile the kernel moves per call
 
 
-@pl.jit.incore
+@pl.function(type=pl.FunctionType.InCore)
 def rows(x: pl.Tensor[[N, 64], pl.FP32], out: pl.Out[pl.Tensor[[N, 64], pl.FP32]]):
     out = pl.store(pl.mul(pl.load(x, [0, 0], [TILE, 64]), 2.0), [0, 0], out)
     return out
 
 
-@pl.jit
+@pl.function(type=pl.FunctionType.Orchestration)
 def drive(x: pl.Tensor[[N, 64], pl.FP32], out: pl.Out[pl.Tensor[[N, 64], pl.FP32]]):
     return rows(x, out)         # the entry is dynamic too, so both extents share it
 

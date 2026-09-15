@@ -72,7 +72,7 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
 - Notes: do not "fix" pyright errors; do not touch `python/pypto/` typing.
 - Completion: red reproduced before edits (9 headers, 8 broad raises, 7 bare op-name literals, and 2 missing docs code-span symbols). Canonical headers, concrete exception classes, registry-backed op-name constants, and explicit `pl.static_dim`/`pl.static_shape` docs spans now pass all four direct checkers. Hook auto-fixes from the repro were retained, and the three affected review documents now satisfy `tests/lint/.markdownlint.yaml`: MD056 is 0 and MD060 is 0. The prescribed repro passes every pre-commit hook except the separate pyright debt (503 errors), which remains out of scope.
 
-## T2 — port 3 doc examples to the tracing-era spelling — state: in-progress
+## T2 — port 3 doc examples to the tracing-era spelling — state: done
 
 - Mode: mutating. Model: openai/gpt-5.6-luna.
 - Allowed paths: `docs/en/user/language/00-types.md`,
@@ -94,11 +94,10 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   `rows` and `drive` in `00-types.md` to explicit `pl.function` tracing
   decorators with `InCore` and `Orchestration` types, changed `head` in
   `06-syntax.md` to `InCore`, and changed the failing `fused` block in
-  `00-workflow.md` to `Orchestration`. The English docs executor passes
-  40/40 blocks. The prescribed command remains red before the docs stage
-  because `--check-parity` reports mismatches in the corresponding Chinese
-  blocks, which are outside this task's allowed paths. T9 records that
-  follow-up.
+  `00-workflow.md` to `Orchestration`. Mirrored the identical tracing-era
+  code in the three Chinese twin blocks while leaving surrounding Chinese
+  prose unchanged. The prescribed command now passes parity and all 40/40
+  runnable docs examples.
 
 ## T5 — `tpop_from_aic()` required `shape` arg (16 st failures) — state: open
 
@@ -182,20 +181,6 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   environment.
 - Deliverable: which comparisons fail, tolerance vs real-divergence, and
   whether the numbers match a known family.
-
-## T9 — synchronize Chinese runnable blocks after T2 — state: open
-
-- Mode: mutating. Model: openai/gpt-5.6-luna.
-- Allowed paths: `docs/zh/user/language/00-types.md`,
-  `docs/zh/user/language/06-syntax.md`,
-  `docs/zh/user/precision/00-workflow.md`.
-- Red check: `./scripts/ci-repro --skip pre-commit,clang-tidy,unit-tests,codegen-tests,examples-tests`
-  fails its docs-examples parity precheck after T2 changes the matching
-  English runnable blocks.
-- Fix pattern: mirror the three English marked code blocks byte-for-byte,
-  preserving the surrounding Chinese prose.
-- Green check: the prescribed docs-examples command reports parity OK and
-  40/40 runnable blocks passed.
 
 ## Explicitly out of scope (no task)
 

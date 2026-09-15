@@ -117,7 +117,7 @@ prog = ir.compile(program, verification_level=...)   # 或 PYPTO_VERIFY_LEVEL
 from pypto.debug import torch_codegen
 
 
-@pl.jit
+@pl.function(type=pl.FunctionType.Orchestration)
 def fused(a: pl.Tensor[[64, 128], pl.FP32], b: pl.Tensor[[64, 128], pl.FP32],
           out: pl.Out[pl.Tensor[[64, 128], pl.FP32]]):
     with pl.at(level=pl.Level.CORE_GROUP):
