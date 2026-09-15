@@ -1,22 +1,126 @@
 #!/usr/bin/env bash
+# Rebuild this pypto worktree.
+#
+#   scripts/rebuild          rebuild the pypto C++ extension
+#   scripts/rebuild --full   pin + rebuild the whole local stack in this
+#                            worktree (pto-isa pin, runtime, pypto extension)
+#                            and smoke-test the FFTS path on a2a3sim
+#
+# Deliberately offline: pto-isa is cloned/fetched from the sibling checkout
+# under subprojects/ rather than GitHub, uv runs with --offline, and the build
+# never lets CMake run `git submodule update` against a remote. Everything
+# else uses the current worktree and its .venv only.
+#
+# --full overrides: PTOAS_VERSION (default 0.57) selects /usr/local/ptoas/<v>;
+#                   an explicit PTOAS_ROOT wins over it (scripts/activate exports
+#                   one pointing at the default launcher), PTO_ISA_PIN,
+#                   PTO_ISA_MIRROR (default ../pto-isa), PYPTO_LIB
+#                   (default ../pypto-lib), CMAKE_BUILD_PARALLEL_LEVEL
+#                   (default 32 -- keep it modest on a shared box).
 set -euo pipefail
+export GIT_TERMINAL_PROMPT=0
 
-# Clean rebuild of the C++ extension.
-# Usage:
-#   scripts/rebuild          # clean rebuild
-#   scripts/rebuild --quick  # skip clean, just rebuild (for header-only changes)
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
 
-build_dir="build"
+# pto-isa >= ce153aee ("fix(cpu): implement A2A3 FFTS cross-core
+# synchronization", issue #308). Older pins have no CPU-sim FFTS interfaces, so
+# the cross-core-sync kernels fail to compile under g++-15 on a2a3sim.
+PIN_DEFAULT=3b4faf67aebb3e0d41be7952c56908b3adba7a8f
+SMOKE=models/deepseek_v4_flash_dspark/decode_sparse_attn_swa.py
+JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-32}"
 
-if [[ "${1:-}" == "--quick" ]]; then
-    echo "=== Quick rebuild (no clean) ==="
-    cmake --build "$build_dir" --parallel
-    uv pip install -e .
-    echo "=== Done ==="
-    exit 0
-fi
+rebuild_ext() {
+    echo "=== pypto extension: rebuild (offline, -j$JOBS) ==="
+    rm -rf build
+    CMAKE_BUILD_PARALLEL_LEVEL="$JOBS" uv pip install --offline -e .
+}
 
-echo "=== Clean rebuild ==="
-rm -rf "$build_dir"
-uv pip install -e .
-echo "=== Done ==="
+# Clone or move the managed pto-isa checkout to $pin using only local sources.
+provision_pto_isa() {
+    local pin="$1" mirror="$2" isa="runtime/build/pto-isa"
+    if [ -d "$isa/.git" ] && git -C "$isa" cat-file -e "$pin^{commit}" 2>/dev/null; then
+        :
+    elif [ -d "$mirror/.git" ] || [ -f "$mirror/.git" ]; then
+        if [ -d "$isa/.git" ]; then
+            echo "=== fetching pto-isa pin from $mirror ==="
+            git -C "$isa" fetch -q "$mirror" "$pin"
+        else
+            echo "=== cloning pto-isa from $mirror ==="
+            git clone -q --no-checkout "$mirror" "$isa"
+        fi
+    else
+        echo "pto-isa $pin unavailable locally; set PTO_ISA_MIRROR to a checkout" >&2
+        echo "with that commit (expected a clone at $mirror)" >&2
+        exit 1
+    fi
+    git -C "$isa" checkout -q -f "$pin"
+    git -C "$isa" clean -qfd
+}
+
+# CMake falls back to a network `git submodule update` when this is missing.
+require_submodules() {
+    local missing=()
+    local sub
+    while read -r sub; do
+        [ -e "$sub/.git" ] || missing+=("$sub")
+    done < <(git config --file .gitmodules --get-regexp path | awk '{print $2}')
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "uninitialized submodules: ${missing[*]}" >&2
+        echo "CMake would fetch these over the network. Initialize them locally, e.g." >&2
+        echo "from a sibling worktree that already has them:" >&2
+        echo "  git submodule update --init --recursive --reference <local repo>" >&2
+        exit 1
+    fi
+}
+
+rebuild_full() {
+    local pin="${PTO_ISA_PIN:-$PIN_DEFAULT}"
+    local ptoas_version="${PTOAS_VERSION:-0.57}"
+    local ptoas_root="${PTOAS_ROOT:-/usr/local/ptoas/$ptoas_version}"
+    local mirror="${PTO_ISA_MIRROR:-$ROOT/../pto-isa}"
+    local lib="${PYPTO_LIB:-$ROOT/../pypto-lib}"
+
+    local ptoas_bin=""
+    for cand in "$ptoas_root/ptoas.sh" "$ptoas_root/ptoas" "$ptoas_root/bin/ptoas"; do
+        [ -f "$cand" ] && [ -x "$cand" ] && { ptoas_bin="$cand"; break; }
+    done
+    [ -n "$ptoas_bin" ] || { echo "ptoas not found under $ptoas_root" >&2; exit 1; }
+    echo "=== ptoas: $ptoas_bin ($("$ptoas_bin" --version 2>/dev/null | head -1)) ==="
+
+    require_submodules
+
+    echo "=== pto-isa pin: $pin ==="
+    printf '%s\n' "$pin" > runtime/pto_isa.pin
+    provision_pto_isa "$pin" "$mirror"
+
+    echo "=== runtime (simpler) ==="
+    CMAKE_BUILD_PARALLEL_LEVEL="$JOBS" uv pip install --offline -e runtime
+
+    rebuild_ext
+
+    # The device path refuses binaries whose recorded pin differs from
+    # pto_isa.pin, so verify the metadata instead of trusting install logs.
+    local meta="$ROOT/runtime/build/lib/pto_isa_build.json"
+    if [ -f "$meta" ] && ! grep -q "$pin" "$meta"; then
+        echo "runtime metadata does not record $pin: $meta" >&2
+        exit 1
+    fi
+
+    if [ -f "$lib/$SMOKE" ]; then
+        echo "=== smoke test (a2a3sim): $SMOKE ==="
+        ( cd "$lib" && PTOAS_ROOT="$ptoas_root" PYTHONPATH="$lib" \
+            "$ROOT/.venv/bin/python" "$SMOKE" -p a2a3sim )
+    else
+        echo "=== smoke test skipped: $lib/$SMOKE not found ===" >&2
+    fi
+}
+
+case "${1:-}" in
+    "")        rebuild_ext ;;
+    --full)    rebuild_full ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    *)         echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+esac
+
+echo "=== done ==="
