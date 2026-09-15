@@ -145,7 +145,7 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   passed for both changed source files. The removed user-observable behavior
   is recorded as T10 below.
 
-## T1 — port 20+4 codegen tests off `_JitSpecializer` — state: open
+## T1 — port 20+4 codegen tests off `_JitSpecializer` — state: done
 
 - Mode: mutating, designed for session resume. Model: volce/glm-5.3.
 - Allowed paths: the failing test files under `tests/ut/codegen/` (and
@@ -165,6 +165,22 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   finish the current file family, commit, and record the remainder.
 - Green check: codegen-tests stage PASS (62 passed at Round-2 baseline;
   count may grow with the ported tests).
+- Completion: red reproduced before edits (exactly the documented 20 failed
+  + 4 errored, all with `AttributeError` on `.name`/`.span` in
+  `tests/st/codegen/dsl/`). Root cause refined: the six files had already
+  been migrated to `@pl.jit` in `481ec526e`, but `d955eb1aa` ("serve the
+  eager lane's host surface from the decoration record") changed the eager
+  decoration to return the jit object instead of a bare `ir.Function`, so
+  every site passing the decorated object to `_lowered`/`_compile`/
+  `ir.Program` broke. Port: each call site now passes the decoration trace
+  (`jit_obj.fn`, the annotation-determined `ir.Function`), keeping the
+  established `_lowered`/`_compile(fn, cfg)` helper routes; the helpers'
+  stale "the decoration returns a bare `ir.Function`" docstrings were
+  corrected. No `python/pypto/jit/` or C++ changes. After edits: the 24
+  nodeids pass focused (7 + 17), and the prescribed repro passes the
+  codegen-tests stage 62 passed / 30 deselected (the 24 were already inside
+  the 62 collected, so the count did not grow). Ruff check and format pass
+  on the six changed files.
 
 ## T4 — ptoas `pto.tmul` element-type mismatch — state: open
 

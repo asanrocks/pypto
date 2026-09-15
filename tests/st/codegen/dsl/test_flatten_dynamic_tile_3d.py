@@ -79,17 +79,18 @@ class TestFlattenDynamicTile3D:
         dynamic valid tail.
         """
         # The jit kernel is eagerly traced at decoration (every param carries a
-        # facade annotation), so the decoration trace *is* the specialization:
-        # B_DYN/S_DYN stay symbolic and the [1, CHUNK, 512] tile keeps a dynamic
-        # valid extent at pass time. Run the Default pass pipeline on its
-        # program — no codegen, no device.
+        # facade annotation), so the decoration trace (``jit_obj.fn``) *is* the
+        # specialization: B_DYN/S_DYN stay symbolic and the [1, CHUNK, 512] tile
+        # keeps a dynamic valid extent at pass time. Run the Default pass
+        # pipeline on its program — no codegen, no device.
         backend.reset_for_testing()
         backend.set_backend_type(BackendType.Ascend910B)
         try:
             # Runs the full pass pipeline (no raise). Before the fix,
             # FlattenTileNdTo2D dropped the dynamic valid_shape when flattening
             # the >2D per-chunk tile.
-            program = ir.Program([cast_3d_dynamic], "cast_3d_dynamic", cast_3d_dynamic.span)
+            fn = cast_3d_dynamic.fn
+            program = ir.Program([fn], fn.name, fn.span)
             post = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(program)
         finally:
             backend.reset_for_testing()

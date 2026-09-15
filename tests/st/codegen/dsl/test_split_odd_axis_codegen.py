@@ -223,12 +223,12 @@ def _lowered(fn: ir.Function) -> ir.Program:
 def _compiled(fn: ir.Function, cfg: RunConfig):
     """Compile an eagerly traced ``@pl.jit`` kernel for host dispatch.
 
-    A lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
-    exactly this way (``jit.py``'s ``_compile_program``): the compile-side
-    fields become compile kwargs, everything else rides the dispatch
-    ``config=``. The eager lane has no host dispatch surface of its own — the
-    decoration returns a bare ``ir.Function`` — so the test drives the same
-    route the lazy lane would.
+    The eager jit object serves the same route through its own host surface
+    (``jit.py``'s ``_compile_program`` over the decoration record): a
+    lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
+    exactly this way — the compile-side fields become compile kwargs,
+    everything else rides the dispatch ``config=``. The test drives that
+    route directly on the decoration trace (``jit_obj.fn``).
     """
     kwargs = {"platform": cfg.platform, **run_config_compile_kwargs(cfg)}
     return ir.compile(ir.Program([fn], fn.name, fn.span), **kwargs)
@@ -257,7 +257,7 @@ def odd_rows_pto(tmp_path_factory) -> str:
     cfg = RunConfig(platform="a2a3", codegen_only=True, save_kernels=True, save_kernels_dir=str(dump_dir))
     error: Exception | None = None
     try:
-        _compiled(odd_rows, cfg)(*_args(ODD_VALID_M), config=cfg)
+        _compiled(odd_rows.fn, cfg)(*_args(ODD_VALID_M), config=cfg)
     except Exception as e:  # noqa: BLE001 - see docstring
         error = e
     ptos = sorted(dump_dir.rglob("*.pto"))
@@ -321,7 +321,7 @@ def test_deep_tail_is_rebalanced_onto_the_valid_region():
     lane-localized compute, and the store offsets (``idx * 7``) — otherwise the
     two lanes would disagree about which rows they own.
     """
-    printed = str(_lowered(deep_tail_rows))
+    printed = str(_lowered(deep_tail_rows.fn))
     aiv = _lowered_half(printed, "aiv")
 
     # The stride rides onto the transport so every consumer of the boundary —
@@ -343,7 +343,7 @@ def test_rebalance_is_declined_when_a_value_is_split_independently():
     the blocking value and the extents that would work.
     """
     with pytest.raises(ValueError) as exc:
-        _lowered(deep_tail_with_independent_value)
+        _lowered(deep_tail_with_independent_value.fn)
 
     message = str(exc.value)
     assert "leaves the two AIV lanes 8 and 5 cells" in message
@@ -370,7 +370,7 @@ def test_explicit_region_odd_box_is_refused_with_unplaceable_lanes():
     ``test_odd_pop_carries_a_per_lane_row_extent_and_the_full_column_box``.
     """
     with pytest.raises(ValueError) as exc:
-        _lowered(explicit_region_odd_box)
+        _lowered(explicit_region_odd_box.fn)
 
     message = str(exc.value)
     assert "leaves the two AIV lanes 16 and 1 cells" in message, message
@@ -384,7 +384,7 @@ def runtime_tail_pto(tmp_path_factory) -> str:
     cfg = RunConfig(platform="a2a3", codegen_only=True, save_kernels=True, save_kernels_dir=str(dump_dir))
     error: Exception | None = None
     try:
-        _compiled(runtime_tail_rows, cfg)(
+        _compiled(runtime_tail_rows.fn, cfg)(
             torch.randn(ROWS, K, dtype=torch.bfloat16),
             torch.randn(COLS, K, dtype=torch.bfloat16),
             torch.tensor([12], dtype=torch.int64),
@@ -434,7 +434,7 @@ def test_runtime_extent_rejects_a_pad_fill_at_the_boundary():
     two authoring routes that do work.
     """
     with pytest.raises(ValueError) as exc:
-        _compiled(runtime_tail_fillpad_first, RunConfig(platform="a2a3"))
+        _compiled(runtime_tail_fillpad_first.fn, RunConfig(platform="a2a3"))
 
     message = str(exc.value)
     assert "fills the padding of a Cube -> Vector boundary tile" in message, message
@@ -444,7 +444,7 @@ def test_runtime_extent_rejects_a_pad_fill_at_the_boundary():
 def test_runtime_extent_rejects_a_direct_store_of_the_boundary():
     """Storing the boundary tile itself would write the transport's padding."""
     with pytest.raises(ValueError) as exc:
-        _compiled(runtime_tail_store_first, RunConfig(platform="a2a3"))
+        _compiled(runtime_tail_store_first.fn, RunConfig(platform="a2a3"))
 
     message = str(exc.value)
     assert "consumes a Cube -> Vector boundary tile directly" in message, message

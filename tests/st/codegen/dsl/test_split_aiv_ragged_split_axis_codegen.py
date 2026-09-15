@@ -175,12 +175,12 @@ def _lowered(fn: ir.Function) -> ir.Program:
 def _compiled(fn: ir.Function, cfg: RunConfig):
     """Compile an eagerly traced ``@pl.jit`` kernel for host dispatch.
 
-    A lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
-    exactly this way (``jit.py``'s ``_compile_program``): the compile-side
-    fields become compile kwargs, everything else rides the dispatch
-    ``config=``. The eager lane has no host dispatch surface of its own — the
-    decoration returns a bare ``ir.Function`` — so the test drives the same
-    route the lazy lane would.
+    The eager jit object serves the same route through its own host surface
+    (``jit.py``'s ``_compile_program`` over the decoration record): a
+    lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
+    exactly this way — the compile-side fields become compile kwargs,
+    everything else rides the dispatch ``config=``. The test drives that
+    route directly on the decoration trace (``jit_obj.fn``).
     """
     kwargs = {"platform": cfg.platform, **run_config_compile_kwargs(cfg)}
     return ir.compile(ir.Program([fn], fn.name, fn.span), **kwargs)
@@ -220,7 +220,7 @@ def _ragged_rows_pto() -> str:
     cfg = RunConfig(platform="a2a3", codegen_only=True, save_kernels=True, save_kernels_dir=str(DUMP_DIR))
     error: Exception | None = None
     try:
-        _compiled(ragged_rows, cfg)(*_ragged_rows_args(), config=cfg)
+        _compiled(ragged_rows.fn, cfg)(*_ragged_rows_args(), config=cfg)
     except Exception as e:  # noqa: BLE001 - see docstring
         error = e
     ptos = sorted(DUMP_DIR.rglob("*.pto"))
@@ -243,7 +243,7 @@ def test_ragged_rows_localize_to_a_per_lane_extent():
     ceil(5 / 2) = 3 would drop rows 3 and 4 on lane 0 and fabricate three rows on
     lane 1; the truth is 5 rows on lane 0 and none on lane 1.
     """
-    aiv = _aiv_body(str(_lowered(ragged_rows)))
+    aiv = _aiv_body(str(_lowered(ragged_rows.fn)))
 
     # (The tpop spelling carries its explicit shape/dtype producers — spec(tpop).)
     assert re.search(r"pl\.tile\.tpop_from_aic\([^)]*split=1", aiv), aiv
@@ -298,7 +298,7 @@ def test_nested_control_flow_is_repaired_too():
     branch on the deducer's ceil(V/2) — silently, since nothing downstream can
     tell a lane-agnostic extent from a lane-aware one.
     """
-    aiv = _aiv_body(str(_lowered(ragged_rows_nested)))
+    aiv = _aiv_body(str(_lowered(ragged_rows_nested.fn)))
 
     lane = re.search(r"= pl\.tile\.get_subblock_idx\(\)", aiv)
     assert lane, aiv
@@ -316,7 +316,7 @@ def test_per_lane_extent_propagates_through_a_vector_consumer():
     must pass it through — otherwise the store would write the deducer's
     ceil(V/2) rows.
     """
-    aiv = _aiv_body(str(_lowered(ragged_rows_with_compute)))
+    aiv = _aiv_body(str(_lowered(ragged_rows_with_compute.fn)))
 
     exp_line = next((line for line in aiv.splitlines() if "pl.tile.exp(" in line), None)
     assert exp_line is not None, aiv
@@ -332,7 +332,7 @@ def test_hand_authored_partial_gather_is_rejected_where_the_lanes_are_known():
     lane-agnostic guess.
     """
     with pytest.raises(ValueError) as exc:
-        _lowered(hand_authored_partial_gather)
+        _lowered(hand_authored_partial_gather.fn)
 
     message = str(exc.value)
     assert "tile.aic_gather re-joins the two lanes positionally" in message
@@ -343,7 +343,7 @@ def test_hand_authored_partial_gather_is_rejected_where_the_lanes_are_known():
 def test_left_right_ragged_columns_are_rejected_with_a_dsl_fix():
     """The column field is pinned by the transport, so a per-lane column has no carrier."""
     with pytest.raises(ValueError) as exc:
-        _lowered(ragged_cols_left_right)
+        _lowered(ragged_cols_left_right.fn)
 
     message = str(exc.value)
     assert "LEFT_RIGHT splits the column axis" in message
@@ -356,7 +356,7 @@ def test_left_right_ragged_columns_are_rejected_with_a_dsl_fix():
 def test_ragged_rows_with_narrowed_columns_are_rejected():
     """treshape restores the column extent statically and would clobber the per-lane row."""
     with pytest.raises(ValueError) as exc:
-        _lowered(ragged_rows_and_cols)
+        _lowered(ragged_rows_and_cols.fn)
 
     message = str(exc.value)
     assert "per-lane row extent" in message

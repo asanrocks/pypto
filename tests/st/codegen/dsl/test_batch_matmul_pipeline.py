@@ -70,12 +70,12 @@ def batch_matmul_pipeline_repro(
 def _compile(fn: ir.Function, cfg: RunConfig):
     """Compile an eagerly traced ``@pl.jit`` kernel for host dispatch.
 
-    A lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
-    exactly this way (``jit.py``'s ``_compile_program``): the compile-side
-    fields become compile kwargs, everything else rides the dispatch
-    ``config=``. The eager lane has no host dispatch surface of its own — the
-    decoration returns a bare ``ir.Function`` — so the test drives the same
-    route the lazy lane would.
+    The eager jit object serves the same route through its own host surface
+    (``jit.py``'s ``_compile_program`` over the decoration record): a
+    lazy-lane ``config=`` call maps its ``RunConfig`` onto ``ir.compile``
+    exactly this way — the compile-side fields become compile kwargs,
+    everything else rides the dispatch ``config=``. The test drives that
+    route directly on the decoration trace (``jit_obj.fn``).
     """
     kwargs = {"platform": cfg.platform, **run_config_compile_kwargs(cfg)}
     return ir.compile(ir.Program([fn], fn.name, fn.span), **kwargs)
@@ -100,7 +100,7 @@ def test_no_mat_to_mat_tmov():
     # before that.
     compile_error: Exception | None = None
     try:
-        _compile(batch_matmul_pipeline_repro, cfg)
+        _compile(batch_matmul_pipeline_repro.fn, cfg)
     except Exception as e:  # noqa: BLE001 - see comment above
         compile_error = e
 
