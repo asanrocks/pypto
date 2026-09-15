@@ -142,7 +142,8 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
   pytest tests/st/runtime/framework_and_models/test_jit.py --platform=a2a3
   -v"` reported 7 failed, 3 passed; after edits the same bounded command
   reported 8 passed. Device-free focused jit checks passed 33/33 and Ruff
-  passed for both changed source files. No new task was discovered.
+  passed for both changed source files. The removed user-observable behavior
+  is recorded as T10 below.
 
 ## T1 — port 20+4 codegen tests off `_JitSpecializer` — state: open
 
@@ -205,6 +206,27 @@ State legend: `open` | `in-progress` | `done` | `blocked` (needs an owner).
 - Red check: the full `tests/st/runtime/cross_core/` run on `a2a3` fails `TestCrossCoreGroupedTpopTfree::test_v2c_updown_consecutive_tpop_then_tfree_reordered_artifact[a2a3]` during device execution with `ACL_ERROR_RT_AICPU_EXCEPTION (507018)` after the reordered PTO artifact is rebuilt. The other selected tests passed.
 - Triage question: determine whether the failure is a grouped-artifact/runtime regression or a device/infrastructure failure; do not bundle it with the T5 API migration.
 - Green check: the representative grouped-tpop/tfree test passes on device.
+
+## T10 — port persistent READY reuse and device-free warmup to tracing jit — state: open
+
+- Mode: mutating. Owner: tracing jit owner.
+- Scope: tracing jit implementation and its focused integration/unit tests;
+  the quarantined AST-era implementation is reference-only.
+- Debt: restore the user-observable behavior removed from T6's stale ST
+  coverage: persistent READY artifact reuse across processes, including
+  readonly restoration without rerunning compiler stages, and device-free
+  `.warmup` that prepares chip-level binaries without initializing a runtime
+  worker or executing the kernel.
+- Existing quarantined implementations: persistent artifact resolution is in
+  `python/pypto/jit/_persistent.py` and its `JITFunction` integration is in
+  `python/pypto/jit/decorator.py`, including `JITFunction.warmup`.
+- Blocked: `pl.jit` in
+  `python/pypto/language/tracer/decorators/jit.py` currently has no equivalent
+  persistent-artifact or `.warmup` surface. Port the behaviors only after the
+  tracing jit gains those public surfaces; do not move the tests back to
+  `pl.jit_specializer` as a permanent solution.
+- Green check: dedicated tracing-jit coverage for both behaviors passes,
+  including a cross-process READY reuse check and worker-free warmup.
 
 ## Explicitly out of scope (no task)
 

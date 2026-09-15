@@ -57,13 +57,6 @@ def copy_dyn_batch(
 
 
 @pl.jit
-def persistent_add(x: pl.Tensor[[16, 16], pl.FP32], out: pl.Out[pl.Tensor[[16, 16], pl.FP32]]):
-    with pl.at(level=pl.Level.CORE_GROUP):
-        pl.store(pl.add(pl.load(x, [0, 0], [16, 16]), 3.0), [0, 0], out)
-    return out
-
-
-@pl.jit
 def return_style_add(a: pl.Tensor, b: pl.Tensor):
     """Return-style kernel (gap F8): the output is a *return value*, no Out param."""
     with pl.at(level=pl.Level.CORE_GROUP):
