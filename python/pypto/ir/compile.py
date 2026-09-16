@@ -491,12 +491,11 @@ def compile(  # noqa: PLR0913
     # may still hold a ``next_levels/`` from an earlier multi-orch compile, and
     # a disk scan would mistake this build for that one.
     #
-    # The dispatch signature comes from the *post-pass* program: passes append
-    # parameters the source never declared (``MaterializeEntryReturns`` gives a
-    # return-style entry its output slot) and upgrade written inputs to
-    # Out/InOut, and the effective signature is what codegen emitted. Source
-    # param names are restored on top (see ``_extract_param_infos``), so
-    # ``param_names`` keeps the user-facing spelling.
+    # The dispatch signature uses the post-pass program for effective shapes and
+    # parameters appended by ``MaterializeEntryReturns``. Existing source
+    # parameters keep their source names and directions; the metadata helper
+    # restores those fields positionally while leaving appended parameters
+    # post-pass-owned.
     return CompiledProgram(
         program,
         output_dir,

@@ -439,17 +439,24 @@ def _extract_func_param_infos(func: Function) -> tuple[list[_ParamInfo], list[in
 def _extract_func_param_infos_with_names(
     func: Function, name_func: Function | None = None
 ) -> tuple[list[_ParamInfo], list[int], list[Any]]:
-    """Extract parameter metadata from one IR function, restoring source names.
+    """Extract post-pass metadata while restoring source ABI fields.
 
-    ``name_func`` is the pre-pass counterpart of @p func (same function, source
-    spelling): its params name the first ``len(name_func.params)`` positions of
-    the extracted infos, positionally — the pass pipeline keeps declared params
-    in position and only appends. ``None`` keeps @p func's own names.
+    ``name_func`` is the pre-pass counterpart of @p func. The pass pipeline
+    keeps declared parameters in position and appends synthesized parameters,
+    so source names and directions are restored positionally for the declared
+    prefix. Appended parameters retain their post-pass names and directions.
+    Output indices are recomputed after restoring directions: an input that is
+    internally written by a pass remains an input at the public dispatch ABI,
+    while a synthesized return buffer remains an auto-allocatable output.
     """
-    param_infos, output_indices, return_types = _extract_func_param_infos(func)
+    param_infos, _, return_types = _extract_func_param_infos(func)
     if name_func is not None:
-        for info, source_param in zip(param_infos, name_func.params, strict=False):
+        for info, source_param, source_direction in zip(
+            param_infos, name_func.params, name_func.param_directions, strict=False
+        ):
             info.name = source_param.name_hint
+            info.direction = source_direction
+    output_indices = [i for i, info in enumerate(param_infos) if info.direction == ParamDirection.Out]
     return param_infos, output_indices, return_types
 
 
@@ -476,17 +483,17 @@ def _extract_param_infos(
 
     Args:
         program: The program whose orchestration signature describes the
-            artifact's calling convention. ``ir.compile`` passes the
-            *post-pass* program: passes append parameters the source never
-            declared (``MaterializeEntryReturns`` gives a return-style entry
-            its output slot) and upgrade written inputs to Out/InOut, and the
-            effective signature is what codegen emitted.
+            artifact's calling convention. `ir.compile` passes the post-pass
+            program: passes append parameters the source never declared
+            (``MaterializeEntryReturns`` gives a return-style entry its output slot)
+            and may upgrade writes for internal code generation. Existing source
+            parameters retain their source-level names and directions; appended
+            parameters retain post-pass metadata. Shapes and dtypes come from the
+            post-pass function because they describe the emitted artifact.
         name_source: When the signature comes from a post-pass program, the
-            pre-pass program holding the source-level parameter names. The
-            transformed entry keeps the original params in position (only
-            appends grow it), so names are restored positionally for the
-            positions the source declared; appended params keep their
-            synthesized names.
+            pre-pass program holding source-level names and directions. The
+            transformed entry keeps declared parameters in position and appends
+            synthesized parameters.
 
     Returns:
         Tuple of (param_infos, output_indices, return_types).
@@ -922,11 +929,11 @@ class CompiledProgram(_RuntimeFacade):
         # ``compiled_meta.json``), and the runtime artefacts are assembled from
         # the on-disk ``kernel_config.py`` -- so no live IR is needed.
         self._program = program
-        # The post-pass program the dispatch signature is derived from when the
-        # caller compiled one (``ir.compile``): passes append params the source
-        # never declared and upgrade directions, and the effective signature is
-        # what codegen emitted. Signature-only — ``.program`` stays the pre-pass
-        # IR, and source-level names are restored positionally on top.
+        # The post-pass program supplies emitted shapes and parameters appended
+        # by return materialization. Existing source parameters keep their
+        # source-level names and directions in the public metadata; the helper
+        # restores those fields positionally. Signature-only — ``.program``
+        # stays the pre-pass IR.
         self._metadata_program = _metadata_program
         self._output_dir = Path(output_dir).resolve()
         self._backend_type = backend_type
@@ -1181,11 +1188,13 @@ class CompiledProgram(_RuntimeFacade):
         """The original IR Program (pre-optimization passes).
 
         The *dispatch signature* is derived separately, from the post-pass
-        program (see :attr:`param_names` / :attr:`output_indices`) — passes
-        append parameters the source never declared, and the effective
-        signature is what the compiled artifact implements. ``None`` for a
-        program reconstructed via :meth:`from_dir` -- the IR is not persisted
-        alongside the build artifacts.
+        program (see :attr:`param_names` / :attr:`output_indices`) -- passes
+        append parameters the source never declared and may change directions
+        for internal code generation. Existing source parameter names and
+        directions are restored positionally; appended parameters retain their
+        post-pass metadata. ``None`` for a program reconstructed via
+        :meth:`from_dir` -- the IR is not persisted alongside the build
+        artifacts.
         """
         return self._program
 

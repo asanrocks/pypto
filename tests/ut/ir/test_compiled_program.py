@@ -259,6 +259,68 @@ class TestExtractParamInfos:
         _, out_idx, _ = _extract_param_infos(prog)
         assert out_idx == [2]
 
+    def test_post_pass_metadata_preserves_source_directions(self, tmp_path):
+        """Post-pass writes do not turn an existing source input into an output.
+
+        ``MaterializeEntryReturns`` may upgrade an internally-written source
+        parameter to ``Out`` while also appending a real return buffer. The
+        emitted program needs that post-pass direction internally, but the
+        public dispatcher must preserve the source ABI for the existing slot.
+        """
+        span = ir.Span.unknown()
+        tensor_type = ir.TensorType([128, 128], DataType.FP32)
+
+        source = ir.Program(
+            [
+                ir.Function(
+                    "orch",
+                    [
+                        (ir.Var("x", tensor_type, span), ir.ParamDirection.In),
+                        (ir.Var("inner_kv", tensor_type, span), ir.ParamDirection.In),
+                    ],
+                    [tensor_type],
+                    ir.SeqStmts([], span),
+                    span,
+                    ir.FunctionType.Orchestration,
+                )
+            ],
+            "SourceProgram",
+            span,
+        )
+        transformed = ir.Program(
+            [
+                ir.Function(
+                    "orch",
+                    [
+                        (ir.Var("x", tensor_type, span), ir.ParamDirection.In),
+                        (ir.Var("inner_kv", tensor_type, span), ir.ParamDirection.Out),
+                        (ir.Var("ret0__out", tensor_type, span), ir.ParamDirection.Out),
+                    ],
+                    [tensor_type],
+                    ir.SeqStmts([], span),
+                    span,
+                    ir.FunctionType.Orchestration,
+                )
+            ],
+            "TransformedProgram",
+            span,
+        )
+
+        compiled = CompiledProgram(
+            source,
+            str(tmp_path),
+            platform="a2a3sim",
+            _metadata_program=transformed,
+        )
+        infos, output_indices, _ = compiled._get_metadata()
+
+        assert [(info.name, info.direction) for info in infos] == [
+            ("x", ir.ParamDirection.In),
+            ("inner_kv", ir.ParamDirection.In),
+            ("ret0__out", ir.ParamDirection.Out),
+        ]
+        assert output_indices == [2]
+
     def test_shape_extraction(self):
         prog = _make_program_with_orchestration()
         infos, _, _ = _extract_param_infos(prog)
