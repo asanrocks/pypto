@@ -20,6 +20,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any, cast
 
+from pypto.ir.utils import current_pinned_span
 from pypto.pypto_core import DataType, ir
 from pypto.pypto_core.ir import IRBuilder as CppIRBuilder
 
@@ -930,11 +931,19 @@ class IRBuilder:
     # ========== Private Span Tracking Helpers ==========
 
     def _capture_call_span(self) -> ir.Span:
-        """Capture span from immediate caller using inspect.
+        """Pinned span, else the immediate caller's location.
+
+        A pinned span (the DSL parser per DSL call, the trace interpreter
+        per instrumented row) wins: in traced execution the two-frame
+        caller is framework plumbing, so the grab would attribute IR
+        statements to the wrong file.
 
         Returns:
             Span: Source location of the caller
         """
+        pinned = current_pinned_span()
+        if pinned is not None:
+            return pinned
         # Go back 2 frames:
         # frame 0 = _capture_call_span
         # frame 1 = our wrapper method (var, assign, etc.)
