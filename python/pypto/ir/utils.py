@@ -702,13 +702,187 @@ __all__ = [
     "_normalize_signless_same_width_scalar_operand",
     "_to_int32_scalar",
     "_to_make_tuple",
+    "derived_return_types",
+    "first_return_value_types",
     "has_partial_valid_region",
     "resolve_cast_mode",
     "resolve_fixpipe_epilogue",
     "resolve_saturation_deviation",
     "resolve_saturation_mode",
+    "signature_expressible",
     "use_parser_span",
     "set_pinned_span",
     "reset_pinned_span",
     "current_pinned_span",
 ]
+
+
+def return_value_types(fn: "_ir.Function") -> list["_ir.Type"]:
+    """Return one consistent type list shared by all traced return paths.
+
+    Staged ``if``/loop tracing retains a ReturnStmt in each mutually
+    exclusive branch. Those statements describe alternative paths, not extra
+    function results. Merge equivalent paths and return an UnknownType marker
+    when paths disagree so the declared-return check still rejects the program.
+    """
+    paths: list[list[_ir.Type]] = []
+
+    class _V(_ir.IRVisitor):
+        def visit_return_stmt(self, op: _ir.ReturnStmt) -> None:
+            values = [value.type for value in op.value if not isinstance(value.type, _ir.UnknownType)]
+            # A direct multi-return call is represented as one TupleType
+            # expression in the body, while the function signature carries
+            # the parser-compatible flat element list. Recover that boundary
+            # before comparing the trace with the declaration.
+            if (
+                len(values) == 1
+                and isinstance(values[0], _ir.TupleType)
+                and (not fn.return_types or len(fn.return_types) > 1)
+            ):
+                values = list(values[0].types)
+            if values:
+                paths.append(values)
+            super().visit_return_stmt(op)
+
+    _V().visit_function(fn)
+    if not paths:
+        return []
+    first = paths[0]
+    if all(
+        len(path) == len(first)
+        and all(
+            _ir.structural_equal(expected, actual, enable_auto_mapping=True)
+            for expected, actual in zip(first, path)
+        )
+        for path in paths[1:]
+    ):
+        return first
+    return [_ir.UnknownType()]
+
+
+def _param_extent_symbols(fn: "_ir.Function") -> set[int]:
+    """The ids of the Vars ``fn``'s printed signature can name: every param
+    Var itself (a scalar param is spellable inside an annotation, e.g. a view's
+    ``valid_shape``) and the shape-extent Vars its shaped params declare
+    (module-scoped ``pl.dynamic`` Vars)."""
+    ids: set[int] = set()
+    for param in fn.params:
+        ids.add(id(param))
+        param_type = param.type
+        if isinstance(param_type, _ir.ShapedType):
+            for extent in param_type.shape:
+                if isinstance(extent, _ir.Var):
+                    ids.add(id(extent))
+    return ids
+
+
+def _type_extent_symbols(t: "_ir.Type") -> set[int]:
+    """The ids of every Var the printed form of *t* names: shape dims (also
+    inside extent expressions) and view metadata
+    (``valid_shape``/``stride``/``start_offset``), recursively through tuple
+    elements."""
+    ids: set[int] = set()
+
+    def walk_expr(expr: "_ir.Expr | None") -> None:
+        if expr is None:
+            return
+        if isinstance(expr, _ir.Var):
+            ids.add(id(expr))
+            return
+        for attr in ("left", "right", "operand"):
+            child = getattr(expr, attr, None)
+            if isinstance(child, _ir.Expr):
+                walk_expr(child)
+
+    def walk_type(type_: "_ir.Type") -> None:
+        if isinstance(type_, _ir.TupleType):
+            for element in type_.types:
+                walk_type(element)
+        elif isinstance(type_, _ir.ShapedType):
+            for dim in type_.shape:
+                walk_expr(dim)
+            tensor_view = getattr(type_, "tensor_view", None)
+            if tensor_view is not None:
+                for dim in [*tensor_view.valid_shape, *tensor_view.stride]:
+                    walk_expr(dim)
+            tile_view = getattr(type_, "tile_view", None)
+            if tile_view is not None:
+                for dim in [*tile_view.valid_shape, *tile_view.stride]:
+                    walk_expr(dim)
+                walk_expr(tile_view.start_offset)
+
+    walk_type(t)
+    return ids
+
+
+def signature_expressible(t: "_ir.Type", fn: "_ir.Function") -> bool:
+    """Can ``t`` be spelled in ``fn``'s printed signature (the ``->``
+    annotation)? Every Var its printed form names must be one of the
+    function's param-declared symbols or a constant; a body-local Var has no
+    name in scope at the signature."""
+    return _type_extent_symbols(t) <= _param_extent_symbols(fn)
+
+
+def derived_return_types(fn: "_ir.Function") -> list["_ir.Type"]:
+    """The sound annotationless-return derivation: the return types
+    recovered from ``fn``'s traced body, when the printed signature can
+    spell every one of them. ``[]`` otherwise — the derivation is
+    all-or-nothing, never partial.
+
+    Two guards keep the pin from lying (the migration contract: no
+    annotation that misreports the values operations produce):
+
+    * Paths disagree (``return_value_types`` yields an UnknownType) → no
+      pin. A signature carrying UnknownType would type every caller query
+      as Unknown — and a Submit's ``Tuple[<ret>, TASK_ID]`` built from it
+      is exactly the silently-wrong state. The parser's call-typing
+      fallback (``first_return_value_types`` below) keeps ``[]`` for the
+      same reason.
+    * Any recovered type is inexpressible (a body-local extent Var) → no
+      pin for the *whole* function. Pinning the expressible subset of a
+      multi-return would change the signature's arity — a stronger lie
+      than keeping ``[]`` (the AST keeps ``return_types=[]`` for exactly
+      this case).
+    """
+    actual = return_value_types(fn)
+    if not actual or any(isinstance(t, _ir.UnknownType) for t in actual):
+        return []
+    if not all(signature_expressible(t, fn) for t in actual):
+        return []
+    return actual
+
+
+class _FirstReturnTypeCollector(_ir.IRVisitor):
+    """Capture the value types of the first ``return <values>`` in a body."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.types: list[_ir.Type] | None = None
+
+    def visit_return_stmt(self, op: _ir.ReturnStmt) -> None:
+        if self.types is None and op.value:
+            self.types = [v.type for v in op.value]
+        super().visit_return_stmt(op)
+
+
+def first_return_value_types(fn: "_ir.Function") -> list["_ir.Type"]:
+    """Effective return types derived from a function body's first return.
+
+    The call-typing fallback for a callee that declared no ``->``: the
+    function signature stays empty (a body-local extent cannot be spelled
+    there, and the printed round-trip is unaffected), while a *call* recovers
+    a concrete result type — the parser's ``_effective_return_types`` rule,
+    shared here so the two frontends cannot drift. Recording only the first
+    value-bearing return is sufficient: a function's returns are
+    type-consistent. ``[]`` when the body has no value-bearing return or any
+    recovered type is ``UnknownType`` — nothing to recover, and the call
+    stays untyped exactly as before.
+    """
+    if fn.body is None:  # type: ignore[reportUnnecessaryComparison]  # defensive; the stub's Stmt is non-optional
+        return []
+    collector = _FirstReturnTypeCollector()
+    collector.visit_stmt(fn.body)
+    types = collector.types
+    if not types or any(isinstance(t, _ir.UnknownType) for t in types):
+        return []
+    return types
