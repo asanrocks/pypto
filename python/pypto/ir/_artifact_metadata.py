@@ -18,6 +18,7 @@ from typing import Any, TypeGuard
 
 from pypto._artifact_contract import ArtifactExecutionMode, ExecutionCapabilities
 from pypto.backend import BackendType
+from pypto.pypto_core.ir import ParamDirection
 
 from .param_info import (
     _is_int_list,
@@ -37,7 +38,7 @@ from .param_info import (
 # independently, so a change to *that* shared format must bump this schema AND
 # ``distributed_compiled_program._META_SCHEMA``.
 _COMPILED_META_FILENAME = "compiled_meta.json"
-_COMPILED_META_SCHEMA = 3
+_COMPILED_META_SCHEMA = 4
 
 # The L3 counterpart, kept here so both names sit next to the marker table below;
 # ``distributed_compiled_program`` re-exports it and owns its schema constant.
@@ -213,7 +214,7 @@ def _load_meta(
 
     found_schema = meta.get("schema")
     if type(found_schema) is not int or found_schema not in (
-        (1, 2, 3) if filename == _COMPILED_META_FILENAME else (schema,)
+        (1, 2, 3, 4) if filename == _COMPILED_META_FILENAME else (schema,)
     ):
         raise ValueError(
             f"Incompatible {filename} schema {found_schema!r} (expected "
@@ -280,6 +281,8 @@ class ArtifactMetadata:
     backend_type: BackendType
     return_aliases: tuple[int, ...] | None = None
     execution_capabilities: ExecutionCapabilities = ExecutionCapabilities()
+    synthesized_outputs: tuple[_ParamInfo, ...] = ()
+    result_indices: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parameters", tuple(self.parameters))
@@ -288,6 +291,30 @@ class ArtifactMetadata:
             raise ValueError("num_return_types must be a non-negative integer")
         validate_parameter_names(self.parameters)
         validate_parameter_names(self.lowered_parameters)
+        object.__setattr__(self, "synthesized_outputs", tuple(self.synthesized_outputs))
+        if self.result_indices is not None:
+            object.__setattr__(self, "result_indices", tuple(self.result_indices))
+            if not self.synthesized_outputs:
+                raise ValueError("Physical result mapping requires synthesized outputs")
+        if self.synthesized_outputs:
+            if ArtifactExecutionMode.KERNEL in self.execution_capabilities.modes:
+                raise ValueError("Kernel metadata cannot contain synthesized outputs")
+            if self.result_indices is None:
+                raise ValueError("Synthesized outputs require a result mapping")
+            physical = self.parameters + self.synthesized_outputs
+            validate_parameter_names(physical)
+            validate_return_aliases(physical, self.result_indices)
+            if len(self.result_indices) != self.num_return_types:
+                raise ValueError("Result mapping count does not match num_return_types")
+            if len(physical) != len(self.lowered_parameters):
+                raise ValueError("Physical output signature does not match lowered parameters")
+            for output, lowered in zip(
+                self.synthesized_outputs, self.lowered_parameters[len(self.parameters) :]
+            ):
+                if output != lowered or output.direction != ParamDirection.Out:
+                    raise ValueError("Synthesized output must match a lowered Out parameter")
+                if output.shape is None or any(d < 0 for d in output.shape):
+                    raise ValueError("Synthesized output requires a static tensor shape")
         if self.return_aliases is not None:
             object.__setattr__(self, "return_aliases", tuple(self.return_aliases))
             validate_return_aliases(self.parameters, self.return_aliases)
@@ -312,6 +339,8 @@ class ArtifactMetadata:
             "lowered_params": [_param_info_to_dict(p) for p in self.lowered_parameters],
             "num_return_types": self.num_return_types,
             "return_aliases": None if self.return_aliases is None else list(self.return_aliases),
+            "synthesized_outputs": [_param_info_to_dict(p) for p in self.synthesized_outputs],
+            "result_indices": None if self.result_indices is None else list(self.result_indices),
             "platform": self.platform,
             "backend_type": self.backend_type.name,
         }
@@ -340,7 +369,7 @@ class ArtifactMetadata:
                 }
                 if required - raw.keys() or raw.get("platform") is None:
                     raise ValueError("Kernel metadata is incomplete; recompile")
-            if raw["schema"] == _COMPILED_META_SCHEMA:
+            if raw["schema"] >= 3:
                 raw_aliases: object = raw["return_aliases"]
                 if raw_aliases is not None and not _is_int_list(raw_aliases):
                     raise ValueError("return_aliases must be a list of integer indices or null")
@@ -356,6 +385,18 @@ class ArtifactMetadata:
                 lowered = tuple(lowered_params)
             else:
                 aliases, lowered = None, tuple(meta["param_infos"])
+            outputs: object = raw["synthesized_outputs"] if raw["schema"] >= 4 else []
+            result_indices = raw["result_indices"] if raw["schema"] >= 4 else None
+            if not _is_obj_list(outputs) or any(not _is_str_dict(p) for p in outputs):
+                raise ValueError("synthesized_outputs must be a list of parameter objects")
+            if result_indices is not None and not _is_int_list(result_indices):
+                raise ValueError("result_indices must be integer indices or null")
+            synthesized_params: list[_ParamInfo] = []
+            for output in outputs:
+                if not _is_str_dict(output):
+                    raise ValueError("synthesized_outputs entries must be objects")
+                synthesized_params.append(_param_info_from_dict(output))
+            synthesized = tuple(synthesized_params)
             platform = meta["platform"]
             if platform is None:
                 from pypto.pypto_core import backend  # noqa: PLC0415
@@ -373,6 +414,8 @@ class ArtifactMetadata:
                 meta["backend_type"],
                 aliases,
                 meta["execution_capabilities"],
+                synthesized_outputs=synthesized,
+                result_indices=None if result_indices is None else tuple(result_indices),
             )
         except (KeyError, TypeError, AttributeError, ValueError) as exc:
             raise _meta_error(_COMPILED_META_FILENAME, path, str(exc)) from exc

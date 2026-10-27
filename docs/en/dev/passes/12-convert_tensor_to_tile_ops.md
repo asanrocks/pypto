@@ -223,6 +223,10 @@ function or a wrapper that absorbed output params in Phase 2a:
 InCore, AIC, AIV, Spmd, and Group functions are skipped from this phase — they were
 already rewritten in Phase 1 / 2a.
 
+Entry-created output buffers are exported at the artifact boundary by
+[MaterializeEntryReturns](13-materialize_entry_returns.md), which runs after
+this pass and requires the `IncoreTileOps` property it produces.
+
 ## Where a Bridged Load Lands
 
 An operand listed in a conversion's `input_reqs` reaches the converter as a tile:
@@ -242,7 +246,7 @@ Each entry names the operand rather than the space:
 `BridgeSpaceOf` reads that argument's `set_input_memory` constraint out of
 `OpRegistry` and stages it through `StagingSpaceForLoad`. `OpRegistry` is
 therefore the single place an operand's memory space is stated, for this pass and
-for [`InferTileMemorySpace`](21-infer_tile_memory_space.md) alike.
+for [`InferTileMemorySpace`](22-infer_tile_memory_space.md) alike.
 
 **A registration cannot write a space of its own.** `InputSpaceReq::demanded_space`
 is an `OperandSpace`, a type with no public constructor and no conversion from
@@ -257,7 +261,7 @@ a converter dispatches: `tensor.matmul` emits `tile.matmul` for a 2-D operand an
 `tile.batch_matmul` for an ND one, so deriving from the flat op alone would read
 an operator an ND call never becomes. All listed operators must declare the same
 constraint. That agreement is structural rather than lucky —
-[`FlattenTileNdTo2D`](15-flatten_tile_nd_to_2d.md) unrolls the batched op into
+[`FlattenTileNdTo2D`](16-flatten_tile_nd_to_2d.md) unrolls the batched op into
 the flat one, so the same operand lands in the same buffer either way — and a
 divergence throws instead of silently bridging against the wrong name.
 
@@ -308,7 +312,7 @@ RHS) gets a zero-copy `tile.transpose_view` at the matmul site. Nothing here
 matches on the operator being a matmul — an operand of any op declaring a
 non-Vec requirement reaches its producer the same way.
 
-The demand is propagated **through** zero-copy metadata ops that declare `set_output_memory_inherit_input()` — `tensor.slice`, `tensor.view`, `tensor.reshape`, `tensor.reinterpret_view`, `tensor.set_validshape`. So an operand written as `pl.matmul(pl.set_validshape(a[:, :K], rows, K), b)` still loads straight to Mat. An op that aliases its input's storage but omits that declaration breaks the chain: the operand materializes in Vec and needs a `tile.move` to Mat, which is a vector→cube boundary that flips an otherwise pure-CUBE InCore scope to `MIXED` and makes [`ExpandMixedKernel`](25-expand_mixed_kernel.md) split it into an AIC/AIV pair.
+The demand is propagated **through** zero-copy metadata ops that declare `set_output_memory_inherit_input()` — `tensor.slice`, `tensor.view`, `tensor.reshape`, `tensor.reinterpret_view`, `tensor.set_validshape`. So an operand written as `pl.matmul(pl.set_validshape(a[:, :K], rows, K), b)` still loads straight to Mat. An op that aliases its input's storage but omits that declaration breaks the chain: the operand materializes in Vec and needs a `tile.move` to Mat, which is a vector→cube boundary that flips an otherwise pure-CUBE InCore scope to `MIXED` and makes [`ExpandMixedKernel`](26-expand_mixed_kernel.md) split it into an AIC/AIV pair.
 
 ### A transposed operand may not be a Mat sub-window
 
@@ -319,7 +323,7 @@ two declarations at one address are the entire mechanism.
 A `tile.slice` of a Mat-resident parent is not a whole buffer. It reaches
 codegen as `pto.subview`, carrying a runtime offset and the **parent's** row
 pitch, and neither survives into an `alloc_tile`: a dynamic offset cannot fold
-into the constant `addr` (see [`AllocateMemoryAddr`](38-allocate_memory_addr.md))
+into the constant `addr` (see [`AllocateMemoryAddr`](39-allocate_memory_addr.md))
 and the pitch is not in the type. ptoas has no transposing read of such a window
 either — it refuses a mat-source `pto.tmov` on a view ("expects mat-source tmov
 to use matching src/dst shapes") and refuses `pto.treshape` on one at every
@@ -342,7 +346,7 @@ still zero-copy there — or pre-transpose the data in GM and drop the flag.
 A window covering its parent's **full extent at a constant `[0, 0]` offset** is
 exempt: it names exactly the source's bytes with the source's own pitch, so
 codegen folds it back to the parent and proceeds.
-[`FlattenTileNdTo2D`](15-flatten_tile_nd_to_2d.md) emits one such slice per page
+[`FlattenTileNdTo2D`](16-flatten_tile_nd_to_2d.md) emits one such slice per page
 for a leading-dim-1 batch, so this is ordinary input rather than a degenerate
 case.
 
@@ -380,7 +384,7 @@ the narrower valid region inside the full box through compact mode, and
 `tile.store` writes only the valid rows, so the observable result is identical.
 
 Making M a multiple of 16 here is also what keeps
-[`AutoTileMatmulL0`](19-auto_tile_matmul_l0.md) legal at the boundary: that pass
+[`AutoTileMatmulL0`](20-auto_tile_matmul_l0.md) legal at the boundary: that pass
 picks a 16-aligned tile and peels the remainder, and a multiple of 16 can only be
 split into 16-aligned pieces, tail included. It therefore needs no boundary
 special case.
@@ -447,7 +451,7 @@ c_tile = pl.tile.matmul_acc(acc_tile, a_mat, b_mat)
 
 Two details this path settles that the operand path does not:
 
-- **The space is stated, not left to [`InferTileMemorySpace`](21-infer_tile_memory_space.md).**
+- **The space is stated, not left to [`InferTileMemorySpace`](22-infer_tile_memory_space.md).**
   The plain `tensor.create` conversion deliberately leaves `target_memory` unset,
   having no consumer context to derive it from; here there is one, and it is the
   same demand that asked for the boxing. Stating it also matters for correctness:
@@ -474,7 +478,7 @@ accumulator (see `ResolveCubeMAlignment`). `N`'s has to reconcile *memory
 spaces* instead, which `M`'s does not:
 
 - the right operand is loaded into `Mat` and then promoted on to `Right` by
-  [`InferTileMemorySpace`](21-infer_tile_memory_space.md), and `Right` boxes the
+  [`InferTileMemorySpace`](22-infer_tile_memory_space.md), and `Right` boxes the
   same 512-byte fractal under the opposite `slayout`, which swaps the row and
   column granularities:
 
@@ -499,8 +503,8 @@ Scope, and what is deliberately left out:
 | `a_trans` left operand, and the accumulator paired with it | Yes, on columns | The natural load's row axis is K, so M is the column extent; the accumulator adopts that operand's column granularity via `m_align_from_arg` |
 | 2-D `tensor.matmul` right operand | Yes, on the axis carrying `N` | Columns normally; rows under `b_trans`, whose natural load puts `K` on the columns. `N`'s padded cells land outside the result's valid region, so nothing reads them |
 | `tensor.matmul_acc` right operand | No | Its accumulator has to agree with the product on physical `N` just as it does on `M`, which needs the same cross-tile decider reaching the `tile.create` that allocates it |
-| Either operand's `K` axis | No | Padding the reduction axis would feed uninitialised L1 into the sum unless the hardware masks by valid col, which is unverified; [`AutoTileMatmulL0`](19-auto_tile_matmul_l0.md)'s `PH-AT-007` declines it for the same reason |
-| Rank >= 3 operand | No | It lowers to `tile.batch_matmul`, whose rows [`FlattenTileNdTo2D`](15-flatten_tile_nd_to_2d.md) row-packs into one `[B*M, N]` tile — the box rule binds that packed extent, not this dimension |
+| Either operand's `K` axis | No | Padding the reduction axis would feed uninitialised L1 into the sum unless the hardware masks by valid col, which is unverified; [`AutoTileMatmulL0`](20-auto_tile_matmul_l0.md)'s `PH-AT-007` declines it for the same reason |
+| Rank >= 3 operand | No | It lowers to `tile.batch_matmul`, whose rows [`FlattenTileNdTo2D`](16-flatten_tile_nd_to_2d.md) row-packs into one `[B*M, N]` tile — the box rule binds that packed extent, not this dimension |
 | Dynamic extent | No | No compile-time box to round to |
 
 Every case this pass declines still reaches a PyPTO-level error rather than a
@@ -509,7 +513,7 @@ validates the box grid of every `pto.alloc_tile` it emits.
 
 ## Transpose Lowering
 
-`tensor.transpose` lowers to a plain 3-arg **`tile.transpose(input, axis1, axis2)`**. The PTO `pto.ttrans` instruction needs a scratch workspace tile (same shape/dtype as the source), but that scratch is a pure codegen detail — not a semantic operand. [`FlattenTileNdTo2D`](15-flatten_tile_nd_to_2d.md) is the **sole owner** of scratch materialization: it emits the codegen-ready 4-arg form (`tile.create` + `tile.transpose(..., tmp)`) for both 2D and per-page >2D transposes, still before the memory allocator runs (so the scratch gets a real UB address). Keeping scratch out of the high-level op means `tensor.transpose` and the DSL `pl.tile.transpose(tile, axis1, axis2)` stay 1:1 with the semantic operation.
+`tensor.transpose` lowers to a plain 3-arg **`tile.transpose(input, axis1, axis2)`**. The PTO `pto.ttrans` instruction needs a scratch workspace tile (same shape/dtype as the source), but that scratch is a pure codegen detail — not a semantic operand. [`FlattenTileNdTo2D`](16-flatten_tile_nd_to_2d.md) is the **sole owner** of scratch materialization: it emits the codegen-ready 4-arg form (`tile.create` + `tile.transpose(..., tmp)`) for both 2D and per-page >2D transposes, still before the memory allocator runs (so the scratch gets a real UB address). Keeping scratch out of the high-level op means `tensor.transpose` and the DSL `pl.tile.transpose(tile, axis1, axis2)` stay 1:1 with the semantic operation.
 
 ```python
 # Before
@@ -656,7 +660,7 @@ for aiv_id in pl.split_aiv(2, mode=pl.SplitMode.UP_DOWN):
 oi = pl.matmul(full, v, out_dtype=pl.FP32)               # Tensor, OUTSIDE the region
 ```
 
-This pass lowers each **1:1** to its tile op (`tensor.aiv_shard` → `tile.aiv_shard`, `tensor.aic_gather` → `tile.aic_gather`), so from here on the IR is byte-identical to what the AUTO `pl.split` path produces via [`LowerAutoVectorSplit`](24-lower_auto_vector_split.md) (pass 23). `ExpandMixedKernel` (pass 24) then folds both into the cross-core `tpush`/`tpop` machinery.
+This pass lowers each **1:1** to its tile op (`tensor.aiv_shard` → `tile.aiv_shard`, `tensor.aic_gather` → `tile.aic_gather`), so from here on the IR is byte-identical to what the AUTO `pl.split` path produces via [`LowerAutoVectorSplit`](25-lower_auto_vector_split.md) (pass 23). `ExpandMixedKernel` (pass 24) then folds both into the cross-core `tpush`/`tpop` machinery.
 
 **Constraints** (enforced by the tensor-level deducer and the DSL parser, not this pass):
 

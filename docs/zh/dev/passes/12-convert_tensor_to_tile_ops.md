@@ -193,6 +193,9 @@ pass 抵达 codegen。参见 [GM 缓存访问策略](../language/05-cache-policy
 
 InCore、AIC、AIV、Spmd、Group 函数在本阶段被跳过 —— 它们已在阶段一 / 二a 中被改写。
 
+入口新建的输出缓冲区由 [MaterializeEntryReturns](13-materialize_entry_returns.md)
+在 artifact 边界导出 —— 它运行于本 pass 之后，并依赖本 pass 产出的 `IncoreTileOps` 属性。
+
 ## 桥接 load 落在哪个空间
 
 被列入某条 conversion 的 `input_reqs` 的操作数，必须以 tile 的形式抵达 converter：
@@ -210,7 +213,7 @@ InCore、AIC、AIV、Spmd、Group 函数在本阶段被跳过 —— 它们已�
 
 `BridgeSpaceOf` 从 `OpRegistry` 读取该实参的 `set_input_memory` 约束，再经
 `StagingSpaceForLoad` 折算成落点。因此对本 pass 和
-[`InferTileMemorySpace`](21-infer_tile_memory_space.md) 而言，操作数的 memory space
+[`InferTileMemorySpace`](22-infer_tile_memory_space.md) 而言，操作数的 memory space
 只有 `OpRegistry` 这一处声明。
 
 **注册方无法自己写一个空间。** `InputSpaceReq::demanded_space` 的类型是
@@ -224,7 +227,7 @@ InCore、AIC、AIV、Spmd、Group 函数在本阶段被跳过 —— 它们已�
 `tensor.matmul` 对 2D 操作数发射 `tile.matmul`，对 ND 操作数发射
 `tile.batch_matmul`，只按前者推导就会读到一个 ND 调用永远不会变成的算子。所列算子
 必须声明相同的约束。这种一致性是结构性的而非巧合——
-[`FlattenTileNdTo2D`](15-flatten_tile_nd_to_2d.md) 会把 batch 版展开成 2D 版，同一个
+[`FlattenTileNdTo2D`](16-flatten_tile_nd_to_2d.md) 会把 batch 版展开成 2D 版，同一个
 操作数无论走哪条路都落在同一块 buffer——一旦出现分歧就直接抛错，而不是静默地按错误
 的名字去桥接。
 
@@ -261,7 +264,7 @@ load 会把同一个操作数放进同一块 buffer。
 
 这是上文通用 `input_reqs` 流程最典型的一个实例，而非独立的机制。当 `tensor.slice` 的结果被 `tensor.matmul` 或 `tensor.matmul_acc` 使用时，slice 必须生成 Mat 空间的 tile 而非 Vec 空间。`ConsumerSpaceCollector` 像处理任何其他消费者一样，从 matmul 的 `input_reqs` 读出这一需求，生产者据此生成自然的 Mat `tile.load`；转置操作数（LHS 用 `a_trans`，RHS 用 `b_trans`）在 matmul 处叠加零拷贝 `tile.transpose_view`。这里没有任何一处按"该 op 是不是 matmul"来匹配 —— 任何声明了非 Vec 需求的 op，其操作数都以同样的方式回传到生产者。
 
-该需求会**穿过**声明了 `set_output_memory_inherit_input()` 的零拷贝元数据 op 继续向上传播 —— `tensor.slice`、`tensor.view`、`tensor.reshape`、`tensor.reinterpret_view`、`tensor.set_validshape`。因此 `pl.matmul(pl.set_validshape(a[:, :K], rows, K), b)` 这样的操作数仍然直接加载到 Mat。若某个别名输入存储的 op 漏掉该声明，传播链就会断开：操作数被物化到 Vec，再通过 `tile.move` 桥接到 Mat，而这是一个 vector→cube 边界，会把本应是纯 CUBE 的 InCore scope 判定为 `MIXED`，导致 [`ExpandMixedKernel`](25-expand_mixed_kernel.md) 将其拆分为 AIC/AIV 两个函数。
+该需求会**穿过**声明了 `set_output_memory_inherit_input()` 的零拷贝元数据 op 继续向上传播 —— `tensor.slice`、`tensor.view`、`tensor.reshape`、`tensor.reinterpret_view`、`tensor.set_validshape`。因此 `pl.matmul(pl.set_validshape(a[:, :K], rows, K), b)` 这样的操作数仍然直接加载到 Mat。若某个别名输入存储的 op 漏掉该声明，传播链就会断开：操作数被物化到 Vec，再通过 `tile.move` 桥接到 Mat，而这是一个 vector→cube 边界，会把本应是纯 CUBE 的 InCore scope 判定为 `MIXED`，导致 [`ExpandMixedKernel`](26-expand_mixed_kernel.md) 将其拆分为 AIC/AIV 两个函数。
 
 ### 转置操作数不能取自 Mat 子窗口
 
@@ -270,7 +273,7 @@ load 会把同一个操作数放进同一块 buffer。
 
 Mat 驻留 parent 的 `tile.slice` 并不是整块 buffer。它以 `pto.subview` 到达 codegen，
 携带运行期 offset 与 **parent 的**行间距，而两者都无法进入 `alloc_tile`：动态 offset
-无法折叠进常量 `addr`（见 [`AllocateMemoryAddr`](38-allocate_memory_addr.md)），行间距
+无法折叠进常量 `addr`（见 [`AllocateMemoryAddr`](39-allocate_memory_addr.md)），行间距
 也不在类型里。ptoas 同样没有针对该窗口的转置读取 —— 它拒绝以 view 作为 mat 源的
 `pto.tmov`（"expects mat-source tmov to use matching src/dst shapes"），也在任意目标
 尺寸下拒绝对其做 `pto.treshape`（"expects src and dst to have the same total byte
@@ -290,7 +293,7 @@ for q in pl.range(8):
 
 覆盖 parent **全部 extent 且 offset 为常量 `[0, 0]`** 的窗口属于例外：它以源自身的行间距
 命名了完全相同的字节，因此 codegen 会将其折回 parent 后继续。
-[`FlattenTileNdTo2D`](15-flatten_tile_nd_to_2d.md) 对 leading-dim 为 1 的 batch 会逐页
+[`FlattenTileNdTo2D`](16-flatten_tile_nd_to_2d.md) 对 leading-dim 为 1 的 batch 会逐页
 发射这样的 slice，所以这是正常输入而非退化情况。
 
 ## Cube 操作数的 M 轴分形对齐（M-Axis Boxing）
@@ -324,7 +327,7 @@ compact 模式寻址整块内部更窄的 valid 区域，`tile.store` 也只写�
 结果完全一致。
 
 在这里把 M 变成 16 的倍数，同时也是
-[`AutoTileMatmulL0`](19-auto_tile_matmul_l0.md) 在边界处保持合法的原因：该 pass 选择
+[`AutoTileMatmulL0`](20-auto_tile_matmul_l0.md) 在边界处保持合法的原因：该 pass 选择
 16 对齐的 tile 并剥离余数，而 16 的倍数只能被切分成同样 16 对齐的块（尾块也不例外），
 所以它不需要任何边界特判。
 
@@ -381,7 +384,7 @@ c_tile = pl.tile.matmul_acc(acc_tile, a_mat, b_mat)
 
 这条路径需要额外确定两件操作数路径上没有的事：
 
-- **内存空间在此显式声明，而不是留给 [`InferTileMemorySpace`](21-infer_tile_memory_space.md)。**
+- **内存空间在此显式声明，而不是留给 [`InferTileMemorySpace`](22-infer_tile_memory_space.md)。**
   普通的 `tensor.create` 转换刻意不写 `target_memory`，因为它没有消费者上下文可供推导；
   而这里有，且正是提出对齐需求的那一个。显式声明还关乎正确性：Acc tile 的隐式 view 是
   分块 NZ，若种子的空间未定，它会带着原始 row-major view，与跨 split-K 循环与之做循环
@@ -401,7 +404,7 @@ c_tile = pl.tile.matmul_acc(acc_tile, a_mat, b_mat)
 `ResolveCubeMAlignment`）。`N` 要调和的则是**内存空间**，这是 `M` 不需要的：
 
 - 右操作数被加载进 `Mat`，随后由
-  [`InferTileMemorySpace`](21-infer_tile_memory_space.md) 提升到 `Right`，而
+  [`InferTileMemorySpace`](22-infer_tile_memory_space.md) 提升到 `Right`，而
   `Right` 用相反的 `slayout` 装载同一个 512 字节分形，于是行列粒度对调：
 
     | 空间 | `slayout` | fp32 块 | fp16 块 |
@@ -425,7 +428,7 @@ c_tile = pl.tile.matmul_acc(acc_tile, a_mat, b_mat)
 | 2-D `tensor.matmul` 右操作数 | 是，在承载 `N` 的那根轴上 | 通常是列；`b_trans` 时是行，因为其自然加载把 `K` 放在列上。`N` 的 padding 落在结果无效区之外，不会被任何人读取 |
 | `tensor.matmul_acc` 右操作数 | 否 | 其累加器必须像在 `M` 上那样与乘积的物理 `N` 一致，这需要同样的跨 tile 决定者传播到分配它的 `tile.create` |
 | 任一操作数的 `K` 轴 | 否 | 除非硬件按 valid col 做掩码（尚未验证），补齐归约轴会把未初始化的 L1 数据带入求和 |
-| rank >= 3 的操作数 | 否 | 它下沉为 `tile.batch_matmul`，其行被 [`FlattenTileNdTo2D`](15-flatten_tile_nd_to_2d.md) 打包成单个 `[B*M, N]` tile —— 分形规则约束的是打包后的尺寸，而非该维度 |
+| rank >= 3 的操作数 | 否 | 它下沉为 `tile.batch_matmul`，其行被 [`FlattenTileNdTo2D`](16-flatten_tile_nd_to_2d.md) 打包成单个 `[B*M, N]` tile —— 分形规则约束的是打包后的尺寸，而非该维度 |
 | 尺寸为动态值 | 否 | 没有编译期常量可供对齐 |
 
 本 pass 不处理的每一种情况，最终仍由 PyPTO 而非 ptoas 报错：
@@ -434,7 +437,7 @@ c_tile = pl.tile.matmul_acc(acc_tile, a_mat, b_mat)
 
 ## Transpose 下沉
 
-`tensor.transpose` 下沉为一个 3-arg 的 **`tile.transpose(input, axis1, axis2)`**。PTO 后端的 `pto.ttrans` 指令需要一个 scratch 工作 tile（与源 tile 同 shape/同 dtype），但该 scratch 纯属 codegen 细节，并非语义操作数。[`FlattenTileNdTo2D`](15-flatten_tile_nd_to_2d.md) 是 scratch 物化的**唯一归属**：它为 2D 以及逐页 >2D 的 transpose 统一产出 codegen-ready 的 4-arg 形态（`tile.create` + `tile.transpose(..., tmp)`），且仍在内存分配器之前（scratch 仍能拿到真实 UB 地址）。把 scratch 从高层 op 中移除后，`tensor.transpose` 与 DSL `pl.tile.transpose(tile, axis1, axis2)` 都与语义操作保持 1:1。
+`tensor.transpose` 下沉为一个 3-arg 的 **`tile.transpose(input, axis1, axis2)`**。PTO 后端的 `pto.ttrans` 指令需要一个 scratch 工作 tile（与源 tile 同 shape/同 dtype），但该 scratch 纯属 codegen 细节，并非语义操作数。[`FlattenTileNdTo2D`](16-flatten_tile_nd_to_2d.md) 是 scratch 物化的**唯一归属**：它为 2D 以及逐页 >2D 的 transpose 统一产出 codegen-ready 的 4-arg 形态（`tile.create` + `tile.transpose(..., tmp)`），且仍在内存分配器之前（scratch 仍能拿到真实 UB 地址）。把 scratch 从高层 op 中移除后，`tensor.transpose` 与 DSL `pl.tile.transpose(tile, axis1, axis2)` 都与语义操作保持 1:1。
 
 ```python
 # 转换前
@@ -574,7 +577,7 @@ for aiv_id in pl.split_aiv(2, mode=pl.SplitMode.UP_DOWN):
 oi = pl.matmul(full, v, out_dtype=pl.FP32)               # Tensor，位于区域外
 ```
 
-本 pass 将两者**各自 1:1**下降为对应的 tile 算子（`tensor.aiv_shard` → `tile.aiv_shard`,`tensor.aic_gather` → `tile.aic_gather`）；此后 IR 与 AUTO `pl.split` 路径经 [`LowerAutoVectorSplit`](24-lower_auto_vector_split.md)（pass 23）产出的结果逐字节一致。随后 `ExpandMixedKernel`（pass 24）将两者折叠进跨核 `tpush`/`tpop` 机制。
+本 pass 将两者**各自 1:1**下降为对应的 tile 算子（`tensor.aiv_shard` → `tile.aiv_shard`,`tensor.aic_gather` → `tile.aic_gather`）；此后 IR 与 AUTO `pl.split` 路径经 [`LowerAutoVectorSplit`](25-lower_auto_vector_split.md)（pass 23）产出的结果逐字节一致。随后 `ExpandMixedKernel`（pass 24）将两者折叠进跨核 `tpush`/`tpop` 机制。
 
 **约束**（由张量级类型推导器与 DSL 解析器施加,而非本 pass）：
 

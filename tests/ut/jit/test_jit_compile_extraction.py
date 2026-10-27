@@ -312,6 +312,7 @@ class TestCompileExposesExtractionSurface:
             "output_dir",
             "platform",
             "output_indices",
+            "result_indices",
         ):
             assert hasattr(cls, name), f"CompiledProgram missing {name!r}"
 

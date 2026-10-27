@@ -500,4 +500,4 @@ and its invariants are the developer pages
 - [Memory and Data Movement](03-memory.md) — what the placed code does with buffers.
 - [Tasks and Ordering](../tasks/index.md) — when the placed work runs relative to everything else.
 - [OutlineIncoreScopes](../../dev/passes/09-outline_incore_scopes.md) — how `pl.at` becomes a function.
-- [ExpandMixedKernel](../../dev/passes/25-expand_mixed_kernel.md) — what `pl.split` drives.
+- [ExpandMixedKernel](../../dev/passes/26-expand_mixed_kernel.md) — what `pl.split` drives.

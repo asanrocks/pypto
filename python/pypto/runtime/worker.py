@@ -642,7 +642,10 @@ class ChipWorker(Worker):
 
         if not return_style:
             return None
-        outputs = [coerced[i] for i in compiled.output_indices]
+        # The persisted mapping, not the pure Out indices: a fresh-only entry
+        # has no logical Out parameter, and mixed entries need the logical
+        # order and aliasing back. Same rule as direct ``compiled(...)`` dispatch.
+        outputs = [coerced[i] for i in compiled.result_indices]
         return outputs[0] if len(outputs) == 1 else tuple(outputs)
 
     def register(self, compiled: CompiledProgram) -> RegistrationHandle:

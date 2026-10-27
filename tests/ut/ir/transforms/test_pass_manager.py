@@ -21,6 +21,7 @@ TENSOR_ONLY_PASSES = [
     "OutlineClusterScopes",
     "DeduplicateOutlinedKernels",
     "ConvertTensorToTileOps",
+    "MaterializeEntryReturns",
     "OptimizeOrchTensors",
 ]
 

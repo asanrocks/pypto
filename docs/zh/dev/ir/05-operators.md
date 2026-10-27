@@ -298,7 +298,7 @@ init 操作数。由于 `matmul_acc` 是原地操作（`set_output_reuses_input(
 支写入同一缓冲区，`scf.if` 不产生返回值 —— Acc tile 上不会生成 phi。
 
 字面量谓词一律是 `ConstBool`，无论是用户写的 `init_cond=True`/`False`，还是由 pass
-判定得到的 —— 例如 [`LowerPipelineLoops`](../passes/32-lower_pipeline_loops.md)
+判定得到的 —— 例如 [`LowerPipelineLoops`](../passes/33-lower_pipeline_loops.md)
 复制 K-loop 后生成的 `ko == 0`。emitter 同样接受 BOOL 类型的 `ConstInt`，即直接通过
 绑定构建 IR 时的写法。两者都会直接选定一个分支；若 emitter 两者都不折叠，每个 K
 block 都会发出双倍 MAD。
@@ -407,7 +407,7 @@ Torch E2M1 x2 张量与显式标注的 UINT8 载体在 JIT 和编译后调用中
 | shape-matched Mat→Scale `tmov` | flat `[1,G]` 须先 `treshape` 到 `[M,K/32]`（或 B 侧 shape） |
 | 顺序 | PyPTO 按源序发 Mat→scaling `tmov`；PTOAS `PTOA5NormalizeTMovPass` 把 `tget_scale_addr` 重排到它前面（ISA bind-before-fill） |
 | `#pto.layout` / mx load | `mx_a_zz` / `mx_b_nn` / …；codegen 发射逻辑 rank-2 `make_tensor_view`（PTOAS v0.60 InferPTOLayout / EmitC 映射物理 pack） |
-| 本阶段覆盖 | `pto.tmatmul.mx` / `.acc` / `.bias` + `pto.tget_scale_addr`；`pto.tquant.mx` 见 [LowerCompositeOps](../passes/14-lower_composite_ops.md) |
+| 本阶段覆盖 | `pto.tmatmul.mx` / `.acc` / `.bias` + `pto.tget_scale_addr`；`pto.tquant.mx` 见 [LowerCompositeOps](../passes/15-lower_composite_ops.md) |
 
 ### 仅 Tile 的 GEMV 家族（A2/A3）
 
@@ -467,7 +467,7 @@ final 配对：应绑定 final 生产者的结果，并在同一个直线控制�
 在配对 store 清除 flag 之前，只允许普通 SSA 别名转发 final 结果，其他操作
 均不得消费它。这也避免 view 或 copy 隐藏不安全的累加器复用。同一个分支或循环体内
 完整配对是受支持的；尚未排空的 final 结果跨分支、循环或 scope 边界则会被拒绝。
-[`AutoTileMatmulL0`](../passes/19-auto_tile_matmul_l0.md) 保留该契约：中间 K 分块
+[`AutoTileMatmulL0`](../passes/20-auto_tile_matmul_l0.md) 保留该契约：中间 K 分块
 使用 `Partial`，只有最后一个分块使用 `Final`。显式阶段不会删除其他自动插入的同步。
 
 存储检查遵循注册的原地操作与视图关系，包括 Final 更新之前创建的别名，以及

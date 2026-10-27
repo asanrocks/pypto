@@ -135,6 +135,8 @@ class _CompilationResult(NamedTuple):
     backend_type: BackendType
     logical_parameters: "list[ParamInfo] | None"
     return_aliases: tuple[int, ...] | None
+    num_synthesized: int = 0
+    result_indices: tuple[int, ...] | None = None
 
 
 def _is_distributed(program: _ir_core.Program) -> bool:
@@ -605,9 +607,14 @@ def _compile_to_files(  # noqa: PLR0913
         validate_kernel_host_access,
         validate_lowered_signature,
     )
+    from ._entry_outputs import prepare_program_outputs  # noqa: PLC0415
     from .param_info import _extract_func_param_infos  # noqa: PLC0415
 
+    if contract is ArtifactExecutionMode.PROGRAM:
+        program = prepare_program_outputs(program)
     logical, aliases = analyze_contract(program, contract)
+    num_synthesized = 0
+    result_indices = None
     backend_type, mode = _resolve_target(backend_type, execution_mode, platform)
     platform = _platform_string(backend_type, mode)
     _select_backend(backend_type=backend_type, platform=platform)
@@ -667,6 +674,19 @@ def _compile_to_files(  # noqa: PLR0913
         effective_backend_type = pipeline.backend_type
         effective_runtime = pipeline.runtime
 
+        if contract is ArtifactExecutionMode.PROGRAM and not _is_distributed(program):
+            try:
+                lowered_entry = entry_function(transformed_program)
+            except ValueError:
+                lowered_entry = None
+            if lowered_entry is not None:
+                num_synthesized = lowered_entry.attrs.get("entry_synthesized_count", 0)
+                if num_synthesized:
+                    result_indices = tuple(
+                        lowered_entry.attrs[f"entry_result_{i}"]
+                        for i in range(lowered_entry.attrs["entry_result_count"])
+                    )
+
         if contract is ArtifactExecutionMode.KERNEL:
             lowered, _, _ = _extract_func_param_infos(entry_function(transformed_program))
             assert logical is not None
@@ -699,7 +719,14 @@ def _compile_to_files(  # noqa: PLR0913
             prof.write_report(report_dir)
 
     return _CompilationResult(
-        transformed_program, output_dir, platform, effective_backend_type, logical, aliases
+        transformed_program,
+        output_dir,
+        platform,
+        effective_backend_type,
+        logical,
+        aliases,
+        num_synthesized,
+        result_indices,
     )
 
 
@@ -728,6 +755,8 @@ def _make_single_chip_artifact(
         result.backend_type,
         result.return_aliases,
         ExecutionCapabilities((contract,)),
+        synthesized_outputs=tuple(lowered[-result.num_synthesized :]) if result.num_synthesized else (),
+        result_indices=result.result_indices,
     )
     directory = Path(result.output_dir)
     _drop_foreign_build_markers(directory, keep=(_COMPILED_META_FILENAME, "kernel_config.py"))

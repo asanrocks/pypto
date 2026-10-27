@@ -231,6 +231,7 @@ def _coerce_args(  # noqa: PLR0912 — branches for in-place vs return + scalar/
     return_types: list[Any],
     *,
     caller_name: str,
+    metadata: ArtifactMetadata | None = None,
 ) -> "tuple[list[torch.Tensor | DeviceTensor | ctypes._SimpleCData[Any]], bool]":
     """Validate user-provided args against IR metadata and coerce them.
 
@@ -305,7 +306,27 @@ def _coerce_args(  # noqa: PLR0912 — branches for in-place vs return + scalar/
                         )
             coerced.append(arg)
 
+    if metadata is not None and metadata.synthesized_outputs:
+        hidden = list(metadata.synthesized_outputs)
+        for output in _build_full_args((), hidden, list(range(len(hidden)))):
+            assert isinstance(output, torch.Tensor)
+            coerced.append(output)
+        return_style = True
     return coerced, return_style
+
+
+def _result_indices(metadata: ArtifactMetadata | None, output_indices: list[int]) -> list[int]:
+    """Physical argument indices that carry the entry's logical results.
+
+    Hidden synthesized outputs extend the positional argument list past the
+    logical parameters, so the persisted mapping — not the pure Out indices —
+    restores logical result order and aliasing. Without synthesized outputs,
+    the pure Out parameters are the results in declaration order.
+    """
+    if metadata is not None and metadata.synthesized_outputs:
+        assert metadata.result_indices is not None
+        return list(metadata.result_indices)
+    return output_indices
 
 
 def _invoke_compiled(
@@ -319,6 +340,7 @@ def _invoke_compiled(
     config: Any,
     caller_name: str,
     artifact_runtime: Any = None,
+    metadata: ArtifactMetadata | None = None,
 ) -> "torch.Tensor | tuple[torch.Tensor, ...] | None":
     """Shared dispatch: coerce args, call the runtime, pack outputs.
 
@@ -334,7 +356,7 @@ def _invoke_compiled(
     the runtime's ``[STRACE]`` log markers (simpler PR #1177).
     """
     coerced, return_style = _coerce_args(
-        args, param_infos, output_indices, return_types, caller_name=caller_name
+        args, param_infos, output_indices, return_types, caller_name=caller_name, metadata=metadata
     )
 
     # Lazy import from outside the overlay scope; its precision lives there.
@@ -360,7 +382,7 @@ def _invoke_compiled(
 
     if not return_style:
         return None
-    outputs = [coerced[i] for i in output_indices]
+    outputs = [coerced[i] for i in _result_indices(metadata, output_indices)]
     assert all(isinstance(o, torch.Tensor) for o in outputs)
     return outputs[0] if len(outputs) == 1 else tuple(outputs)  # type: ignore[return-value]
 
@@ -519,6 +541,18 @@ class _RuntimeFacade:
         """Indices of pure Out parameters eligible for program auto-allocation."""
         _, outputs, _ = self._get_metadata()
         return outputs
+
+    @property
+    def result_indices(self) -> list[int]:
+        """Physical argument indices that carry the entry's logical results.
+
+        Equal to :attr:`output_indices` unless the entry exports freshly
+        allocated results; then the persisted mapping orders the pack and
+        preserves aliasing across the hidden output parameters. The single
+        packing rule shared by direct dispatch and the ChipWorker path.
+        """
+        _, output_indices, _ = self._get_metadata()
+        return _result_indices(self._artifact.metadata, output_indices)
 
     @property
     def has_return(self) -> bool:
@@ -938,11 +972,13 @@ class CompiledProgram(_RuntimeFacade):
         - ``orch_args``: simpler dispatch arg pack. Hand to
           ``Worker.run(cid, orch_args, cfg)``. ``worker`` owns the wire tensor
           identities and must be the same simpler Worker used for dispatch.
-        - ``coerced``: full positional list of length ``len(param_infos)``.
-          Scalar values are wrapped in their target ``ctypes`` type. For
-          return-style callers, output ``torch.Tensor``s are auto-allocated
-          and placed at :attr:`output_indices`; read those after dispatch
-          to get the run's outputs.
+        - ``coerced``: full positional list of length ``len(param_infos)``
+          plus any hidden synthesized outputs. Scalar values are wrapped in
+          their target ``ctypes`` type. For return-style callers, output
+          ``torch.Tensor``s are auto-allocated and placed at
+          :attr:`output_indices` (and, for freshly allocated results,
+          appended after the logical parameters); read the run's outputs
+          from :attr:`result_indices` after dispatch.
         - ``return_style``: ``True`` if the caller passed only inputs.
 
         Raises:
@@ -956,7 +992,12 @@ class CompiledProgram(_RuntimeFacade):
             )
         param_infos, output_indices, return_types = self._get_metadata()
         coerced, return_style = _coerce_args(
-            args, param_infos, output_indices, return_types, caller_name="CompiledProgram"
+            args,
+            param_infos,
+            output_indices,
+            return_types,
+            caller_name="CompiledProgram",
+            metadata=self._artifact.metadata,
         )
         if worker is None:
             raise TypeError(
@@ -1142,6 +1183,7 @@ class CompiledProgram(_RuntimeFacade):
             config=config,
             caller_name="CompiledProgram",
             artifact_runtime=getattr(self, "_artifact_runtime", None),
+            metadata=self._artifact.metadata,
         )
 
 
@@ -1207,6 +1249,7 @@ class _SubChipCallable(_RuntimeFacade):
             output_indices,
             return_types,
             caller_name=f"orchestration {self._name!r}",
+            metadata=self._artifact.metadata,
         )
         if worker is None:
             raise TypeError(
@@ -1255,6 +1298,7 @@ class _SubChipCallable(_RuntimeFacade):
             args=args,
             config=config,
             caller_name=f"orchestration {self._name!r}",
+            metadata=self._artifact.metadata,
         )
 
 

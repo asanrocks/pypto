@@ -400,6 +400,8 @@ def test_kernel_metadata_is_setup_failure_before_assembly(tmp_path, stub_compile
                 "lowered_params": [],
                 "return_aliases": [],
                 "num_return_types": 0,
+                "synthesized_outputs": [],
+                "result_indices": None,
                 "platform": "a2a3",
                 "backend_type": "Ascend910",
             }
