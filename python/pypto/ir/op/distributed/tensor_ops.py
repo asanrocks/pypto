@@ -42,10 +42,14 @@ def alloc_window_buffer(size: int | Expr, *, name: str, span: Span | None = None
             :class:`ir.Expr`).
         name: Unique buffer identifier, kwarg-only.
         span: Optional source span (auto-captured if absent).
+
+    A Python ``int`` size is typed ``INDEX``, the lattice a bare integer
+    literal carries everywhere else in the IR, so a size is one node with one
+    type whether it is written as a literal or as a computed scalar.
     """
     actual_span = _get_span_or_capture(span, frame_offset=1)
     if isinstance(size, int):
-        size_expr: Expr = _ir_core.ConstInt(size, DataType.INT64, actual_span)
+        size_expr: Expr = _ir_core.ConstInt(size, DataType.INDEX, actual_span)
     else:
         size_expr = size
     return _ir_core.create_op_call("pld.tensor.alloc_window_buffer", [size_expr], {"name": name}, actual_span)
