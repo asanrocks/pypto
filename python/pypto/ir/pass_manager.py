@@ -19,6 +19,7 @@ from pypto.compile_profiling import CompileProfiler
 from pypto.pypto_core import ir as core_ir
 from pypto.pypto_core import passes
 
+from ._entry_outputs import materialize_entry_returns
 from .printer import python_print
 
 # Regex to extract variable name from warning messages like:
@@ -188,6 +189,7 @@ class PassManager:
             passes.outline_cluster_scopes,
             passes.deduplicate_outlined_kernels,
             passes.convert_tensor_to_tile_ops,
+            materialize_entry_returns,
             passes.optimize_orch_tensors,
         )
         tile_pto_passes: tuple[PassFactory, ...] = (

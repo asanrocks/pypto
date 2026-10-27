@@ -53,6 +53,7 @@ def _fake_compiled(
     compiled.chip_callable = cc
     compiled.output_dir = "/tmp/fake_compiled"
     compiled.output_indices = [2]
+    compiled.result_indices = [2]
     compiled._build_orch_args.return_value = ("orch_args", ["arg0", "arg1", "out_tensor"], False)
     compiled._build_call_config.return_value = MagicMock(name="CallConfig")
     return compiled
@@ -126,8 +127,51 @@ def test_run_return_style_packs_outputs(fake_simpler_worker):
     out_tensor = MagicMock(name="out_tensor")
     compiled._build_orch_args.return_value = ("orch_args", [1, 2, out_tensor], True)
     compiled.output_indices = [2]
+    compiled.result_indices = [2]
     ret = w.run(compiled, 1, 2)
     assert ret is out_tensor
+    w.close()
+
+
+def test_run_packs_fresh_only_results_from_hidden_outputs(fake_simpler_worker):
+    """A fresh-only entry has no logical Out parameter; results are the hidden outputs.
+
+    ``output_indices`` is empty for such an entry, so packing from it would
+    return nothing. The persisted ``result_indices`` mapping points past the
+    logical parameters at the auto-allocated buffers that ``_build_orch_args``
+    appended to ``coerced``.
+    """
+    w = ChipWorker(config=RunConfig(platform="a2a3sim"))
+    compiled = _fake_compiled()
+    fresh = MagicMock(name="fresh")
+    compiled.output_indices = []
+    compiled.result_indices = [1]
+    compiled._build_orch_args.return_value = ("orch_args", ["x", fresh], True)
+    ret = w.run(compiled, 1)
+    assert ret is fresh
+    w.close()
+
+
+def test_run_mixed_results_keep_logical_order_and_aliasing(fake_simpler_worker):
+    """Mixed entries: the persisted mapping restores result order and aliasing.
+
+    Logical results (created, out, created) map to physical arguments
+    (2, 1, 2): packing from ``output_indices`` (here [1]) would both reorder
+    and drop the synthesized buffer.
+    """
+    w = ChipWorker(config=RunConfig(platform="a2a3sim"))
+    compiled = _fake_compiled()
+    fresh = MagicMock(name="fresh")
+    out = MagicMock(name="out")
+    compiled.output_indices = [1]
+    compiled.result_indices = [2, 1, 2]
+    compiled._build_orch_args.return_value = ("orch_args", ["x", out, fresh], True)
+    ret = w.run(compiled, 1, out)
+    assert isinstance(ret, tuple) and len(ret) == 3
+    first, second, third = ret
+    assert first is fresh
+    assert second is out
+    assert third is fresh
     w.close()
 
 

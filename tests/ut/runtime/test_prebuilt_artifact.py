@@ -101,6 +101,11 @@ def _generated(root: Path, kind: BuildKind) -> None:
         lowered_params=[],
         return_aliases=[],
         num_return_types=0,
+        # Schema 4 entries: a sidecar that declares the current schema must
+        # carry the fields the reader requires at that version, or it is
+        # indistinguishably a stale file written by an older pypto.
+        synthesized_outputs=[],
+        result_indices=None,
         platform="a2a3sim",
         backend_type="Ascend910",
     )
