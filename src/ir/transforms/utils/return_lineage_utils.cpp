@@ -177,8 +177,16 @@ ExprPtr ParamArgument(const CallLikeView& call, const FunctionPtr& callee, size_
   return args[param_index - (callee->params_.size() - args.size())];
 }
 
+std::vector<std::optional<size_t>> TraceIndexedExprsToParamIndices(const std::vector<ExprPtr>& exprs,
+                                                                   const BodyIndexCollector& index,
+                                                                   const ParamIndexMap& param_indices,
+                                                                   const ProgramPtr& program);
+
 std::vector<std::optional<size_t>> ReturnedParamIndicesImpl(const FunctionPtr& func,
                                                             const ProgramPtr& program);
+
+std::vector<std::optional<size_t>> DeliveredParamIndicesImpl(const FunctionPtr& func,
+                                                             const ProgramPtr& program);
 
 // Avoid copying an entire tuple return map for each TupleGetItem in a batch.
 // TraceQueryGuard or the enclosing function query owns the reference lifetime.
@@ -269,6 +277,10 @@ ExprPtr ResolveTupleSource(ExprPtr expr, const BodyIndexCollector& index, const 
 
 VarLineage TraceExpr(const ExprPtr& expr, const BodyIndexCollector& index, const ParamIndexMap& param_indices,
                      const ProgramPtr& program, LineageMemo& memo);
+
+VarLineage TraceCallExprLineage(const CallPtr& call, const BodyIndexCollector& index,
+                                const ParamIndexMap& param_indices, const ProgramPtr& program,
+                                LineageMemo& memo);
 
 // Trace each body var once, caching both roots and failures across branch arms
 // and return values. A provisional empty lineage stops cycles without copying
@@ -411,8 +423,55 @@ VarLineage TraceExpr(const ExprPtr& expr, const BodyIndexCollector& index, const
     auto selected =
         ResolveTupleElement(projection->tuple_, projection->index_, index, program, memo.tuple_sources);
     lineage = TraceExpr(selected, index, param_indices, program, memo);
+  } else if (auto call = transform_utils::AsCallOrSubmitView(expr)) {
+    // A call used as a value — an argument of another call, not only the
+    // returned expression — binds no SSA var, so resolve it through the value
+    // its result aliases. Otherwise ``return outer(inner(x))`` loses lineage
+    // that ``tmp = inner(x); return outer(tmp)`` keeps, and binding a name
+    // would change the result's classification.
+    lineage = TraceCallExprLineage(call, index, param_indices, program, memo);
   }
   memo.expr_roots[expr.get()] = lineage;
+  return lineage;
+}
+
+// A writeback (or user call) used directly as a value — ``return pl.store(x,
+// off, out)``, ``return inner(...)`` — binds no SSA var, so the var walk above
+// never sees it. Its result aliases the buffer the op writes (the same edge
+// ``TraceVar`` follows for the var-bound form), or the argument the callee
+// returns. Without this a direct writeback return read as "a fresh
+// kernel-allocated tensor", which is the strongest possible misreading.
+//
+// The callee position is mapped through ``ParamArgument`` (the Submit args
+// contract), never by raw ``args_`` index: a bounded-coverage Submit's
+// ``args_[param_idx]`` can bind a different parameter — or a trailing CommCtx
+// suffix arg — than the callee position names.
+//
+// Type retention mirrors ``TraceVar``: a builtin writeback keeps its own final
+// type (metadata may have changed), a user call forwards its source's type.
+// The caller applies the same returned-type compatibility check the var-bound
+// path applies, so a metadata-changing writeback returned directly records no
+// lineage rather than a wrong one.
+VarLineage TraceCallExprLineage(const CallPtr& call, const BodyIndexCollector& index,
+                                const ParamIndexMap& param_indices, const ProgramPtr& program,
+                                LineageMemo& memo) {
+  ExprPtr forwarded;
+  TypePtr final_type;
+  if (auto aliased = op_predicates::BuiltinWritebackArgIndex(call->op_, call->args_.size())) {
+    forwarded = call->args_[*aliased];
+    final_type = call->GetType();
+  } else if (!IsBuiltinOp(call->op_->name_)) {
+    auto callee = program ? program->GetFunction(call->op_->name_) : nullptr;
+    if (!callee) return {};
+    const auto& ret_map = CachedReturnedParamIndices(callee, program);
+    if (ret_map.size() != 1 || !ret_map[0]) return {};
+    forwarded =
+        ParamArgument(CallLikeView{call->op_, &call->args_}, callee, ret_map[0].value());  // NOLINT(bugprone-unchecked-optional-access)
+  } else {
+    return {};
+  }
+  auto lineage = TraceExpr(forwarded, index, param_indices, program, memo);
+  if (lineage.root && final_type) lineage.returned_type = std::move(final_type);
   return lineage;
 }
 
@@ -426,7 +485,19 @@ std::vector<std::optional<size_t>> TraceIndexedExprsToParamIndices(const std::ve
   LineageMemo memo;
   for (const auto& expr : exprs) {
     std::optional<size_t> idx;
-    if (expr) {
+    if (auto call = transform_utils::AsCallOrSubmitView(expr)) {
+      // A writeback or user call used directly as a value binds no SSA var, so
+      // the lineage walk below would read it as a fresh buffer. Resolve it
+      // through the value its result aliases first — through the shared memo,
+      // so several direct calls over one alias chain trace it once.
+      auto lineage = TraceCallExprLineage(call, index, param_indices, program, memo);
+      if (lineage.root &&
+          (!AsTensorTypeLike(expr->GetType()) ||
+           (lineage.returned_type && structural_equal(lineage.returned_type, lineage.root->GetType())))) {
+        auto param_it = param_indices.find(lineage.root);
+        if (param_it != param_indices.end()) idx = param_it->second;
+      }
+    } else if (expr) {
       auto lineage = TraceExpr(expr, index, param_indices, program, memo);
       if (lineage.root &&
           (!AsTensorTypeLike(expr->GetType()) ||
@@ -445,6 +516,8 @@ std::vector<std::optional<size_t>> TraceIndexedExprsToParamIndices(const std::ve
 //     result = self.inner(...)   # TupleType, N results
 //     return result              # ONE return expr, but N return positions
 //
+// ``return self.inner(...)`` is the same tuple value without the local binding.
+//
 // This is the shape a Group/Spmd wrapper takes when the inner kernel has more
 // than one result (the outliner emits the call, binds its tuple to one SSA var,
 // and returns that var). ``TraceVar`` cannot describe it: it resolves a var to a
@@ -462,35 +535,33 @@ std::vector<std::optional<size_t>> TraceIndexedExprsToParamIndices(const std::ve
 // map, and re-map each position through the call's args back onto ``params``.
 // Returns {} when the shape is not a recognisable forward; callers then keep
 // their previous behaviour.
-std::vector<std::optional<size_t>> ExpandForwardedTupleVar(const Var* tuple_var,
-                                                           const BodyIndexCollector& index,
-                                                           const ParamIndexMap& param_indices,
-                                                           const ProgramPtr& program) {
-  // Walk SSA var-to-var aliases down to the statement that defines the tuple.
-  const Var* var = tuple_var;
-  std::unordered_set<const Var*> seen;
-  CallLikeView call;
-  while (var) {
-    if (!seen.insert(var).second) return {};
-    auto def_it = index.var_def.find(var);
-    if (def_it == index.var_def.end()) return {};
-    const auto& value = def_it->second->value_;
-    if (auto rhs_var = AsVarLike(value)) {
-      var = rhs_var.get();
-      continue;
-    }
-    // A literal tuple construction: each element traces on its own.
-    if (auto make_tuple = As<MakeTuple>(value)) {
-      return TraceIndexedExprsToParamIndices(make_tuple->elements_, index, param_indices, program);
-    }
-    call = AsCallLike(value);
-    break;
+std::vector<std::optional<size_t>> ExpandForwardedTuple(const ExprPtr& tuple, const BodyIndexCollector& index,
+                                                        const ParamIndexMap& param_indices,
+                                                        const ProgramPtr& program) {
+  // Tuple-ness belongs to the value: a direct call, a literal and a local
+  // alias must classify identically. Resolve aliases before inspecting the
+  // producer, rather than requiring the return to name an SSA variable.
+  TupleSourceMap sources;
+  auto source = ResolveTupleSource(tuple, index, program, sources);
+  if (auto make_tuple = As<MakeTuple>(source)) {
+    return TraceIndexedExprsToParamIndices(make_tuple->elements_, index, param_indices, program);
   }
+  auto call = AsCallLike(source);
   if (!call.args || IsBuiltinOp(call.op->name_)) return {};
 
   auto callee = program ? program->GetFunction(call.op->name_) : nullptr;
   if (!callee) return {};
-  auto inner_map = ReturnedParamIndicesImpl(callee, program);
+  // A callee that declares ONE TupleType slot carries its elements in the
+  // delivered values, not in flat return positions; its one-entry position
+  // map cannot name them, so ask the value-faithful map instead. A forwarded
+  // tuple return is classified by the value it carries, not by the type of
+  // the entry it travelled through.
+  std::vector<std::optional<size_t>> inner_map;
+  if (callee->return_types_.size() == 1 && As<TupleType>(callee->return_types_[0])) {
+    inner_map = DeliveredParamIndicesImpl(callee, program);
+  } else {
+    inner_map = ReturnedParamIndicesImpl(callee, program);
+  }
   if (inner_map.empty()) return {};
 
   std::vector<ExprPtr> forwarded_args(inner_map.size());
@@ -579,10 +650,9 @@ std::vector<std::optional<size_t>> ReturnedParamIndicesImpl(const FunctionPtr& f
     }
     return record({});
   }
-  // A wrapper whose single return value is the forwarded tuple of a multi-result
-  // inner call carries N return positions in ONE return expr. Expand it so the
-  // map stays precise; fall through to the per-expr tracer when it is not that
-  // shape, so this can only ever *add* precision.
+  // A tuple-valued return carries N return positions in ONE expression,
+  // whether constructed here, forwarded directly or bound to a local. Expand
+  // by value type so binding a name cannot change the result's classification.
   //
   // The expansion is only well-formed when the function really does declare N
   // flat return positions (``return_types_.size() == N``). A function that
@@ -595,15 +665,53 @@ std::vector<std::optional<size_t>> ReturnedParamIndicesImpl(const FunctionPtr& f
   const size_t declared_arity = func->return_types_.size();
   auto param_indices = IndexParams(func->params_);
   if (rets.size() == 1 && declared_arity > 1) {
-    if (auto tuple_var = AsVarLike(rets[0])) {
-      if (auto tuple_ty = As<TupleType>(tuple_var->GetType());
-          tuple_ty && tuple_ty->types_.size() == declared_arity) {
-        auto expanded = ExpandForwardedTupleVar(tuple_var.get(), index, param_indices, program);
-        if (expanded.size() == declared_arity) return record(expanded);
-      }
+    if (auto tuple_ty = As<TupleType>(rets[0]->GetType());
+        tuple_ty && tuple_ty->types_.size() == declared_arity) {
+      auto expanded = ExpandForwardedTuple(rets[0], index, param_indices, program);
+      if (expanded.size() == declared_arity) return record(expanded);
     }
   }
   return record(TraceIndexedExprsToParamIndices(rets, index, param_indices, program));
+}
+
+// Value-faithful twin of ReturnedParamIndicesImpl. Shares its cycle guard but
+// never the ``ctx.memo`` cache: that cache holds position-faithful maps for
+// ``CachedReturnedParamIndices``, and mixing the two arities would corrupt it.
+std::vector<std::optional<size_t>> DeliveredParamIndicesImpl(const FunctionPtr& func,
+                                                             const ProgramPtr& program) {
+  if (!func || !func->body_) return {};
+  auto& ctx = Ctx();
+  if (ctx.active_functions.count(func.get()) != 0) return {};
+  ctx.call_stack.push_back(func.get());
+  ctx.active_functions.insert(func.get());
+  const bool is_top_level = ctx.call_stack.size() == 1;
+  struct DeliveredGuard {
+    TraceContext& ctx;
+    const Function* function;
+    bool top_level;
+    ~DeliveredGuard() {
+      ctx.active_functions.erase(function);
+      ctx.call_stack.pop_back();
+      if (top_level && ctx.query_depth == 0) ctx.ClearCache();
+    }
+  } guard{ctx, func.get(), is_top_level};
+
+  BodyIndexCollector index(/*collect_if_merges=*/func->func_type_ != FunctionType::Graph);
+  index.VisitStmt(func->body_);
+  if (!index.first_return || index.first_return->value_.empty()) return {};
+  auto param_indices = IndexParams(func->params_);
+
+  const auto& rets = index.first_return->value_;
+  // A ``pl.Tuple`` return delivers N values through ONE return expression, so
+  // the per-position map cannot describe it; expand it here (arity-faithful
+  // callers must not — see the header).
+  if (rets.size() == 1) {
+    if (auto tuple_ty = As<TupleType>(rets[0]->GetType())) {
+      auto expanded = ExpandForwardedTuple(rets[0], index, param_indices, program);
+      if (expanded.size() == tuple_ty->types_.size()) return expanded;
+    }
+  }
+  return TraceIndexedExprsToParamIndices(rets, index, param_indices, program);
 }
 
 std::vector<std::optional<size_t>> TraceBodyExprsToParamIndices(const std::vector<ExprPtr>& exprs,
@@ -763,6 +871,11 @@ std::vector<std::optional<size_t>> TraceExprsToParamIndices(const std::vector<Ex
                                                             const std::vector<VarPtr>& params,
                                                             const ProgramPtr& program) {
   return TraceBodyExprsToParamIndices(exprs, body, params, program, /*trace_if_merges=*/false);
+}
+
+// One entry per *delivered* value rather than per declared return position.
+std::vector<std::optional<size_t>> DeliveredParamIndices(const FunctionPtr& func, const ProgramPtr& program) {
+  return DeliveredParamIndicesImpl(func, program);
 }
 
 std::vector<std::optional<size_t>> TraceToParamIndicesForOutlining(const std::vector<VarPtr>& vars,

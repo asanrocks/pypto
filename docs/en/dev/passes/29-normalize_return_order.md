@@ -86,8 +86,9 @@ inference, and every other upstream property are preserved.
 
 For each `InCore` / `Group` / `Spmd` / `Graph` function, `CanonicalizeReturnValues`
 calls `return_lineage::ReturnedParamIndices` (which traces var-to-var
-aliases, loop carries, builtin writebacks, `TupleGetItem` of tuple calls,
-and Group/Spmd wrapper calls) and replaces every tensor return value that
+aliases, loop carries, builtin writebacks, a writeback used directly as the
+returned expression — `return pl.store(x, off, out)` — `TupleGetItem` of tuple
+calls, and Group/Spmd wrapper calls) and replaces every tensor return value that
 traces to a param with the param `Var` itself. Untraceable values
 (kernel-allocated outputs) and scalars keep their original expression.
 
@@ -117,6 +118,14 @@ rather than re-running the interprocedural tracer. Reserve
 `ReturnedParamIndices` for callers that run *before* the property exists
 (`ExpandMixedKernel`, the scope outliner), for this pass itself, and for the
 property verifier, which must re-derive independently to have anything to check.
+
+The frontend asks the same question about a *return contract* (“does every
+value this entry hands back live in one of its parameters?”), which the
+per-position map cannot answer once a `pl.Tuple` return packs N values into
+one expression. `return_lineage::DeliveredParamIndices` is that value-faithful
+variant — same walk, expanded per delivered value — exposed to Python as
+`ir.delivered_param_indices(func, program)` and used by the tracing frontend's
+write-through return check.
 
 `Graph` is in this set for the same reason the wrappers are: orchestration
 codegen aliases a Graph call's results to call-site tensors through this map. A

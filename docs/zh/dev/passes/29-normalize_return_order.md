@@ -74,7 +74,8 @@ InCore/Group/Spmd/Graph 函数中属于参数回写的 tensor 返回值都以指
 
 对每个 `InCore` / `Group` / `Spmd` / `Graph` 函数，`CanonicalizeReturnValues` 调用
 `return_lineage::ReturnedParamIndices`（可追踪 Var 到 Var 别名、循环携带、
-builtin 回写、tuple 调用的 `TupleGetItem`，以及 Group/Spmd 包装函数调用），
+builtin 回写、直接作为返回表达式使用的回写——`return pl.store(x, off, out)`——
+tuple 调用的 `TupleGetItem`，以及 Group/Spmd 包装函数调用），
 把每个可追踪到参数的 tensor 返回值替换为参数 `Var` 本身。无法追踪的值
 （kernel 内部分配的输出）和标量保留原表达式。
 
@@ -98,6 +99,12 @@ builtin 回写、tuple 调用的 `TupleGetItem`，以及 Group/Spmd 包装函数
 取"，而不再重跑跨函数追踪器。`ReturnedParamIndices` 只保留给：在该属性建立**之
 前**运行的调用方（`ExpandMixedKernel`、scope outliner）、本 pass 自身，以及必须
 独立重新推导才能起到校验作用的属性验证器。
+
+前端对*返回契约*问的是同一个问题的另一种粒度（“这个入口交回的每个值是否都落在
+它的某个参数里？”），而当一个 `pl.Tuple` 返回把 N 个值打包进一个表达式后，按位置
+的映射无法回答它。`return_lineage::DeliveredParamIndices` 就是那个按值展开的变体
+——同一条走查，按交付的值展开——以 `ir.delivered_param_indices(func, program)`
+暴露给 Python，供追踪前端的写穿返回检查使用。
 
 `Graph` 被纳入该集合的理由与包装函数相同：编排代码生成正是通过这张映射把 Graph
 调用的结果别名到调用端张量。Graph 的函数体写作 `out = core(..., out, ...); return

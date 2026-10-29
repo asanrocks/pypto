@@ -86,6 +86,22 @@ struct ReturnedValueBinding {
 /// inner call when recognizable; otherwise their typed slots remain unknown.
 std::vector<ReturnedValueBinding> AnalyzeReturnedValues(const FunctionPtr& func, const ProgramPtr& program);
 
+/// Value-faithful variant of ReturnedParamIndices: one entry per *delivered
+/// value* rather than per declared return position.
+///
+/// A ``pl.Tuple`` return delivers N values through ONE return expression, so the
+/// position-faithful map cannot describe it without breaking its own arity
+/// contract (see ``ExpandForwardedTuple``). This variant expands a literal
+/// ``MakeTuple`` and a forwarded multi-result tuple into its elements even when
+/// the signature declares the result as ONE ``TupleType`` slot — it answers
+/// "does every value this function hands back live in one of its parameters?",
+/// which a 1-arity map cannot.
+///
+/// @return empty when @p func has no value-bearing top-level ReturnStmt;
+///         otherwise one entry per delivered value (nullopt = not a param
+///         writeback).
+std::vector<std::optional<size_t>> DeliveredParamIndices(const FunctionPtr& func, const ProgramPtr& program);
+
 /// Read the return->param map straight off @p func's ReturnStmt.
 ///
 /// `NormalizeReturnOrder` rewrites every tensor param-writeback return value to
