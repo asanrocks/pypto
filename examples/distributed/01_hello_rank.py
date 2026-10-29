@@ -11,12 +11,12 @@
 """The distributed "hello world": rank identity, world_size, and per-rank dispatch.
 
 Concepts introduced:
-  - ``@pl.jit.host``: the host orchestrator that launches one child per rank
+  - ``@pl.jit_trace.host``: the host orchestrator that launches one child per rank
   - ``device=r``: pin each child dispatch to the rank's own NPU device
   - ``pld.world_size()``: the number of ranks this program was compiled for
   - ``DistributedConfig(device_ids=...)``: which NPU devices participate
-  - the three call forms: ``@pl.jit.host`` (host) -> ``@pl.jit`` (per-device)
-    -> ``@pl.jit.incore`` (chip)
+  - the three call forms: ``@pl.jit_trace.host`` (host) -> ``@pl.jit_trace`` (per-device)
+    -> ``@pl.jit_trace.incore`` (chip)
 
 Every rank computes ``y[r] = x[r] + r``, so the output row alone tells you which
 rank produced it — that is the whole point: the same kernel runs on every card,
@@ -47,7 +47,7 @@ ROWS = 8
 COLS = 8
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def add_rank(
     x: pl.Tensor[[ROWS, COLS], pl.FP32],
     y: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP32]],
@@ -61,7 +61,7 @@ def add_rank(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def per_rank(
     x: pl.Tensor[[ROWS, COLS], pl.FP32],
     y: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP32]],
@@ -71,7 +71,7 @@ def per_rank(
     return add_rank(x, y, rank)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def hello_rank(
     x: pl.Tensor[[N_RANKS, ROWS, COLS], pl.FP32],
     y: pl.Out[pl.Tensor[[N_RANKS, ROWS, COLS], pl.FP32]],

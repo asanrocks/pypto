@@ -10,15 +10,12 @@
 """Qwen3-32B single-layer decode forward — JIT entry point.
 
 Composes the per-scope kernels from ``kernels/`` via plain Python imports.
-Each kernel marked ``@pl.jit.inline`` is auto-discovered as a dep and
+Each kernel marked ``@pl.jit_trace.inline`` is auto-discovered as a dep and
 spliced into this entry by the ``InlineFunctions`` IR pass.
 
 Run with::
 
     python -m examples.models.qwen3_jit.qwen3_decode
-
-(For numerical validation against a PyTorch golden, see
-``models/qwen3_32b/decode.py`` from the upstream pypto-lib repository.)
 """
 
 import pypto.language as pl
@@ -46,7 +43,7 @@ from .kernels.projection import (
 from .kernels.rmsnorm import input_rmsnorm, post_rmsnorm
 
 
-@pl.jit
+@pl.jit_trace
 def qwen3_decode(  # noqa: PLR0913 — model signature is intrinsic
     hidden_states: pl.Tensor,
     input_rms_weight: pl.Tensor,

@@ -42,7 +42,7 @@ SPLIT = 4  # number of cores the K reduction is spread across
 KS = K // SPLIT  # per-core K-slice width
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_split_k(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Split-K matmul: c = a @ b, with K split across SPLIT parallel cores.
 

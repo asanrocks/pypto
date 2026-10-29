@@ -40,7 +40,7 @@ N_RANKS = 2
 SIZE = 256  # 1 KiB per rank -- below the 4 KiB window floor
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def window_roundtrip(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -54,7 +54,7 @@ def window_roundtrip(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def per_rank(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -64,7 +64,7 @@ def per_rank(
     return window_roundtrip(x, y, data)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def window_program(
     x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],

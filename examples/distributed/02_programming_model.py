@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------------------------
 
-"""The three-level model: ``@pl.jit.host`` -> ``@pl.jit`` -> ``@pl.jit.incore``.
+"""The three-level model: ``@pl.jit_trace.host`` -> ``@pl.jit_trace`` -> ``@pl.jit_trace.incore``.
 
 Concepts introduced:
   - which processor runs what: ``host_orch`` (host CPU, control plane) ->
@@ -41,7 +41,7 @@ ROWS = 8
 COLS = 8
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def scale_by_rank(
     x: pl.Tensor[[ROWS, COLS], pl.FP32],
     y: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP32]],
@@ -64,7 +64,7 @@ def scale_by_rank(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def device_orch(
     x: pl.Tensor[[ROWS, COLS], pl.FP32],
     y: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP32]],
@@ -74,7 +74,7 @@ def device_orch(
     return scale_by_rank(x, y, rank)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def host_orch(
     x: pl.Tensor[[N_RANKS, ROWS, COLS], pl.FP32],
     y: pl.Out[pl.Tensor[[N_RANKS, ROWS, COLS], pl.FP32]],

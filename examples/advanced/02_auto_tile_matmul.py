@@ -53,7 +53,7 @@ import torch
 from pypto.runtime import RunConfig
 
 
-@pl.jit
+@pl.jit_trace
 def ddr_split_k(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``a @ b`` -> **DDR**, **split-K**. ``[256,128] @ [128,256] = [256,256]`` (> L0c) is
     consumed by the output store, so each ``[m, n]`` sub-tile direct-stores to DDR; ``K=128``
@@ -64,7 +64,7 @@ def ddr_split_k(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def ddr_full_k(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``a @ b`` -> **DDR**, **full-K**. Same as above but ``[256,32] @ [32,256]``; ``K=32``
     fits L0 in one pass (``k == K``), so the grid is the pipelined full-K nest."""
@@ -74,7 +74,7 @@ def ddr_full_k(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def mat_split_k(a: pl.Tensor, b: pl.Tensor, e: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``(a @ b) @ e`` -> **Mat/L1 scratch**, **split-K**. The ``[256,256]``
     intermediate (> L0c) is consumed on-chip by the second matmul, so it is M/N-tiled
@@ -97,7 +97,7 @@ def mat_split_k(a: pl.Tensor, b: pl.Tensor, e: pl.Tensor, out: pl.Out[pl.Tensor]
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def mat_full_k(a: pl.Tensor, b: pl.Tensor, e: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``(a @ b) @ e`` -> **Mat/L1 scratch**, **full-K**. Same bf16 chain but ``[256,32] @
     [32,256]``; ``K=32`` fits L0 (``k == K``), so the Mat-scratch ``tinsert``s land inside
@@ -110,7 +110,7 @@ def mat_full_k(a: pl.Tensor, b: pl.Tensor, e: pl.Tensor, out: pl.Out[pl.Tensor])
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def fits_l0c_full_k(a: pl.Tensor, b: pl.Tensor, e: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``(a @ b) @ e`` -> **Mat/L1 scratch**, **fits-L0c full-K**. The ``[128, 128]``
     intermediate *fits* L0c (no M/N tiling), and ``K=64`` fits L0 (``k == K``), so the
@@ -124,7 +124,7 @@ def fits_l0c_full_k(a: pl.Tensor, b: pl.Tensor, e: pl.Tensor, out: pl.Out[pl.Ten
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def fits_l0c_split_k(a: pl.Tensor, b: pl.Tensor, e: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``(a @ b) @ e`` -> **Mat/L1 scratch**, **fits-L0c split-K**. Same ``[128, 128]``
     fits-L0c intermediate, but ``[128, 512] @ [512, 128]`` overflows L0a/L0b, so the

@@ -39,7 +39,7 @@ statically; beyond that it is yours to honour. This example keeps the counts an
 input so the routing is visible in the assertions, and does not model the router.
 
 Concepts introduced:
-  - `@pl.jit.graph`: a recordable orchestration fragment, recorded once and
+  - `@pl.jit_trace.graph`: a recordable orchestration fragment, recorded once and
     replayed per layer
   - `predicate=` on `pl.spmd`: run-time gating without a branch
   - `pl.unroll`: the expert loop expands at compile time, so each expert's weight
@@ -65,7 +65,7 @@ EXPERTS = 4
 LAYERS = 2
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def expert_ffn(
     x: pl.Tensor,
     w_gate: pl.Tensor,
@@ -116,7 +116,7 @@ def expert_ffn(
     return out
 
 
-@pl.jit.graph
+@pl.jit_trace.graph
 def moe_block(
     x: pl.Tensor,
     w_gate: pl.Tensor,
@@ -133,7 +133,7 @@ def moe_block(
     region and the call site cannot reproduce it, which `LegalizeGraphBoundary`
     rejects.
 
-    ``pl.spmd`` is the form that carries a predicate in a ``@pl.jit`` function,
+    ``pl.spmd`` is the form that carries a predicate in a ``@pl.jit_trace`` function,
     and one dispatch per expert is what gives each expert its own gate. Its body
     dispatches a kernel — a bare ``pl.spmd(1)`` whose body neither reads
     ``pl.tile.get_block_idx()`` nor dispatches one is rejected, since every block
@@ -145,7 +145,7 @@ def moe_block(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def moe_decode(
     x: pl.Tensor,
     w_gate: pl.Tensor,

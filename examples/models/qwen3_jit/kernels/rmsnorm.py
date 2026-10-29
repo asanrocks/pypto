@@ -13,7 +13,7 @@ Two flavours, one per call site in the model:
   - ``input_rmsnorm`` — pre-attention RMSNorm of hidden_states (chunk=512, stage=4)
   - ``post_rmsnorm`` — post-attention RMSNorm of the residual (chunk=128, stage=2)
 
-Both are ``@pl.jit.inline``: each is called exactly once, so splicing avoids
+Both are ``@pl.jit_trace.inline``: each is called exactly once, so splicing avoids
 the need for a separate Function in the IR while keeping the kernel source
 reusable across other models that need the same shape.
 """
@@ -23,11 +23,11 @@ import pypto.language as pl
 from ..config import BATCH, EPS, HIDDEN, HIDDEN_INV, K_CHUNK, RMSNORM_K_CHUNK
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def input_rmsnorm(
     hidden_states: pl.Tensor,
     input_rms_weight: pl.Tensor,
-    normed_states: pl.Out[pl.Tensor],
+    normed_states: pl.Tensor,
 ):
     """Two-pass RMSNorm: variance reduction, then normalisation × gamma."""
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="rmsnorm"):
@@ -53,11 +53,11 @@ def input_rmsnorm(
     return normed_states
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def post_rmsnorm(
     resid: pl.Tensor,
     post_rms_weight: pl.Tensor,
-    post_norm_tile: pl.Out[pl.Tensor],
+    post_norm_tile: pl.Tensor,
 ):
     """Post-attention RMSNorm. Different chunk size from input_rmsnorm.
 

@@ -12,9 +12,9 @@
 Demonstrates cross-file utility composition:
 
   - ``kernels/`` holds reusable per-scope utilities decorated with
-    ``@pl.jit.inline`` / ``@pl.jit.incore`` / ``@pl.jit.opaque``. Each kernel
-    file is independently importable.
-  - ``qwen3_decode.py`` is the ``@pl.jit`` entry that composes the kernels.
+    ``@pl.jit_trace.inline`` / ``@pl.jit_trace.incore``. Each kernel file is
+    independently importable.
+  - ``qwen3_decode.py`` is the ``@pl.jit_trace`` entry that composes the kernels.
   - ``config.py`` holds shape/tile constants shared across kernels and entry.
 
 The IR pass pipeline (``InlineFunctions`` runs first) splices Inline

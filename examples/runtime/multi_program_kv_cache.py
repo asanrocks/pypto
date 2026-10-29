@@ -10,7 +10,7 @@
 """Multi-program L3 dispatch sharing one worker and one resident KV cache (JIT style).
 
 Serving skeleton (Qwen3-style): ``prefill`` and ``decode`` are two separate
-``@pl.jit.host`` kernels that must share **one** L3 worker and **one**
+``@pl.jit_trace.host`` kernels that must share **one** L3 worker and **one**
 worker-resident :class:`~pypto.runtime.DeviceTensor` KV cache. ``prefill``
 writes the KV cache once; each ``decode`` step reads and updates it — so the KV
 cache must survive across dispatches from *different* compiled programs, which a
@@ -18,7 +18,7 @@ worker-per-program design cannot do.
 
 Key APIs:
 
-  1. ``@pl.jit.host`` → ``@pl.jit`` (chip orch) → ``@pl.jit.incore`` — the JIT
+  1. ``@pl.jit_trace.host`` → ``@pl.jit_trace`` (chip orch) → ``@pl.jit_trace.incore`` — the JIT
      three-level L3 kernel; shapes specialize from the sample args.
   2. ``kernel.compile(*sample_args, config=RunConfig(distributed_config=...))``
      — compile without dispatching; returns a ``DistributedCompiledProgram``.
@@ -60,20 +60,20 @@ TILE = 128
 # ---------------------------------------------------------------------------
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def write_kv(prompt: pl.Tensor, kv: pl.Out[pl.Tensor]):
     tile_p = pl.load(prompt, [0, 0], [TILE, TILE])
     tile_kv = pl.add(tile_p, tile_p)
     return pl.store(tile_kv, [0, 0], kv)
 
 
-@pl.jit
+@pl.jit_trace
 def prefill_chip(prompt: pl.Tensor, kv: pl.Out[pl.Tensor]):
     out_kv = write_kv(prompt, kv)
     return out_kv
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def prefill(prompt: pl.Tensor, kv: pl.Out[pl.Tensor]):
     out_kv = prefill_chip(prompt, kv)
     return out_kv
@@ -84,7 +84,7 @@ def prefill(prompt: pl.Tensor, kv: pl.Out[pl.Tensor]):
 # ---------------------------------------------------------------------------
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def read_kv(token: pl.Tensor, kv: pl.Tensor, logits: pl.Out[pl.Tensor]):
     tile_t = pl.load(token, [0, 0], [TILE, TILE])
     tile_kv = pl.load(kv, [0, 0], [TILE, TILE])
@@ -92,13 +92,13 @@ def read_kv(token: pl.Tensor, kv: pl.Tensor, logits: pl.Out[pl.Tensor]):
     return pl.store(tile_o, [0, 0], logits)
 
 
-@pl.jit
+@pl.jit_trace
 def decode_chip(token: pl.Tensor, kv: pl.Tensor, logits: pl.Out[pl.Tensor]):
     out = read_kv(token, kv, logits)
     return out
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def decode(token: pl.Tensor, kv: pl.Tensor, logits: pl.Out[pl.Tensor]):
     out = decode_chip(token, kv, logits)
     return out

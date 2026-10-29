@@ -26,7 +26,7 @@ import torch
 from pypto.runtime import RunConfig
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_acc_64(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Matrix multiply with accumulation -- K=64 split into two K=32 chunks.
 

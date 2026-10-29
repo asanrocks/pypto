@@ -18,7 +18,7 @@ down projection):
   ffn_relu   -- output = ReLU(hidden_states @ gate_proj_weight) @ down_proj_weight
 
 Concepts introduced:
-  - Module-level @pl.jit.incore: shared kernel reused across multiple JIT entries
+  - Module-level @pl.jit_trace.incore: shared kernel reused across multiple entries
   - Multi-kernel orchestration: matmul -> activation -> matmul pipeline
   - Direct call to module-level kernels (no self. prefix)
 
@@ -33,7 +33,7 @@ from pypto.runtime import RunConfig
 # ── Shared cube matmul kernel (module-level, reusable across entries) ────────
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def matmul_kernel(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Cube InCore: compute a @ b and store result to GM."""
     tile_a_l1 = pl.load(a, [0, 0], [64, 64], target_memory=pl.MemorySpace.Mat)
@@ -45,10 +45,10 @@ def matmul_kernel(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-# ── Activation kernels (module-level @pl.jit.incore) ─────────────────────────
+# ── Activation kernels (module-level @pl.jit_trace.incore) ───────────────────
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def gelu_kernel(x: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Vector InCore: apply GELU activation -- x * sigmoid(1.702 * x)."""
     tile_x = pl.load(x, [0, 0], [64, 64])
@@ -62,7 +62,7 @@ def gelu_kernel(x: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def swiglu_kernel(gate: pl.Tensor, up: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Vector InCore: apply SwiGLU activation -- gate * sigmoid(gate) * up."""
     tile_gate = pl.load(gate, [0, 0], [64, 64])
@@ -77,7 +77,7 @@ def swiglu_kernel(gate: pl.Tensor, up: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def relu_kernel(x: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Vector InCore: apply ReLU activation -- max(0, x)."""
     tile_x = pl.load(x, [0, 0], [64, 64])
@@ -86,10 +86,10 @@ def relu_kernel(x: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-# ── FFN orchestration entries (@pl.jit) ───────────────────────────────────────
+# ── FFN orchestration entries (@pl.jit_trace) ─────────────────────────────────
 
 
-@pl.jit
+@pl.jit_trace
 def ffn_gelu(
     hidden_states: pl.Tensor,
     gate_proj_weight: pl.Tensor,
@@ -108,7 +108,7 @@ def ffn_gelu(
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def ffn_swiglu(
     hidden_states: pl.Tensor,
     gate_proj_weight: pl.Tensor,
@@ -131,7 +131,7 @@ def ffn_swiglu(
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def ffn_relu(
     hidden_states: pl.Tensor,
     gate_proj_weight: pl.Tensor,

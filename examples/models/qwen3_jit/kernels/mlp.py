@@ -9,7 +9,7 @@
 
 """MLP block kernels for Scope 3 stages 4-6: gate proj + up proj + SiLU.
 
-Decorated as ``@pl.jit.inline``: the body is spliced into the entry,
+Decorated as ``@pl.jit_trace.inline``: the body is spliced into the entry,
 which lets ``OutlineIncoreScopes`` extract each ``pl.at`` block as a
 separate InCore function — same shape as the monolithic reference.
 """
@@ -19,12 +19,12 @@ import pypto.language as pl
 from ..config import BATCH, HIDDEN, INTERMEDIATE, K_CHUNK, MLP_OUT_CHUNK
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def mlp_block(
     post_norm_tile: pl.Tensor,
     w_gate: pl.Tensor,
     w_up: pl.Tensor,
-    mlp_tile: pl.Out[pl.Tensor],
+    mlp_tile: pl.Tensor,
 ):
     """Three ``pl.at`` scopes per output chunk: gate proj, up proj, SiLU+mul."""
     for o0 in pl.parallel(0, INTERMEDIATE, MLP_OUT_CHUNK):

@@ -18,6 +18,11 @@ material cannot silently rot. Two ladders are covered:
 - ``examples/{beginner,intermediate,advanced,utils}`` — the manual's
   beginner/intermediate/advanced/utils citations. They default to ``a2a3sim``
   and take no arguments.
+- ``examples/tracing`` — the tracing concept ladder (main steps plus its
+  ``advanced/`` library-author steps). Its kernels also pin the simulator
+  explicitly and take no arguments; each asserts the structural property its
+  concept predicts, so a frontend change that invalidates a lesson fails here
+  instead of in the talk.
 
 Each invocation is an independent process: its compile output goes to a fresh
 ``mkdtemp`` under ``build_output``, its reusable binaries are guarded by
@@ -46,7 +51,7 @@ _TIMEOUT_SECONDS = 1800
 _FAILURE_TAIL_LINES = 25
 
 #: Ladders whose every example runs bare — no platform, no ranks.
-_TEACHING_DIRS = ("beginner", "intermediate", "advanced", "utils")
+_TEACHING_DIRS = ("beginner", "intermediate", "advanced", "utils", "tracing")
 
 #: The default rank pair every distributed example is run at.
 _DEFAULT_RANKS = ("-d", "0,1")
@@ -93,11 +98,16 @@ _DISTRIBUTED_EXTRAS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 def _ladder_scripts(directory: str) -> list[Path]:
-    """Return the runnable examples of ``examples/<directory>``, in step order."""
+    """Return the runnable examples of ``examples/<directory>``, in step order.
+
+    Recursive: a ladder may group later steps into a subdirectory (the tracing
+    ladder keeps its library-author steps in ``advanced/``), and a step that is
+    not globbed is a step nothing checks.
+    """
     root = REPO_ROOT / "examples" / directory
     if not root.is_dir():
         raise FileNotFoundError(f"No such example ladder: {root}")
-    return sorted(p for p in root.glob("*.py") if p.name != "__init__.py")
+    return sorted(p for p in root.rglob("*.py") if p.name != "__init__.py")
 
 
 def invocations(platform: str) -> list[list[str]]:

@@ -25,7 +25,7 @@ import torch
 from pypto.runtime import RunConfig
 
 
-@pl.jit
+@pl.jit_trace
 def fused_add_scale(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Fused: load a, b -> add -> scale by 2.0 -> store c."""
     with pl.at(level=pl.Level.CORE_GROUP):

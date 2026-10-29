@@ -40,7 +40,7 @@ from pypto.runtime import RunConfig
 # ── Vector DAG (128x128) kernels ─────────────────────────────────────────────
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def kernel_add_128(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Adds two tensors element-wise: result = a + b"""
     a_tile = pl.load(a, [0, 0], [128, 128])
@@ -50,7 +50,7 @@ def kernel_add_128(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def kernel_add_scalar_128(
     a: pl.Tensor,
     scalar: pl.Scalar[pl.FP32],
@@ -63,7 +63,7 @@ def kernel_add_scalar_128(
     return output
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def kernel_mul_128(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Multiplies two tensors element-wise: result = a * b"""
     a_tile = pl.load(a, [0, 0], [128, 128])
@@ -73,7 +73,7 @@ def kernel_mul_128(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def vector_dag(a: pl.Tensor, b: pl.Tensor, f: pl.Out[pl.Tensor]):
     """Orchestration for formula: f = (a + b + 1)(a + b + 2) + (a + b)
 
@@ -99,7 +99,7 @@ def vector_dag(a: pl.Tensor, b: pl.Tensor, f: pl.Out[pl.Tensor]):
 # ── Smaller orchestration DAG (16x16) used by codegen tests ──────────────────
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def kernel_add_16(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Adds two tensors element-wise: result = a + b"""
     a_tile = pl.load(a, [0, 0], [16, 16])
@@ -109,7 +109,7 @@ def kernel_add_16(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def kernel_add_scalar_16(
     a: pl.Tensor,
     scalar: pl.Scalar[pl.FP32],
@@ -122,7 +122,7 @@ def kernel_add_scalar_16(
     return output
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def kernel_mul_16(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Multiplies two tensors element-wise: result = a * b"""
     a_tile = pl.load(a, [0, 0], [16, 16])
@@ -132,7 +132,7 @@ def kernel_mul_16(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def example_orch(a: pl.Tensor, b: pl.Tensor, f_result: pl.Out[pl.Tensor]):
     """Simpler orchestration DAG (16x16): f = (a + b + 1)(a + b + 2)
 

@@ -17,8 +17,8 @@ relying on ``with ChipWorker(): compiled(...)`` ContextVar discovery:
   mode_c_register_dispatch_overhead — register warms the callable cache once
                                        (uses its own ChipWorker — see note in the mode)
 
-All three modes use a ``@pl.jit`` kernel and the new
-:meth:`JITFunction.compile` entry point so the same script demonstrates:
+All three modes use a ``@pl.jit_trace`` kernel and its ``compile`` entry point
+so the same script demonstrates:
 
   1. ``my_kernel.compile(*sample_args) -> CompiledProgram`` (stage compile)
   2. ``worker.register(compiled) -> RegistrationHandle`` (eager registration)
@@ -44,7 +44,7 @@ from pypto.runtime import ChipWorker, RunConfig
 # ---------------------------------------------------------------------------
 
 
-@pl.jit
+@pl.jit_trace
 def tile_add_128(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """c = a + b on 128x128 fp32 tiles."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -55,7 +55,7 @@ def tile_add_128(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def tile_mul_128(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """c = a * b on 128x128 fp32 tiles."""
     with pl.at(level=pl.Level.CORE_GROUP):

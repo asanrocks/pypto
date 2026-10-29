@@ -43,7 +43,7 @@ N_RANKS = 2
 SIZE = 64
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def shift_by_load(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -66,7 +66,7 @@ def shift_by_load(
     return y
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def shift_by_store(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -90,7 +90,7 @@ def shift_by_store(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def per_rank_load(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -100,7 +100,7 @@ def per_rank_load(
     return shift_by_load(x, y, data, signal)
 
 
-@pl.jit
+@pl.jit_trace
 def per_rank_store(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -110,7 +110,7 @@ def per_rank_store(
     return shift_by_store(x, y, data, signal)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def ring_shift_load(
     x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],
@@ -123,7 +123,7 @@ def ring_shift_load(
         per_rank_load(x[r], y[r], data, signal, device=r)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def ring_shift_store(
     x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],

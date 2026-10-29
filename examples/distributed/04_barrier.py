@@ -60,7 +60,7 @@ N_RANKS = 2
 SIZE = 64
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def barrier_handrolled(
     y: pl.Out[pl.Tensor[[N_RANKS, 1], pl.INT32]],
     signal: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
@@ -102,7 +102,7 @@ def barrier_handrolled(
     return y
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def barrier_builtin(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -125,7 +125,7 @@ def barrier_builtin(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def per_rank_hand(
     y: pl.Out[pl.Tensor[[N_RANKS, 1], pl.INT32]],
     signal: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
@@ -133,7 +133,7 @@ def per_rank_hand(
     return barrier_handrolled(y, signal)
 
 
-@pl.jit
+@pl.jit_trace
 def per_rank_builtin(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -143,7 +143,7 @@ def per_rank_builtin(
     return barrier_builtin(x, y, data, signal)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def barrier_program_hand(
     y: pl.Out[pl.Tensor[[N_RANKS, N_RANKS, 1], pl.INT32]],
 ):
@@ -153,7 +153,7 @@ def barrier_program_hand(
         per_rank_hand(y[r], signal, device=r)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def barrier_program_builtin(
     x: pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[N_RANKS, 1, SIZE], pl.FP32]],

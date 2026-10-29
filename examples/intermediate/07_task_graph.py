@@ -40,7 +40,7 @@ ROWS = 128
 COLS = 128
 
 
-@pl.jit
+@pl.jit_trace
 def inferred_edge(x: pl.Tensor, scratch: pl.Out[pl.Tensor], out: pl.Out[pl.Tensor]):
     """Nothing is declared — the edge falls out of the buffer directions.
 
@@ -55,7 +55,7 @@ def inferred_edge(x: pl.Tensor, scratch: pl.Out[pl.Tensor], out: pl.Out[pl.Tenso
     return scratch, out
 
 
-@pl.jit
+@pl.jit_trace
 def declared_edge(x: pl.Tensor, scratch: pl.Out[pl.Tensor], out: pl.Out[pl.Tensor]):
     """The same order, this time stated.
 

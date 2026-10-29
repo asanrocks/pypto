@@ -30,7 +30,7 @@ import torch
 from pypto.runtime import RunConfig
 
 
-@pl.jit
+@pl.jit_trace
 def rms_norm(x: pl.Tensor, gamma: pl.Tensor, output: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile_x = pl.load(x, [0, 0], [32, 64])
@@ -65,7 +65,7 @@ def rms_norm(x: pl.Tensor, gamma: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def layer_norm(
     x: pl.Tensor,
     gamma: pl.Tensor,

@@ -159,8 +159,8 @@ result = pl.add(result, 1.0)      # fine; the parser produces two bindings
 | 示例 | 展示 |
 | ---- | ---- |
 | `examples/beginner/02_elementwise.py`（`chunked_add`） | 对 tile 分块的朴素 `pl.range` |
-| `examples/intermediate/04_matmul_acc.py` | 用 `init_values` 跨迭代携带累加器 |
-| `examples/models/03_flash_attention.py` | 循环携带状态 + 嵌套 `if` / `pl.yield_` —— 完整形态 |
+| `examples/intermediate/05_assemble.py` | 在嵌套 `pl.range` 中重新绑定的 tile —— 携带值 |
+| `examples/models/03_flash_attention.py` | 循环携带状态 + 嵌套 `if` / 分支重新绑定 |
 
 ## See Also
 

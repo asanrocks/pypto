@@ -18,7 +18,7 @@ Concepts introduced:
   - Memory spaces: pl.MemorySpace.Mat (L1), Left (L0A), Right (L0B)
   - pl.move for transferring tiles between memory spaces
   - pl.matmul for cube unit matrix multiplication
-  - Multi-kernel orchestration: @pl.jit.incore helpers + pl.create_tensor for intermediate buffers
+  - Multi-kernel orchestration: @pl.jit_trace.incore helpers + pl.create_tensor for intermediate buffers
 
 Run:  python examples/intermediate/01_fused_linear.py
 Next: examples/intermediate/02_softmax.py
@@ -29,7 +29,7 @@ import torch
 from pypto.runtime import RunConfig
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _matmul_kernel_64x64(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Cube InCore: compute a @ b and store to output."""
     tile_a_l1 = pl.load(a, [0, 0], [64, 64], target_memory=pl.MemorySpace.Mat)
@@ -41,7 +41,7 @@ def _matmul_kernel_64x64(a: pl.Tensor, b: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _add_bias_kernel_64x64(x: pl.Tensor, bias: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Vector InCore: add bias to x and store to output."""
     tile_x = pl.load(x, [0, 0], [64, 64])
@@ -51,7 +51,7 @@ def _add_bias_kernel_64x64(x: pl.Tensor, bias: pl.Tensor, output: pl.Out[pl.Tens
     return output
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _add_bias_relu_kernel_64x64(x: pl.Tensor, bias: pl.Tensor, output: pl.Out[pl.Tensor]):
     """Vector InCore: fused bias add and relu activation."""
     tile_x = pl.load(x, [0, 0], [64, 64])
@@ -62,7 +62,7 @@ def _add_bias_relu_kernel_64x64(x: pl.Tensor, bias: pl.Tensor, output: pl.Out[pl
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def fused_matmul_bias(a: pl.Tensor, b: pl.Tensor, bias: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Orchestrate: c = matmul(a, b) + bias"""
     mm_out = pl.create_tensor([64, 64], dtype=pl.FP32)
@@ -71,7 +71,7 @@ def fused_matmul_bias(a: pl.Tensor, b: pl.Tensor, bias: pl.Tensor, c: pl.Out[pl.
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def fused_linear_relu(x: pl.Tensor, w: pl.Tensor, bias: pl.Tensor, y: pl.Out[pl.Tensor]):
     """Orchestrate: y = relu(matmul(x, w) + bias)"""
     mm_out = pl.create_tensor([64, 64], dtype=pl.FP32)
