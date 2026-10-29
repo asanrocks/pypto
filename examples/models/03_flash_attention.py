@@ -7,14 +7,14 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""
-Flash Attention with loop-level iter_args.
+"""Flash attention with loop-level carries, spelled the ergonomic way.
 
 Demonstrates advanced DSL control flow:
-  - pl.range with init_values for loop-carried state (iter_args)
-  - Nested if/else with pl.yield_ for SSA phi nodes
+  - ``pl.range`` loop-carried state: bind the state before the loop and rebind it
+    at the end of the body — the frontend derives the carried channels, so there
+    is no ``init_values=`` tuple and no trailing ``pl.yield_``
+  - Nested ``if``/``else`` whose value is the branch's rebinding (the SSA phi)
   - Online softmax with running max/sum accumulators
-  - Multi-output yield for updating loop state
 
 Algorithm:
   For each KV block j in [0, 16):
@@ -30,24 +30,15 @@ Next: examples/models/04_paged_attention.py
 import pypto.language as pl
 
 
-@pl.jit
-def flash_attention(q_13: pl.Tensor, k_16: pl.Tensor, v_19: pl.Tensor):
+@pl.jit_trace
+def flash_attention(q_13: pl.Tensor, k_16: pl.Tensor, v_19: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
-        attn_initial = pl.create_tensor([64, 128], dtype=pl.FP32)
-        oi_update_initial = pl.create_tensor([64, 128], dtype=pl.FP32)
-        li_update_initial = pl.create_tensor([64, 1], dtype=pl.FP32)
-        mi_update_initial = pl.create_tensor([64, 1], dtype=pl.FP32)
+        mi_update = pl.create_tensor([64, 1], dtype=pl.FP32)
+        li_update = pl.create_tensor([64, 1], dtype=pl.FP32)
+        attn_update = pl.create_tensor([64, 128], dtype=pl.FP32)
+        oi_update = pl.create_tensor([64, 128], dtype=pl.FP32)
 
-        # statement.for with iter_args → pl.range with tuple unpacking
-        for i, (mi_update, li_update, attn_update, oi_update) in pl.range(
-            16,
-            init_values=(
-                mi_update_initial,
-                li_update_initial,
-                attn_initial,
-                oi_update_initial,
-            ),
-        ):
+        for i in pl.range(16):
             # Inner statement.block
             kj = pl.slice(k_16, [64, 128], [i * 64, 0])
             vj = pl.slice(v_19, [64, 128], [i * 64, 0])
@@ -59,7 +50,7 @@ def flash_attention(q_13: pl.Tensor, k_16: pl.Tensor, v_19: pl.Tensor):
             l_ij = pl.row_sum(p_ij)
             tildaPij_83 = pl.cast(p_ij, target_type=pl.FP16, mode="round")
 
-            # Nested if with yield (SSA phi node)
+            # Nested if: each branch rebinds ``attn_next`` (the SSA phi node)
             if i == 0:
                 # Inner statement.block
                 oiUpdate_87 = pl.matmul(tildaPij_83, vj, out_dtype=pl.FP16)
@@ -67,19 +58,15 @@ def flash_attention(q_13: pl.Tensor, k_16: pl.Tensor, v_19: pl.Tensor):
 
                 # Nested if inside first branch
                 if i == 15:
-                    attn_94 = pl.div(oiUpdate_90, l_ij)
-                    attn_95 = pl.yield_(attn_94)
+                    attn_next = pl.div(oiUpdate_90, l_ij)
                 else:
-                    attn_95 = pl.yield_(attn_update)
+                    attn_next = attn_update
 
                 # More statements in first branch
-                liUpdate_98 = pl.assemble(li_update, l_ij, offset=[0, 0])
-                miUpdate_101 = pl.assemble(mi_update, row_max, offset=[0, 0])
-
-                # statement.yield → pl.yield_ with assignment
-                miUpdate_126, liUpdate_127, attn_128, oiUpdate_129 = pl.yield_(
-                    miUpdate_101, liUpdate_98, attn_95, oiUpdate_90
-                )
+                li_update = pl.assemble(li_update, l_ij, offset=[0, 0])
+                mi_update = pl.assemble(mi_update, row_max, offset=[0, 0])
+                attn_update = attn_next
+                oi_update = oiUpdate_90
             else:
                 # Else branch
                 mi_102 = pl.create_tensor(shape=[64, 1], dtype=pl.FP32)
@@ -102,28 +89,32 @@ def flash_attention(q_13: pl.Tensor, k_16: pl.Tensor, v_19: pl.Tensor):
 
                 # Nested if in else branch
                 if i == 15:
-                    attn_124 = pl.div(oiUpdate_120, liUpdate_113)
-                    attn_125 = pl.yield_(attn_124)
+                    attn_next = pl.div(oiUpdate_120, liUpdate_113)
                 else:
-                    attn_125 = pl.yield_(attn_update)
+                    attn_next = attn_update
 
-                miUpdate_126, liUpdate_127, attn_128, oiUpdate_129 = pl.yield_(
-                    miUpdate_103, liUpdate_113, attn_125, oiUpdate_120
-                )
-
-            # For loop yield (updates iter_args for next iteration)
-            mi_final, li_final, attn_final, oi_final = pl.yield_(
-                miUpdate_126, liUpdate_127, attn_128, oiUpdate_129
-            )
-    return attn_final
+                mi_update = miUpdate_103
+                li_update = liUpdate_113
+                attn_update = attn_next
+                oi_update = oiUpdate_120
+        out = pl.assemble(out, attn_update, offset=[0, 0])
+    return out
 
 
 if __name__ == "__main__":
-    # The body currently fails IR verification at pipeline_input due to a
-    # pre-existing IfStmt yield/return_vars structural mismatch in the original
-    # @pl.function example (which only ever called print() and never went
-    # through the pass pipeline).  See KNOWN_ISSUES.md for the tracking entry.
-    # Until that is fixed, this entry only verifies that the JIT decorator
-    # wraps and the Python parser accepts the source -- it does NOT execute.
-    print(flash_attention)
-    print("SKIPPED: flash_attention body fails IR verification (see KNOWN_ISSUES.md)")
+    # The body traces, but the pass pipeline rejects the online-softmax working
+    # set: its Vec usage (197632 B) exceeds the 188416 B limit on a2a3 (65536 B
+    # of which is the cross-core pipe ring). ``__main__`` therefore exercises the
+    # trace and reports the skip instead of executing.
+    import torch
+
+    q = torch.randn(64, 128, dtype=torch.float16)
+    k = torch.randn(1024, 128, dtype=torch.float16)
+    v = torch.randn(1024, 128, dtype=torch.float16)
+    out = torch.zeros(64, 128, dtype=torch.float32)
+    try:
+        flash_attention.lower(q, k, v, out)
+    except ValueError as e:
+        print(f"SKIPPED: {e}".split(". ")[0])
+    else:
+        print("OK")

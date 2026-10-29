@@ -60,7 +60,7 @@ import pypto.language as pl
 import torch
 
 
-@pl.jit
+@pl.jit_trace
 def tile_assemble_acc_mat(
     x: pl.Tensor,
     a: pl.Tensor,
@@ -84,7 +84,7 @@ def tile_assemble_acc_mat(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def tile_assemble_vec(
     x: pl.Tensor,
     src: pl.Tensor,
@@ -100,7 +100,7 @@ def tile_assemble_vec(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def tile_assemble_row_by_row(
     x: pl.Tensor,
     src: pl.Tensor,
@@ -116,7 +116,7 @@ def tile_assemble_row_by_row(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def tile_assemble_double_loop(
     x: pl.Tensor,
     src: pl.Tensor,
@@ -134,7 +134,7 @@ def tile_assemble_double_loop(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def tile_assemble_loop_col_broadcast(
     x: pl.Tensor,
     src: pl.Tensor,
@@ -149,7 +149,7 @@ def tile_assemble_loop_col_broadcast(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def tile_assemble_double_loop_broadcast(
     x: pl.Tensor,
     src: pl.Tensor,

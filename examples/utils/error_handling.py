@@ -7,18 +7,18 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Demonstrates that the @pl.jit pipeline rejects an invalid kernel at compile time.
+"""Demonstrates that a JIT kernel with a rebinding bug is rejected at compile time.
 
 The body rebinds ``result`` to ``pl.add(x, 1.0)``, discarding the prior write
-of ``pl.mul(x, 2.0)``. The JIT specializer alpha-renames the rebinding to keep
-the parser happy, but downstream codegen still surfaces a structural error
-because the renamed local never reaches the ``pl.store`` (out parameter).
+of ``pl.mul(x, 2.0)``. Both frontends keep the rebinding as a rename so the
+SSA form stays well-defined, but downstream codegen still surfaces a structural
+error because the renamed local never reaches the ``pl.store`` (out parameter).
 """
 
 import pypto.language as pl
 
 
-@pl.jit
+@pl.jit_trace
 def test_ssa_violation(x: pl.Tensor, result: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         result = pl.mul(x, 2.0)

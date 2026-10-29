@@ -12,13 +12,13 @@
 This file demonstrates the cross-file utility pattern for the attention
 section of Qwen3-32B decode. Currently implements one representative
 sub-stage — RoPE rotation + K/V cache writes + Q pad — as a single
-``@pl.jit.inline`` kernel.
+``@pl.jit_trace.inline`` kernel.
 
 The full grouped-query attention (QK matmul, softmax, SV matmul, online
 softmax accumulation) follows the same composition pattern; each stage
-becomes another ``@pl.jit.inline`` (or ``@pl.jit.incore``) kernel called
-from the entry's per-batch / per-group loops. See ``qwen3_decode.py`` and
-the upstream monolithic reference for the full structure.
+becomes another ``@pl.jit_trace.inline`` (or ``@pl.jit_trace.incore``) kernel
+called from the entry's per-batch / per-group loops. See ``qwen3_decode.py``
+for the composition the entry already performs.
 """
 
 import pypto.language as pl
@@ -36,7 +36,7 @@ from ..config import (
 )
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def rope_kv_cache_update(
     q_proj: pl.Tensor,
     k_proj: pl.Tensor,
@@ -44,9 +44,9 @@ def rope_kv_cache_update(
     seq_lens: pl.Tensor,
     rope_cos: pl.Tensor,
     rope_sin: pl.Tensor,
-    k_cache: pl.Out[pl.Tensor],
-    v_cache: pl.Out[pl.Tensor],
-    all_q_padded: pl.Out[pl.Tensor],
+    k_cache: pl.Tensor,
+    v_cache: pl.Tensor,
+    all_q_padded: pl.Tensor,
 ):
     """Per-batch: rotate K/V via RoPE, write to KV cache, rotate-and-pad Q."""
     for b in pl.parallel(BATCH):

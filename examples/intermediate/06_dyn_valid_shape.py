@@ -27,12 +27,13 @@ three kernels below cover the spectrum:
 
 Scalar parameters are runtime values
 ------------------------------------
-Under ``@pl.jit`` a scalar argument (``pl.INDEX``, ``pl.FP32``, ...) is a
-*runtime value*: it stays a real parameter in the generated program, its value
-arrives at dispatch, and the generated ``pto.alloc_tile`` carries a symbolic
-``valid_col``.  So ``dyn_valid_shape`` compiles **once** and serves every
-``vlen`` -- the simplest of the three forms, and the one to reach for when the
-caller already knows the length.
+A ``pl.Scalar[...]`` parameter (``pl.Scalar[pl.INDEX]``, ``pl.Scalar[pl.FP32]``,
+...) is a *runtime value*: it stays a real parameter in the generated program,
+its value arrives at dispatch, and the generated ``pto.alloc_tile`` carries a
+symbolic ``valid_col``.  The declaration alone fixes the artifact, so
+``dyn_valid_shape`` compiles **once** and serves every ``vlen`` -- the simplest
+of the three forms, and the one to reach for when the caller already knows the
+length.
 
 Kernels 2 and 3 differ only in where the length comes from, not in how free it
 is: they read it out of a tensor, which is what you need when the choice is
@@ -63,11 +64,11 @@ BLOCK_COL = 64
 N_ROW = 128  # sij_buf rows = Q_TILE * max_blocks(2)
 
 
-@pl.jit
+@pl.jit_trace
 def dyn_valid_shape(
     data: pl.Tensor,
-    scale: pl.FP32,
-    vlen: pl.INDEX,
+    scale: pl.Scalar[pl.FP32],
+    vlen: pl.Scalar[pl.INDEX],
     output: pl.Out[pl.Tensor],
 ):
     """Load with a caller-provided valid_shape, fillpad, then scale.
@@ -90,7 +91,7 @@ def dyn_valid_shape(
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def dyn_valid_shape_if_else(
     data: pl.Tensor,
     cfg: pl.Tensor,
@@ -123,7 +124,7 @@ def dyn_valid_shape_if_else(
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def dyn_valid_shape_loop(
     sij_buf: pl.Tensor,
     cfg: pl.Tensor,
@@ -162,8 +163,8 @@ if __name__ == "__main__":
     data = torch.randn(Q_TILE, BLOCK_COL, dtype=torch.float32)
     out = torch.zeros(Q_TILE, BLOCK_COL, dtype=torch.float32)
 
-    # Same kernel, two vlen values: full block (64) and partial last block (32).
-    # Each is its own specialization and runs through the pipeline independently.
+    # Same kernel, two vlen values: the scalar stays a parameter, so both calls
+    # lower to the same program and run through the pipeline independently.
     prog_full = dyn_valid_shape.lower(data, 0.5, 64, out)
     print(f"dyn_valid_shape (full): {len(prog_full.functions)} fn(s)")
     prog_partial = dyn_valid_shape.lower(data, 0.5, 32, out)

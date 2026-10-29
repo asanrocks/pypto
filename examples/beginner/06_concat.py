@@ -25,7 +25,7 @@ import torch
 from pypto.runtime import RunConfig
 
 
-@pl.jit
+@pl.jit_trace
 def tile_concat_32x32(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile_a = pl.load(a, [0, 0], [32, 16])

@@ -48,7 +48,7 @@ SIZE = 64
 NR = pl.dynamic("NR")
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def put_step(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -88,7 +88,7 @@ def put_step(
     return y
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def get_step(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -134,7 +134,7 @@ def get_step(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def per_rank_put(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -145,7 +145,7 @@ def per_rank_put(
     return put_step(x, y, src, dst, signal)
 
 
-@pl.jit
+@pl.jit_trace
 def per_rank_get(
     x: pl.Tensor[[1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -156,7 +156,7 @@ def per_rank_get(
     return get_step(x, y, src, dst, signal)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def ring_put(
     x: pl.Tensor[[NR, 1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[NR, 1, SIZE], pl.FP32]],
@@ -172,7 +172,7 @@ def ring_put(
         per_rank_put(x[r], y[r], src, dst, signal, device=r)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def ring_get(
     x: pl.Tensor[[NR, 1, SIZE], pl.FP32],
     y: pl.Out[pl.Tensor[[NR, 1, SIZE], pl.FP32]],

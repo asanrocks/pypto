@@ -19,7 +19,7 @@ Kernels:
 
 Concepts introduced:
   - pl.mul for element-wise multiplication
-  - Multiple @pl.jit kernels in one file
+  - Multiple @pl.jit_trace kernels in one file
   - Looping over chunks when the tensor is larger than one tile
 
 Run:  python examples/beginner/02_elementwise.py
@@ -36,7 +36,7 @@ COLS = 128
 TILE_ROWS = 128
 
 
-@pl.jit
+@pl.jit_trace
 def tile_add_128(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile_a = pl.load(a, [0, 0], [128, 128])
@@ -46,7 +46,7 @@ def tile_add_128(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def tile_mul_128(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile_a = pl.load(a, [0, 0], [128, 128])
@@ -56,7 +56,7 @@ def tile_mul_128(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def tile_add_64(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Element-wise addition on 64x64 tiles."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -67,7 +67,7 @@ def tile_add_64(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def tile_mul_64(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Element-wise multiplication on 64x64 tiles."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -78,7 +78,7 @@ def tile_mul_64(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def chunked_add(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Element-wise addition on a tensor taller than one tile.
 

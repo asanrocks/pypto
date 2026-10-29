@@ -48,7 +48,7 @@ K = 256
 N = 128
 
 
-@pl.jit
+@pl.jit_trace
 def staged_matmul_bias(a: pl.Tensor, b: pl.Tensor, bias: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``a @ b + bias`` as TWO scopes — the form the mixed kernel replaces.
 
@@ -62,7 +62,7 @@ def staged_matmul_bias(a: pl.Tensor, b: pl.Tensor, bias: pl.Tensor, out: pl.Out[
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def mixed_matmul_bias(a: pl.Tensor, b: pl.Tensor, bias: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``a @ b + bias`` as ONE scope, split along the row axis.
 
@@ -84,7 +84,7 @@ def mixed_matmul_bias(a: pl.Tensor, b: pl.Tensor, bias: pl.Tensor, out: pl.Out[p
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def mixed_matmul_bias_lr(a: pl.Tensor, b: pl.Tensor, bias: pl.Tensor, out: pl.Out[pl.Tensor]):
     """Same as :func:`mixed_matmul_bias`, halved along the column axis."""
     with pl.at(

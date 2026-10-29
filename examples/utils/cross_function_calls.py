@@ -7,22 +7,22 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Cross-function composition with @pl.jit.
+"""Cross-function composition with @pl.jit_trace.
 
-Demonstrates that ``@pl.jit.inline`` helpers are auto-discovered as deps of a
-``@pl.jit`` entry function and spliced at the call site. Each helper is a normal
+Demonstrates that ``@pl.jit_trace.inline`` helpers are auto-discovered as deps of a
+``@pl.jit_trace`` entry function and spliced at the call site. Each helper is a normal
 DSL function; the entry composes them by calling them like Python functions.
 
-This is the @pl.jit equivalent of the older ``@pl.program`` + ``self.method()``
-cross-function-call pattern: in the JIT world, dep discovery happens through the
-entry function's globals, not through a class.
+Dep discovery walks the entry function's module globals: a helper is an ordinary
+module-level function — defined beside the entry or imported into its module —
+and resolution happens by name, at the entry's call sites.
 """
 
 import pypto.language as pl
 
 
-@pl.jit.inline
-def add_helper(a: pl.Tensor, c: pl.Out[pl.Tensor]):
+@pl.jit_trace.inline
+def add_helper(a: pl.Tensor, c: pl.Tensor):
     """Tile-wise add: c = a + 1.0."""
     with pl.at(level=pl.Level.CORE_GROUP):
         tile_a = pl.load(a, [0, 0], [128, 128])
@@ -31,8 +31,8 @@ def add_helper(a: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit.inline
-def mul_helper(a: pl.Tensor, c: pl.Out[pl.Tensor]):
+@pl.jit_trace.inline
+def mul_helper(a: pl.Tensor, c: pl.Tensor):
     """Tile-wise multiply: c = a * 2.0."""
     with pl.at(level=pl.Level.CORE_GROUP):
         tile_a = pl.load(a, [0, 0], [128, 128])
@@ -41,9 +41,9 @@ def mul_helper(a: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def main_kernel(a: pl.Tensor, c: pl.Out[pl.Tensor]):
-    """Entry: c = (a + 1.0) * 2.0, composed via two @pl.jit.inline helpers."""
+    """Entry: c = (a + 1.0) * 2.0, composed via two @pl.jit_trace.inline helpers."""
     intermediate = pl.create_tensor([128, 128], dtype=pl.FP32)
     intermediate = add_helper(a, intermediate)
     c = mul_helper(intermediate, c)

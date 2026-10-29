@@ -32,7 +32,7 @@ import torch
 from pypto.runtime import RunConfig
 
 
-@pl.jit
+@pl.jit_trace
 def fused_add_relu(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Fused: load a, b -> add -> relu -> store c."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -44,7 +44,7 @@ def fused_add_relu(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def silu(x: pl.Tensor, output: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         # SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
@@ -58,7 +58,7 @@ def silu(x: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def gelu(x: pl.Tensor, output: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         # GELU(x) = x * sigmoid(1.702 * x)  (fast approximation)
@@ -73,7 +73,7 @@ def gelu(x: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def swiglu(gate: pl.Tensor, up: pl.Tensor, output: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         # SwiGLU(gate, up) = Swish(gate) * up = gate * sigmoid(gate) * up
@@ -89,7 +89,7 @@ def swiglu(gate: pl.Tensor, up: pl.Tensor, output: pl.Out[pl.Tensor]):
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def geglu(gate: pl.Tensor, up: pl.Tensor, output: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         # GeGLU(gate, up) = GELU(gate) * up

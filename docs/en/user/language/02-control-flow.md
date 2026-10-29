@@ -200,8 +200,8 @@ non-SSA source is normal input, not a compatibility mode.
 | Example | Shows |
 | ------- | ----- |
 | `examples/beginner/02_elementwise.py` (`chunked_add`) | A plain `pl.range` over tile chunks |
-| `examples/intermediate/04_matmul_acc.py` | `init_values` carrying an accumulator across iterations |
-| `examples/models/03_flash_attention.py` | Loop-carried state plus nested `if` / `pl.yield_` — the full form |
+| `examples/intermediate/05_assemble.py` | A tile rebound across a nested `pl.range` — the carried value |
+| `examples/models/03_flash_attention.py` | Loop-carried state plus nested `if` / branch rebinding |
 
 ## See Also
 

@@ -10,7 +10,7 @@
 """Q/K/V/Output/MLP projection kernels.
 
 Each utility wraps both the orchestration ``pl.parallel`` loop and the
-inner ``pl.at`` compute scope. Decorated as ``@pl.jit.inline`` because the
+inner ``pl.at`` compute scope. Decorated as ``@pl.jit_trace.inline`` because the
 splice keeps the IR structurally close to the monolithic reference while
 enabling cross-file reuse.
 """
@@ -32,11 +32,11 @@ from ..config import (
 )
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def q_projection(
     normed_states: pl.Tensor,
     wq: pl.Tensor,
-    q_proj: pl.Out[pl.Tensor],
+    q_proj: pl.Tensor,
 ):
     """Q projection: tiled matmul over the K dimension, parallel over N."""
     for q0 in pl.parallel(0, HIDDEN, Q_OUT_CHUNK):
@@ -57,11 +57,11 @@ def q_projection(
     return q_proj
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def k_projection(
     normed_states: pl.Tensor,
     wk: pl.Tensor,
-    k_proj: pl.Out[pl.Tensor],
+    k_proj: pl.Tensor,
 ):
     """K projection.
 
@@ -85,11 +85,11 @@ def k_projection(
     return k_proj
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def v_projection(
     normed_states: pl.Tensor,
     wv: pl.Tensor,
-    v_proj: pl.Out[pl.Tensor],
+    v_proj: pl.Tensor,
 ):
     """V projection — symmetric to K."""
     for kv0 in pl.parallel(0, KV_HIDDEN, KV_OUT_CHUNK):
@@ -107,12 +107,12 @@ def v_projection(
     return v_proj
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def out_projection_residual(
     attn_out: pl.Tensor,
     hidden_states: pl.Tensor,
     wo: pl.Tensor,
-    resid1_tile: pl.Out[pl.Tensor],
+    resid1_tile: pl.Tensor,
 ):
     """attn_out @ wo + hidden_states  (Scope 3 stages 1+2)."""
     for ob in pl.parallel(0, HIDDEN // Q_OUT_CHUNK, 2):
@@ -142,12 +142,12 @@ def out_projection_residual(
     return resid1_tile
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def down_projection_residual(
     mlp_tile: pl.Tensor,
     resid1_tile: pl.Tensor,
     w_down: pl.Tensor,
-    out: pl.Out[pl.Tensor],
+    out: pl.Tensor,
 ):
     """Down projection of MLP output + final residual writeback (Scope 3 stages 7+8)."""
     for db in pl.parallel(0, HIDDEN // DOWN_N_CHUNK, 2):
