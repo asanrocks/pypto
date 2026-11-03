@@ -7,7 +7,11 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Parser error exceptions with rich diagnostic information."""
+"""Frontend-common diagnostic exceptions.
+
+Both language frontends and the shared validation layer raise these; the
+parser frontend's diagnostics package re-exports them alongside its
+parser-specific machinery (error codes, renderer)."""
 
 import re
 from typing import Final
