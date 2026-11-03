@@ -84,7 +84,7 @@ class Split(Optimization):
             ``SplitMode.LEFT_RIGHT``).
         slot_num: **Deprecated** — use ``pl.cross_core_slot(slot_num=N)``, which
             carries the same value without naming a split mode. Kept as an alias so existing kernels keep
-            working; see [`CrossCoreSlot`][pypto.language.optimizations.CrossCoreSlot].
+            working; see [`CrossCoreSlot`][pypto.language.constructs.optimizations.CrossCoreSlot].
     """
 
     mode: SplitMode
