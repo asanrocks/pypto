@@ -332,7 +332,6 @@ output directory, or an outer `PassContext` with instruments — are never
 served from the cache: each one compiles fresh, and an ordinary compatible
 call afterwards still reuses the warm artifact.
 
-
 ### Parameter worlds
 
 The annotation decides whether an argument is runtime data or a compile-time
@@ -580,6 +579,57 @@ instead of tracing an unverified lane.
 That list is the boundary: a kernel that needs a capability it leaves out stays
 on the parsing lane, and a traced body that calls a parser-lane kernel raises
 instead of silently leaving the frontend.
+
+### Parsing bodies calling traced inline helpers
+
+A `@pl.jit` body may call a `@pl.jit_trace.inline` helper, so a shared
+computational leaf can migrate before the callers that use it:
+
+```python
+@pl.jit_trace.inline(auto_scope=False)
+def affine(x: pl.Tensor, gain: pl.constexpr):
+    return pl.mul(x, gain)
+
+@pl.jit
+def entry(a: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        out[:] = affine(a, gain=2.0)
+    return out
+```
+
+The helper is specialized at the call site and joins the caller's program as an
+inline function, which `InlineFunctions` then splices — no traced ABI function
+enters the program and no artifact is shared with the traced lane. Three rules
+follow from that:
+
+- **Inline only, transitively.** Everything the helper's own body reaches must
+  also be inline. A helper that calls a traced `incore` / `opaque` / `graph`
+  callee is refused, naming the callee: composing traced ABI functions into a
+  parser program is not supported, and neither is the reverse direction.
+- **The declaration is the contract.** The call site supplies the staged
+  parameter types that specialize the helper, and they are checked against its
+  annotations (`pl.Tensor[[64, 64], pl.BF16]` refuses an FP32 argument). A parser
+  dependency would be re-declared from its call site instead; a traced helper is
+  not.
+- **Compile-time values are folded per call site.** A `pl.constexpr` or
+  unannotated parameter takes its value from the call's own source — a literal,
+  one of the caller's `pl.constexpr` parameters, or a module-level/closure
+  constant — and the folded text is part of the caller's cache identity, exactly
+  as a parser dependency's constant is. Signature defaults are not read; every
+  call passes the value explicitly.
+
+A staged argument is typed from its own parsed IR type — the type the value
+carries at that point in the caller, including its layout, view, valid region,
+memory space and distributed kind — so a computed expression (`pl.reshape(tile,
+[32, 128])`, a sliced view) resolves exactly like a plain name, and the helper
+is collected against precisely what the call passes. That type is checked
+against the helper's declaration before the call is emitted. The call's own
+arguments are checked before anything is emitted, so a surplus, unknown,
+duplicated or missing argument fails rather than silently vanishing from the
+generated call. The helper's body is collected when the caller's program is
+built, so a warm compiled caller does not re-observe arbitrary Python state —
+changing such a state is a new specialization only after the caller is rebuilt.
+
 ## Functions
 
 ```python

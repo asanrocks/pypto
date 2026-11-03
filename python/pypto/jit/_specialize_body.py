@@ -14,12 +14,17 @@ scope state. Metadata previews subclass the same transformer so their folding
 and rebinding rules stay aligned with emitted source.
 """
 
+from __future__ import annotations
+
 import ast
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from . import _specialize_values as values
 from ._specialize_types import DynDim, TensorMeta
+
+if TYPE_CHECKING:
+    from .specializer import TracedCall
 
 
 class BodyTransformer(ast.NodeTransformer):
@@ -35,7 +40,7 @@ class BodyTransformer(ast.NodeTransformer):
     - Multi-function: rewrite bare ``dep_func(...)`` calls to ``self.dep_func(...)``.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - one arg per body-rewrite fact
         self,
         tensor_meta: dict[str, TensorMeta],
         dep_names: set[str],
@@ -47,6 +52,7 @@ class BodyTransformer(ast.NodeTransformer):
         constexpr_values: Mapping[str, str] | None = None,
         dep_constexpr_params: dict[str, set[str]] | None = None,
         dep_call_targets: Mapping[int, str] | None = None,
+        traced_call_targets: Mapping[int, TracedCall] | None = None,
     ) -> None:
         super().__init__()
         self._meta = dict(tensor_meta)
@@ -64,6 +70,12 @@ class BodyTransformer(ast.NodeTransformer):
         # both resolving to whichever one the name happens to map to. Empty
         # unless some name really does reach more than one function.
         self._dep_call_targets = dict(dep_call_targets or {})
+        # ``id(call node) → imported traced-inline helper``. A call the parser
+        # lane cannot resolve on its own: the helper has no source in the
+        # generated program, so the call is rewritten to the imported function's
+        # bare program name and its compile-time arguments are dropped, exactly
+        # as a parser dependency's ``pl.constexpr`` args are.
+        self._traced_call_targets = dict(traced_call_targets or {})
         # DynVar name → (anchor_param, anchor_dim_idx). ``visit_Name`` uses
         # this to rewrite runtime references like ``pl.create_tensor([M, ...])``
         # via ``_dyn_dim_expr`` so the annotation-only DynVar doesn't leak past
@@ -511,6 +523,8 @@ class BodyTransformer(ast.NodeTransformer):
         Inter-function calls inside ``@pl.program`` only accept positional
         args — preserving keyword form would make the parser reject the call.
         """
+        if isinstance(node.func, ast.Name) and id(node) in self._traced_call_targets:
+            return self._rewrite_traced_call(node, self._traced_call_targets[id(node)])
         if isinstance(node.func, ast.Name) and node.func.id in self._dep_names:
             dep_name = self._dep_call_targets.get(
                 id(node), self._dep_func_names.get(node.func.id, node.func.id)
@@ -553,6 +567,31 @@ class BodyTransformer(ast.NodeTransformer):
             ast.copy_location(new_node, node)
             return cast("ast.expr", self.generic_visit(new_node))
         return cast("ast.expr", self.generic_visit(node))
+
+    def _rewrite_traced_call(self, node: ast.Call, target: TracedCall) -> ast.expr:
+        """Rewrite ``helper(...)`` into the site's parse-namespace binding.
+
+        Only the helper's runtime parameters may cross the call: the compile-time
+        ones were folded at specialization time and their values live on the
+        binding object, and the imported function's signature does not declare
+        them. Keywords are normalized to positional order because a bare-name
+        call into ``@pl.program`` only accepts positional arguments — the same
+        normalization a parser dependency gets.
+
+        The bind is validated first (``bind_call_args``), not built by
+        overwriting a dict: this rewrite decides which arguments the compiled
+        program passes, so a surplus, unknown, duplicated or missing one has to
+        fail here rather than disappear from the emitted call.
+        """
+        from ._call_binding import bind_call_args  # noqa: PLC0415 - avoid an import cycle at module load
+
+        call_name = node.func.id if isinstance(node.func, ast.Name) else target.binding
+        bound = bind_call_args(target.param_names, node, call_name)
+        kept = [bound[param] for param in target.param_names if param not in target.baked]
+        new_node = ast.Call(func=ast.Name(id=target.binding, ctx=ast.Load()), args=kept, keywords=[])
+        ast.copy_location(new_node, node)
+        ast.fix_missing_locations(new_node)
+        return cast("ast.expr", self.generic_visit(new_node))
 
     def _visit_scoped_body(self, statements: list[ast.stmt]) -> list[ast.stmt]:
         """Visit statements within a nested scope, flattening lists and dropping None."""

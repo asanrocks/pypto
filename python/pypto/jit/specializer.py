@@ -99,6 +99,49 @@ class _EagerTileAnnotations:
     parameter_placeholders: dict[str, dict[str, str]] = field(default_factory=dict[str, dict[str, str]])
 
 
+@dataclass(frozen=True)
+class TracedCall:
+    """One call site of an imported traced-inline helper.
+
+    ``binding`` is the parse-namespace name this site's rewritten call
+    targets: the parser resolves that name to the site's binding object and
+    materializes the helper variant from the parsed argument IR types, which
+    is where the argument's full type still exists. ``param_names`` is the
+    helper's declared parameter order, which a keyword argument is normalized
+    against; ``baked`` are the parameters the trace consumed, so the emitted
+    call must not pass them — the imported signature no longer declares them.
+    """
+
+    binding: str
+    param_names: tuple[str, ...]
+    baked: frozenset[str]
+
+
+def _resolve_traced_call_targets(
+    func_def: ast.FunctionDef,
+    per_site: Mapping[tuple[str, int], TracedCall],
+) -> dict[int, TracedCall]:
+    """Map ``id(call node)`` → the imported helper that call site reaches.
+
+    Keyed by ``(call name, ordinal)`` exactly like ``_resolve_dep_call_targets``,
+    and for the same reason: the JIT layer resolved the call sites against its
+    own copy of the source, so only the call's position among same-named calls
+    in source order identifies it on both sides.
+    """
+    by_name: dict[str, list[ast.Call]] = {}
+    for node in ast.walk(func_def):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if any(name == node.func.id for name, _ in per_site):
+                by_name.setdefault(node.func.id, []).append(node)
+    targets: dict[int, TracedCall] = {}
+    for name, calls in by_name.items():
+        for index, call in enumerate(sorted(calls, key=lambda call: (call.lineno, call.col_offset))):
+            target = per_site.get((name, index))
+            if target is not None:
+                targets[id(call)] = target
+    return targets
+
+
 @dataclass
 class SpecializeContext:
     """All information needed to specialize a single JIT function.
@@ -212,6 +255,14 @@ class SpecializeContext:
     # remain expressions so call bindings and local dimensions take precedence.
     eager_tile_annotations: _EagerTileAnnotations = field(default_factory=_EagerTileAnnotations)
     annotation_dynvars: dict[str, str] = field(default_factory=dict[str, str])
+    # Also appended at the tail (see above): ``(call name, ordinal) ->`` the
+    # imported traced-inline helper that call site reaches. These calls have no
+    # source in this program; the JIT layer folded each site's compile-time
+    # values and bound the site under a private parse-namespace name, so the
+    # body transformer rewrites the call to that name and drops the parameters
+    # the trace already consumed. The parser materializes the helper when it
+    # reaches the call, from the parsed arguments' own IR types.
+    traced_calls: dict[tuple[str, int], TracedCall] = field(default_factory=dict[tuple[str, int], TracedCall])
 
     @property
     def source_def_name(self) -> str:
@@ -632,6 +683,17 @@ def _annotation_symbol_index() -> dict[int, str]:
     return paths
 
 
+# The parse-namespace prefix the traced-inline import bridge mints its
+# call-site bindings under (``TracedInlineBuilder.add_site``). The generated
+# program declares dynamic symbols in that same module namespace before the
+# class body runs, and the bridge injects its bindings before exec — so a
+# dynamic spelled like a minted binding would overwrite the injected resolver
+# mid-exec and the rewritten call would resolve to the dynamic instead. The
+# mint's namespace is private; this constant is the single spelling both the
+# minter and the dynamic-symbol validation share.
+TRACED_INLINE_BINDING_PREFIX = "_pto_traced_inline_"
+
+
 def _validate_dynamic_symbol_name(name: str, *, declaration: bool = False) -> None:
     """Reject names that cannot safely appear in generated annotation source."""
     if not name.isidentifier() or keyword.iskeyword(name) or name == "__debug__":
@@ -648,6 +710,15 @@ def _validate_dynamic_symbol_name(name: str, *, declaration: bool = False) -> No
     if declaration and name in {"pl", "pld"}:
         raise ValueError(
             f"JIT dynamic symbol '{name}' is reserved for generated DSL imports; "
+            "choose a different dynamic symbol name"
+        )
+    if (
+        declaration
+        and name.startswith(TRACED_INLINE_BINDING_PREFIX)
+        and name[len(TRACED_INLINE_BINDING_PREFIX) :].isdigit()
+    ):
+        raise ValueError(
+            f"JIT dynamic symbol '{name}' is reserved for the traced-inline import bindings; "
             "choose a different dynamic symbol name"
         )
 
@@ -2057,6 +2128,9 @@ class Specializer:
                 if ctx.dep_call_variants
                 else {}
             ),
+            traced_call_targets=(
+                _resolve_traced_call_targets(func_def, ctx.traced_calls) if ctx.traced_calls else {}
+            ),
         )
         new_body = [transformer.visit(stmt) for stmt in func_def.body]
         # Accumulate alias→original renames for error message rewriting.
@@ -2346,6 +2420,7 @@ def build_specialize_context(  # noqa: PLR0913 — pass-through assembler; each 
     dep_func_names: dict[str, str] | None = None,
     constexpr_values: dict[str, str] | None = None,
     dep_call_variants: dict[tuple[str, int], str] | None = None,
+    traced_calls: dict[tuple[str, int], TracedCall] | None = None,
 ) -> SpecializeContext:
     """Build a SpecializeContext from a Python function and call-site data.
 
@@ -2415,6 +2490,7 @@ def build_specialize_context(  # noqa: PLR0913 — pass-through assembler; each 
         dep_names=dep_names,
         dep_func_names=dep_func_names or {},
         dep_call_variants=dep_call_variants or {},
+        traced_calls=traced_calls or {},
         auto_scope=auto_scope,
         py_globals=func_name_lookup(func),
         eager_tile_annotations=eager_data,

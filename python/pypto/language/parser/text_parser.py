@@ -15,6 +15,7 @@ import ast
 import linecache
 import sys
 import types
+from collections.abc import Mapping
 from typing import Any
 
 from pypto.language.diagnostics import BUG_CLASS_EXCEPTIONS, ParserError, ParserSyntaxError
@@ -222,6 +223,30 @@ def parse(
         >>> print(prog.name)
         MyProgram
     """
+    return _parse_staged(code, filename, source_map)
+
+
+def _parse_staged(  # noqa: PLR0912 - the parse pipeline, unchanged but for the bindings loop
+    code: str,
+    filename: str,
+    source_map: dict[int, tuple[str, int, int]] | None,
+    bindings: Mapping[str, Any] | None = None,
+) -> ir.Function | ir.Program:
+    """``parse`` with private names pre-bound in the executed namespace.
+
+    The ``@pl.jit`` frontend composes with the tracing frontend by binding a
+    traced-inline call site's resolver object — not an ``ir.Function`` — in
+    the executed namespace: the generated source has no definition for the
+    helper, and its specialization is derived from the parsed call's argument
+    IR types when the parser reaches the call. The binding carries the site's
+    folded compile-time values and materializes the imported function on
+    first use.
+
+    ``bindings`` are therefore *not* parse results — the top-level scan skips
+    them, since it would otherwise count an ``ir.Function`` a site materialized
+    as a second item in the file. Only the compiler's own composition path
+    passes them.
+    """
     # Import pypto.language here to avoid circular imports
     import pypto.language as pl  # noqa: PLC0415
     import pypto.language.distributed as pld  # noqa: PLC0415
@@ -252,6 +277,10 @@ def parse(
     temp_module.__file__ = filename
     temp_module.__setattr__("pl", pl)
     temp_module.__setattr__("pld", pld)
+    # Imported helpers, injected before exec so a bare-name call resolves them.
+    # They stay out of the module's own results (the scan below skips them).
+    for bound_name, bound_value in (bindings or {}).items():
+        temp_module.__setattr__(bound_name, bound_value)
 
     # Add module to sys.modules so inspect can find it
     sys.modules[module_name] = temp_module
@@ -304,9 +333,12 @@ def parse(
     namespace = exec_ns
 
     # Scan namespace for ir.Function and ir.Program instances
+    injected = frozenset(bindings or {})
     functions: list[ir.Function] = []
     programs: list[tuple[str, ir.Program]] = []
     for name, value in namespace.items():
+        if name in injected:
+            continue
         if isinstance(value, ir.Function):
             functions.append(value)
         elif isinstance(value, ir.Program):

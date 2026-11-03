@@ -20,6 +20,7 @@ from pypto.ir.printer import python_print
 from pypto.ir.type import _merge_annotation_metadata  # noqa: PLC2701
 from pypto.language.distributed import op as _dsl_pld
 from pypto.language.typing.dynamic import DynVar, dynamic
+from pypto.language.typing.type_utils import storage_bindings_match
 from pypto.pypto_core import DataType, ir
 
 from ._dsl_invoker import invoke_dsl
@@ -989,6 +990,15 @@ class ASTParser:
         if self.ops.is_param_dim_symbol(existing_var):
             existing_var = None
 
+        if (
+            existing_var is not None
+            and not self.scope_manager.strict_ssa
+            and not storage_bindings_match(existing_var.type, override_type or value_expr.type)
+        ):
+            # Assignment binds the newly produced value; it cannot retain a
+            # previous producer's allocation merely because shape/dtype agree.
+            existing_var = None
+
         if existing_var is not None and type(existing_var) is ir.Var and not self.scope_manager.strict_ssa:
             # Reject changes to the storage contract (#642). Pre-SSA tensor
             # validity may refine per definition; SSA keeps each RHS's view.
@@ -1918,6 +1928,12 @@ class ASTParser:
                 return self.calls.parse_external_function_call(func_name, resolved, call)
             if isinstance(resolved, InlineFunction):
                 return self.calls.parse_inline_call(func_name, resolved, call)
+            # The JIT bridge binds a traced-inline call site under the name its
+            # rewritten generated call uses; the marker is the whole contract,
+            # so this dispatch needs no jit import — the binding owns the
+            # specialization, the parser hands it the parsed arguments.
+            if getattr(resolved, "_pto_traced_inline", False):
+                return self.calls.parse_traced_inline_call(func_name, resolved, call)
 
         raise UnsupportedFeatureError(
             f"Unsupported function call: {ast.unparse(call)}",

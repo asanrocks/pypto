@@ -268,7 +268,6 @@ def scale_relu(
 profiling、显式输出目录、或携带 instrument 的外层 `PassContext`——绝不从缓存
 应答：每次都重新编译，随后的普通兼容调用仍复用原有的热产物。
 
-
 ### 参数世界
 
 注解决定实参是运行时数据还是编译期常量：
@@ -464,6 +463,49 @@ def tuple_of_results(
 
 这份清单就是边界：需要其中未列出的能力的 kernel 仍留在解析路径上，
 而追踪函数体调用解析路径上的 kernel 会直接报错，不会悄悄离开该前端。
+
+### 解析函数体调用追踪 inline 辅助函数
+
+`@pl.jit` 函数体可以调用 `@pl.jit_trace.inline` 辅助函数，因此共享的计算叶子
+可以先于其调用者迁移：
+
+```python
+@pl.jit_trace.inline(auto_scope=False)
+def affine(x: pl.Tensor, gain: pl.constexpr):
+    return pl.mul(x, gain)
+
+@pl.jit
+def entry(a: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        out[:] = affine(a, gain=2.0)
+    return out
+```
+
+辅助函数在调用点被特化，并以 inline 函数的形式加入调用者的 program，
+随后由 `InlineFunctions` 内联展开——不会把追踪 ABI 函数带入 program，
+也不会与追踪路径共享产物。由此有三条规则：
+
+- **仅限 inline，且逐层传递。** 辅助函数自身函数体调用到的函数也必须是 inline。
+  若它调用了追踪的 `incore` / `opaque` / `graph` 被调函数，会指出该被调函数并报错：
+  在解析 program 中组合追踪 ABI 函数不受支持，反向调用同样不受支持。
+- **声明即为契约。** 调用点提供的 staged 参数类型用于特化辅助函数，并会与其注解
+  校验（`pl.Tensor[[64, 64], pl.BF16]` 会拒绝 FP32 实参）。解析依赖会按调用点
+  重新声明，而追踪辅助函数不会。
+- **编译期取值按调用点折叠。** `pl.constexpr` 或无注解参数的取值来自调用点自身的
+  源码——字面量、调用者的某个 `pl.constexpr` 参数，或模块级/闭包常量——折叠后的
+  文本计入调用者的缓存标识，与解析依赖的常量一致。签名默认值不会被读取，
+  每次调用都必须显式传入。
+
+staged 实参由其解析后的 IR 类型决定——即该值在调用者中此处的类型，包括布局
+（layout）、视图（view）、有效区域（valid region）、存储空间（memory
+space）与分布式类型（distributed kind）——因此计算表达式
+（`pl.reshape(tile, [32, 128])`、切片视图）与普通名称一样可解析，辅助函数
+收集到的正是调用实际传递的内容。该类型在调用生成之前会与辅助函数的声明校验。
+调用的实参在生成任何内容前完成校验，因此多余、未知、重复或缺失的实参都会
+报错，而不会在生成的调用中静默消失。辅助函数的函数体在构建调用者 program
+时收集，因此已编译的调用者热调用不会重新观测任意 Python 状态——这类状态
+变化只有在调用者被重新构建后才成为新的特化。
+
 ## 函数
 
 ```python

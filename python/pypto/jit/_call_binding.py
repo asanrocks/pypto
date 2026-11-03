@@ -465,6 +465,66 @@ def expand_constexpr_variants(
     return plan
 
 
+def bind_call_args(param_names: Sequence[str], node: ast.Call, call_name: str) -> dict[str, ast.expr]:
+    """Bind one call's argument *expressions* to its declared parameter names.
+
+    The returned map is the call's complete binding: every declared parameter
+    appears exactly once, in declaration order. Callers that fold compile-time
+    values, that emit the call into generated source, and that type the result
+    all consume this same map, so none of them can see a different argument
+    than another.
+
+    Every malformed spelling is rejected here rather than dropped. Building the
+    map by overwriting a dict silently discarded an extra positional argument,
+    ignored an unknown keyword, and let a duplicate binding pick whichever
+    value came last — three input errors that would otherwise change the
+    generated program with no diagnostic.
+
+    Args:
+        param_names: The callee's declared parameter order
+        node: The call node whose arguments to bind
+        call_name: The name the call site uses, for diagnostics
+
+    Returns:
+        Parameter name → the argument expression bound to it
+
+    Raises:
+        TypeError: An argument is unbound, duplicated, unknown, or surplus.
+    """
+    bound: dict[str, ast.expr] = {}
+    declared = list(param_names)
+    for index, arg in enumerate(node.args):
+        if index >= len(declared):
+            raise TypeError(
+                f"call to {call_name!r} passes {len(node.args)} positional argument(s) but the "
+                f"callee declares {len(declared)}; remove the surplus argument"
+            )
+        bound[declared[index]] = arg
+    for keyword in node.keywords:
+        if keyword.arg is None:
+            raise TypeError(
+                f"call to {call_name!r} uses **kwargs, which cannot be bound to the "
+                "callee's declared parameters; pass each argument by name or position"
+            )
+        if keyword.arg not in declared:
+            raise TypeError(
+                f"call to {call_name!r} passes no parameter {keyword.arg!r}; the callee declares {declared}"
+            )
+        if keyword.arg in bound:
+            raise TypeError(
+                f"call to {call_name!r} binds parameter {keyword.arg!r} both positionally "
+                "and by keyword; bind it once"
+            )
+        bound[keyword.arg] = keyword.value
+    missing = [name for name in declared if name not in bound]
+    if missing:
+        raise TypeError(
+            f"call to {call_name!r} does not bind parameter(s) {missing}; every parameter "
+            "must be supplied — a signature default is not read for an imported helper"
+        )
+    return bound
+
+
 def call_arg_refs(node: ast.Call) -> list[tuple[str | None, str | SlicedArg | None]]:
     """Unify one call node's positional and keyword args into ``(param, ref)`` pairs.
 
