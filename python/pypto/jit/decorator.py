@@ -73,6 +73,21 @@ from pypto._identity import digest_record
 from pypto._target import _platform_string
 from pypto.backend._ptoas_locate import find_ptoas_binary
 from pypto.ir.compile import make_default_output_dir
+from pypto.language.tracing.inline import (
+    TracedInlineBuilder,
+    TracedInlineCallSite,
+    _baked_names,
+    _baked_value,
+    _call_arg_nodes,
+    discover_traced_inline,
+    traced_source_records,
+)
+from pypto.language.tracing.inline import (
+    baked_call_identity as _baked_call_identity,
+)
+from pypto.language.tracing.inline import (
+    call_sites_by_name as _traced_calls_by_name,
+)
 from pypto.pypto_core import DataType
 from pypto.pypto_core import ir as _ir
 from pypto.pypto_core.passes import runtime_kind_to_name
@@ -85,6 +100,7 @@ from .specializer import (
     SpecializeContext,
     Specializer,
     TensorMeta,
+    TracedCall,
     _classify_params,
     build_specialize_context,
     extern_return_annotation_fingerprint,
@@ -285,6 +301,54 @@ class _CachedLayouts(NamedTuple):
 
 
 @dataclass
+class _SpecializationPlan:
+    """One request's generated functions: parser contexts plus traced imports.
+
+    ``contexts`` is the parser source program; ``traced`` carries the call-site
+    bindings the parse step resolves — each materializing its helper variant
+    from the parsed argument IR types — and the cache key's identity for the
+    imported closure.
+    """
+
+    contexts: list[SpecializeContext]
+    traced: TracedInlineBuilder
+
+
+def _parse_generated(
+    source: str,
+    filename: str,
+    source_map: dict[int, tuple[str, int, int]] | None,
+    traced: TracedInlineBuilder,
+) -> Any:
+    """Parse this request's generated program, with its traced call sites bound.
+
+    Each traced-inline call site is bound under the name its rewritten call
+    uses; the parser resolves that binding when it reaches the call and
+    materializes the helper from the parsed arguments' own IR types. A build
+    that imported nothing takes the plain ``pl.parse`` path.
+    """
+    bindings = traced.imports()
+    if not bindings:
+        import pypto.language as pl  # noqa: PLC0415 - import cycle
+
+        return pl.parse(source, filename=filename, source_map=source_map)
+    from pypto.language.parser.text_parser import _parse_staged  # noqa: PLC0415 - import cycle
+    from pypto.pypto_core import ir as _ir  # noqa: PLC0415 - import cycle
+
+    program = _parse_staged(source, filename, source_map, bindings)
+    if not isinstance(program, _ir.Program):
+        return program
+    # Every materialized import joins the program here — whether a parsed
+    # statement called it (a binding the parser resolved, already merged like
+    # an external function) or only another imported helper's *body* names it.
+    present = {gvar.name for gvar in program.functions}
+    extra = [fn for fn in traced.functions if fn.name not in present]
+    if not extra:
+        return program
+    return _ir.Program([*program.functions.values(), *extra], program.name, program.span)
+
+
+@dataclass
 class _CachedDepGraph:
     """Read-only graph data with an atomically replaced layout cache."""
 
@@ -294,6 +358,11 @@ class _CachedDepGraph:
     layout_dependencies: tuple[tuple[Any, tuple[str, ...]], ...]
     layouts: _CachedLayouts | None = None
     persistent_source_hash: str | None = None
+    # Identity of the traced inline helpers this request imports. Part of the
+    # reuse check, not just of the hash: rebinding a name to a different helper
+    # leaves the parser bindings untouched, so without this a warmed graph would
+    # keep serving the old helper's source hash.
+    traced_source: tuple[tuple[Any, ...], ...] = ()
 
 
 @functools.lru_cache(maxsize=512)
@@ -493,11 +562,13 @@ class JITFunction:
     def _get_dep_graph_state(self) -> _CachedDepGraph:
         """Pin a graph and its derived caches to the current request."""
         cached = self._dep_graph_state
+        reached = [self, *(cached.graph.deps if cached else [])]
+        traced_source = traced_source_records([fn._func for fn in reached])
         if cached is not None:
             bindings = tuple(
                 tuple(_discover_dep_bindings(fn._func, fn._func_type)) for fn in [self, *cached.graph.deps]
             )
-            if bindings == cached.bindings:
+            if bindings == cached.bindings and traced_source == cached.traced_source:
                 return cached
         deps_topo: list[JITFunction] = []
         seen: set[int] = set()
@@ -551,6 +622,7 @@ class JITFunction:
             (dep._func, names) for dep in deps_topo if (names := _layout_dependency_names(dep._func))
         )
         state = _CachedDepGraph(graph, bindings, source_hash, layout_dependencies)
+        state.traced_source = traced_source
         self._dep_graph_state = state
         return state
 
@@ -610,6 +682,10 @@ class JITFunction:
                         extern_return_annotation_fingerprint(func),
                     )
                 )
+        # Imported traced helpers are not parser functions, so nothing above
+        # sees them: their bodies and the constants they fold are their own
+        # contribution to the program the caller compiles.
+        records.extend(self._get_dep_graph_state().traced_source)
         return compute_source_hash([source_hash, json.dumps(records, separators=(",", ":"))])
 
     def _resolve_constexpr_bindings(self, entry_constexpr: Mapping[str, str]) -> _call_binding.VariantPlan:
@@ -660,6 +736,11 @@ class JITFunction:
         for key in plan.order:
             func = plan.jit_func[key]._func
             index = position.get(id(func), -1)
+            # Compile-time values baked into imported traced helpers are part of
+            # what this request compiles, exactly like a parser dependency's
+            # ``pl.constexpr`` arguments above.
+            for baked in _baked_call_identity(func, plan.binding[key]):
+                records.append((index, func.__module__, func.__qualname__, *baked))
             binding = _call_binding.freeze_binding(plan.binding[key])
             for name, text in binding:
                 records.append((index, func.__module__, func.__qualname__, name, text))
@@ -1173,6 +1254,10 @@ class JITFunction:
                     metadata=(*fn._external_source_paths(), *fn._external_include_dirs),
                 )
                 values.append((index, "<extern>", external))
+        # Imported traced helpers: the persisted artifact changes exactly when the
+        # helper source or a constant it folds changes, for the same reason the
+        # parser functions above are hashed.
+        values.extend(state.traced_source)
         return _persistent_dynamic_digest(state.persistent_source_hash, tuple(values))
 
     def _extern_tensor_meta(self, args: tuple[Any, ...]) -> dict[str, TensorMeta]:
@@ -1589,13 +1674,13 @@ class JITFunction:
         """
         from pypto.ir.compile import compile as ir_compile  # noqa: PLC0415
 
-        contexts = self._build_contexts(tensor_meta, scalar_dtypes, constexpr_values, per_func_dyn)
+        plan = self._build_specialization(tensor_meta, scalar_dtypes, constexpr_values, per_func_dyn)
         class_name = f"_jit_{self.__name__}"
-        specializer = Specializer(class_name, contexts)
+        specializer = Specializer(class_name, plan.contexts)
         source = specializer.specialize()
         rename_map = specializer.rename_map
         try:
-            parsed = pl.parse(source, filename=self._diagnostic_filename, source_map=specializer.source_map)
+            parsed = _parse_generated(source, self._diagnostic_filename, specializer.source_map, plan.traced)
             skip_ptoas = not _ptoas_available()
             if ir_compile_kwargs.get("output_dir") is None:
                 ir_compile_kwargs["output_dir"] = make_default_output_dir(parsed.name)
@@ -1633,13 +1718,13 @@ class JITFunction:
         pl: Any,
     ) -> tuple[Any, dict[str, str]]:
         """Return the parsed pre-pass program and specializer rename map."""
-        contexts = self._build_contexts(tensor_meta, scalar_dtypes, constexpr_values, per_func_dyn)
+        plan = self._build_specialization(tensor_meta, scalar_dtypes, constexpr_values, per_func_dyn)
         class_name = f"_jit_{self.__name__}"
-        specializer = Specializer(class_name, contexts)
+        specializer = Specializer(class_name, plan.contexts)
         source = specializer.specialize()
         rename_map = specializer.rename_map
         try:
-            program = pl.parse(source, filename=self._diagnostic_filename, source_map=specializer.source_map)
+            program = _parse_generated(source, self._diagnostic_filename, specializer.source_map, plan.traced)
             from pypto.ir._entry_outputs import resolve_entry_return_type  # noqa: PLC0415
 
             program = _ir.Program(
@@ -1664,6 +1749,16 @@ class JITFunction:
         constexpr_values: dict[str, str],
         per_func_dyn: dict[int, dict[str, dict[int, DynDim]]],
     ) -> list[SpecializeContext]:
+        """Build SpecializeContext list for entry + every transitive dep."""
+        return self._build_specialization(tensor_meta, scalar_dtypes, constexpr_values, per_func_dyn).contexts
+
+    def _build_specialization(  # noqa: PLR0913 - one arg per specialization input
+        self,
+        tensor_meta: dict[str, TensorMeta],
+        scalar_dtypes: dict[str, DataType],
+        constexpr_values: dict[str, str],
+        per_func_dyn: dict[int, dict[str, dict[int, DynDim]]],
+    ) -> _SpecializationPlan:
         """Build SpecializeContext list for entry + every transitive dep.
 
         Walks the JIT call graph from ``_get_dep_graph()``:
@@ -1683,6 +1778,11 @@ class JITFunction:
 
         The returned list is in leaf-first order (deps before their
         callers) so the generated source defines callees before callers.
+
+        The plan also carries the traced-inline helpers the parsed bodies
+        import: every ``@pl.jit_trace.inline`` call site is specialized here,
+        from the same caller-first metadata walk, and lands in the program as an
+        imported Inline function rather than as parser source.
         """
         _, callers_by_id, callees_by_id, _ = self._get_dep_graph()
         empty_dyn: dict[str, dict[int, DynDim]] = {}
@@ -1752,6 +1852,57 @@ class JITFunction:
         ] = {entry_key: (tensor_meta, scalar_dtypes)}
 
         contexts: list[SpecializeContext] = []
+        # Imported traced-inline helpers for this program build. One builder
+        # owns the call-site bindings, the name allocation and the variant
+        # dedup for every caller body; specialization itself happens at parse
+        # time, when the arguments exist as parsed IR values. The reserved
+        # locals are every caller body's own local names, so a minted binding
+        # name cannot land on one of them (see ``TracedInlineBuilder.add_site``).
+        traced = TracedInlineBuilder(
+            used_names={*gen_names.values(), self.__name__},
+            reserved_locals=frozenset[str]().union(
+                *(_ast_analysis.body_local_names(plan.jit_func[key]._func) for key in plan.order)
+            ),
+        )
+        contexts = self._walk_specialization(
+            traced,
+            plan,
+            entry_key,
+            gen_names,
+            func_type_by_id,
+            callers_by_id,
+            callees_by_id,
+            dep_func_names_by_variant,
+            dep_call_variants_by_variant,
+            resolved,
+            tensor_meta,
+            scalar_dtypes,
+            constexpr_values,
+            per_func_dyn,
+            empty_dyn,
+        )
+        return _SpecializationPlan(contexts=contexts, traced=traced)
+
+    def _walk_specialization(  # noqa: PLR0913 - one arg per plan fact, kept explicit
+        self,
+        traced: TracedInlineBuilder,
+        plan: _call_binding.VariantPlan,
+        entry_key: _call_binding.VariantKey,
+        gen_names: dict[Any, str],
+        func_type_by_id: dict[int, str],
+        callers_by_id: dict[int, list[Any]],
+        callees_by_id: dict[int, list[str]],
+        dep_func_names_by_variant: dict[_call_binding.VariantKey, dict[str, str]],
+        dep_call_variants_by_variant: dict[_call_binding.VariantKey, dict[tuple[str, int], str]],
+        resolved: dict[_call_binding.VariantKey, tuple[dict[str, TensorMeta], dict[str, DataType]]],
+        tensor_meta: dict[str, TensorMeta],
+        scalar_dtypes: dict[str, DataType],
+        constexpr_values: dict[str, str],
+        per_func_dyn: dict[int, dict[str, dict[int, DynDim]]],
+        empty_dyn: dict[str, dict[int, DynDim]],
+    ) -> list[SpecializeContext]:
+        """Build every context, resolving traced-inline calls from each caller."""
+        contexts: list[SpecializeContext] = []
         for key in reversed(plan.order):
             dep = plan.jit_func[key]
             if key == entry_key:
@@ -1767,6 +1918,7 @@ class JITFunction:
                         dep_names=callees_by_id[id(self._func)],
                         dep_func_names=dep_func_names_by_variant.get(key, {}),
                         dep_call_variants=dep_call_variants_by_variant.get(key, {}),
+                        traced_calls=self._traced_call_sites(traced, self._func, constexpr_values),
                         auto_scope=self._auto_scope,
                         external_core_type=self._external_core_type,
                         external_aic_source=self._external_aic_source,
@@ -1804,6 +1956,11 @@ class JITFunction:
                 call_node=call_node,
                 caller_constexpr=plan.binding[caller_key],
                 discover_deps=_discover_dep_bindings,
+                # This extraction walks ``caller_func``'s body, so its traced
+                # calls resolve against that body — not the dep's. A dep body
+                # reached by the metadata descent gets its own map through the
+                # factory.
+                traced_inline_for=traced.resolver_factory(_discover_dep_bindings),
             )
             resolved[key] = (dep_meta, dep_sd)
             contexts.append(
@@ -1818,6 +1975,7 @@ class JITFunction:
                     dep_names=callees_by_id[id(dep._func)],
                     dep_func_names=dep_func_names_by_variant.get(key, {}),
                     dep_call_variants=dep_call_variants_by_variant.get(key, {}),
+                    traced_calls=self._traced_call_sites(traced, dep._func, plan.binding[key]),
                     auto_scope=dep._auto_scope,
                     external_core_type=dep._external_core_type,
                     external_aic_source=dep._external_aic_source,
@@ -1828,6 +1986,58 @@ class JITFunction:
             )
         contexts.reverse()
         return contexts
+
+    def _traced_call_sites(
+        self,
+        traced: TracedInlineBuilder,
+        caller_func: Any,
+        caller_constexpr: Mapping[str, str],
+    ) -> dict[tuple[str, int], TracedCall]:
+        """Fold every traced-inline call site in one caller body into bindings.
+
+        Keyed by ``(call name, ordinal)``, the same identity the body
+        transformer enumerates over its own copy of the source. An empty map is
+        the common case: a body that imports nothing costs one AST scan for the
+        bound names and nothing else.
+
+        The rewrite needs each site's runtime parameter order and the
+        compile-time parameters to drop; the parse-time resolution needs the
+        folded values themselves. Both are computed once here, from the same
+        validated bind (``bind_call_args``), so the generated call and the
+        imported variant can never disagree about the arguments.
+        """
+        bindings = discover_traced_inline(caller_func)
+        if not bindings:
+            return {}
+        scope = _tensor_meta._StaticScope.of(caller_func, caller_constexpr)
+        nodes_by_name = _traced_calls_by_name(bindings, caller_func)
+        sites: dict[tuple[str, int], TracedCall] = {}
+        for binding in bindings:
+            param_names = tuple(binding.helper.param_names)
+            baked = _baked_names(binding.helper)
+            for ordinal, call_node in enumerate(nodes_by_name[binding.call_name]):
+                call_args = _call_arg_nodes(list(param_names), call_node, binding.call_name)
+                baked_values: dict[str, Any] = {}
+                for param in sorted(baked):
+                    value, _text = _baked_value(
+                        binding.call_name, param, call_args[param], scope, caller_constexpr
+                    )
+                    baked_values[param] = value
+                binding_name = traced.add_site(
+                    TracedInlineCallSite(
+                        call_name=binding.call_name,
+                        helper=binding.helper,
+                        param_names=param_names,
+                        baked=baked,
+                        baked_values=baked_values,
+                    )
+                )
+                sites[(binding.call_name, ordinal)] = TracedCall(
+                    binding=binding_name,
+                    param_names=param_names,
+                    baked=baked,
+                )
+        return sites
 
     def __repr__(self) -> str:
         return f"JITFunction({self.__name__!r}, func_type={self._func_type!r})"

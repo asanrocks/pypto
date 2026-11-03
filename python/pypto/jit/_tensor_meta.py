@@ -39,6 +39,26 @@ from .specializer import (
 if TYPE_CHECKING:
     from .decorator import JITFunction
 
+TracedInlineResolver = Callable[
+    [ast.Call, "Sequence[ast.expr]", Mapping[str, "TensorMeta"]], list["_DepReturn"]
+]
+"""Answer one imported traced-inline call's result metadata, per target.
+
+The bridge passes a callable rather than the builder's type so this module keeps
+its one-way dependency on the JIT decorator: metadata inference asks a question,
+and the import bridge answers it with the helper variant it materialized. One
+entry per assignment target, so an untargeted result keeps its previous
+metadata.
+"""
+
+TracedInlineResolverFactory = Callable[[Any, str, Mapping[str, str]], Mapping[str, TracedInlineResolver]]
+"""Build the resolver map for one body, from its function, kind and bindings.
+
+A resolver closes over the body it was built for — its source, its locals, its
+``pl.constexpr`` values — so it cannot answer for a different body. A callee's
+descent therefore asks for a fresh map instead of inheriting the caller's.
+"""
+
 
 # Prefix for the dynamic symbols ``@pl.jit`` invents when a local tensor's
 # extent is only known at runtime. Reserved: user DSL code must not declare
@@ -155,6 +175,16 @@ class _DepScan(NamedTuple):
     owner: str
     # Keep runtime JIT recognition at the decorator boundary, also for callee returns.
     discover_deps: _call_binding.DiscoverDeps
+    # Call name → resolver for an imported traced-inline helper. Such a callee
+    # has no parser source to descend into, so the JIT layer's import bridge
+    # answers with the materialized variant's own return types instead. Empty
+    # (and never mutated) for every pure-parser build, and always bound to the
+    # body this scan walks.
+    traced_inline: Mapping[str, "TracedInlineResolver"] = {}
+    # Builds the map above for *any* body, so a callee descent types the
+    # callee's traced calls against the callee's own source. ``None`` for every
+    # pure-parser build.
+    traced_inline_for: "TracedInlineResolverFactory | None" = None
 
 
 def _target_names(target: ast.expr) -> list[str]:
@@ -170,19 +200,16 @@ def _target_names(target: ast.expr) -> list[str]:
     return []
 
 
-def _return_element_names(func_def: ast.FunctionDef) -> list[str]:
-    """Return the names a function's first value-carrying ``return`` hands back.
+def _return_elements(func_def: ast.FunctionDef) -> list[ast.expr]:
+    """The value expressions of a function's first value-carrying ``return``.
 
-    ``return a, b`` → ``["a", "b"]``; ``return a`` → ``["a"]``. An element that
-    is not a bare ``Name`` (a call, a subscript, a literal) yields ``""`` so the
-    positional alignment with the caller's targets survives — the empty name
-    simply resolves to no meta.
+    ``return a, b`` → ``[a, b]``; ``return a`` → ``[a]``. One entry per result
+    position, so a caller's targets line up with what the callee hands back.
     """
     for node in ast.walk(func_def):
         if not (isinstance(node, ast.Return) and node.value is not None):
             continue
-        elts = node.value.elts if isinstance(node.value, ast.Tuple) else [node.value]
-        return [e.id if isinstance(e, ast.Name) else "" for e in elts]
+        return list(node.value.elts) if isinstance(node.value, ast.Tuple) else [node.value]
     return []
 
 
@@ -269,8 +296,10 @@ def _dep_return_metas(
     comes back in ``stale`` rather than silently absent. The caller would
     otherwise keep the meta the target carried before the call — demonstrably
     the wrong tensor, since the callee rebinds it — and hand that shape to the
-    next dep. An element that is not a bare ``Name`` (a call, a literal)
-    establishes nothing either way and is simply left out.
+    next dep. An element that is not a bare ``Name`` (a literal, a subscript)
+    establishes nothing either way and is simply left out — except a direct call
+    to an imported traced helper, whose materialized result types answer for
+    that position (the ``return leaf(x)`` wrapper shape).
 
     Returns :data:`_DEP_RETURN_DECLINED` when the callee's source is
     unavailable, its return arity doesn't match the target, or it is already on
@@ -281,11 +310,12 @@ def _dep_return_metas(
     if dep is None or not names or id(dep._func) in deps.seen:
         return _DEP_RETURN_DECLINED
     try:
-        ret_names = _return_element_names(_ast_analysis.get_func_def(dep._func))
+        elements = _return_elements(_ast_analysis.get_func_def(dep._func))
     except OSError:
         return _DEP_RETURN_DECLINED
-    if len(ret_names) != len(names):
+    if len(elements) != len(names):
         return _DEP_RETURN_DECLINED
+    ret_names = [element.id if isinstance(element, ast.Name) else "" for element in elements]
     dep_params, _ = deps.io[dep_name]
     seed_meta: dict[str, TensorMeta] = {}
     for dep_param, caller_arg in _call_binding.build_param_mapping(
@@ -299,14 +329,25 @@ def _dep_return_metas(
         if caller_arg in local:
             seed_meta[dep_param] = local[caller_arg]
     _validate_dep_packed_fp4_dtypes(dep, seed_meta)
+    callee_constexpr = _call_site_constexpr(dep, call, deps)
+    # The callee's own body: its traced calls must resolve against its own
+    # source and bindings, so ask for a fresh map through the factory rather than
+    # forwarding the caller's (which is bound to another body).
+    callee_resolvers: Mapping[str, TracedInlineResolver] = (
+        deps.traced_inline_for(dep._func, dep._func_type, callee_constexpr)
+        if deps.traced_inline_for is not None
+        else {}
+    )
     callee_metas = extract_local_tensor_metas(
         dep._func,
         seed_meta=seed_meta,
         caller_func_type=dep._func_type,
         dep_seen=deps.seen,
-        constexpr_values=_call_site_constexpr(dep, call, deps),
+        constexpr_values=callee_constexpr,
         discover_deps=deps.discover_deps,
         visible_only=True,
+        traced_inline=callee_resolvers,
+        traced_inline_for=deps.traced_inline_for,
     )
     inherited_dims = {id(dim) for meta in seed_meta.values() for dim in meta.shape if isinstance(dim, DynDim)}
     instance_dims: dict[int, DynDim] = {}
@@ -326,12 +367,30 @@ def _dep_return_metas(
             shape.append(dim)
         return replace(meta, shape=tuple(shape))
 
-    resolved = {
-        v: instantiate(callee_metas[r], index)
-        for index, (v, r) in enumerate(zip(names, ret_names, strict=True))
-        if r in callee_metas
-    }
-    stale = {v for v, r in zip(names, ret_names, strict=True) if r and r not in callee_metas}
+    # One meta per result position: a returned bare name reads its own local, and
+    # a returned traced-helper call asks that helper's variant what it produces.
+    # Everything else stays untyped for this position, exactly as before.
+    element_metas: list[TensorMeta | None] = [callee_metas.get(name) for name in ret_names]
+    for index, element in enumerate(elements):
+        if element_metas[index] is not None or not isinstance(element, ast.Call):
+            continue
+        if not isinstance(element.func, ast.Name):
+            continue
+        resolver = callee_resolvers.get(element.func.id)
+        result_name = names[index]
+        if resolver is None or not result_name:
+            continue
+        answers = resolver(element, [ast.Name(id=result_name, ctx=ast.Load())], callee_metas)
+        answer = answers[0] if answers else None
+        if answer is not None:
+            element_metas[index] = answer.metas.get(result_name)
+
+    resolved: dict[str, TensorMeta] = {}
+    for index, name in enumerate(names):
+        meta = element_metas[index]
+        if meta is not None:
+            resolved[name] = instantiate(meta, index)
+    stale = {v for index, v in enumerate(names) if ret_names[index] and element_metas[index] is None}
     return _DepReturn(resolved, frozenset(stale))
 
 
@@ -836,7 +895,7 @@ def _stmt_calls_dep(stmt: ast.stmt, dep_name: str | None, stop_at_call: ast.Call
     return False
 
 
-def _update_local_tensor_meta(
+def _update_local_tensor_meta(  # noqa: PLR0912 - one branch per supported call/assign spelling
     stmt: ast.stmt,
     local: dict[str, TensorMeta],
     dim_values: dict[str, _DimValue],
@@ -883,10 +942,16 @@ def _update_local_tensor_meta(
             # or pl.tensor.slice(...) — invisible to the one-level branch above
             # since fn.value is itself an Attribute, not a Name (#2638).
             meta, preserve_existing = _qualified_call_meta(fn, value, named_target, qualified_call_handlers)
-        elif isinstance(fn, ast.Name) and fn.id in deps.io:
-            # The in-place ``Out``-param convention first; a callee that
-            # allocates its own results falls through to its return statement.
-            if len(targets) > 1 and all(isinstance(target, ast.Name) for target in targets):
+        elif isinstance(fn, ast.Name) and (fn.id in deps.io or fn.id in deps.traced_inline):
+            # A parser dependency: the in-place ``Out``-param convention first; a
+            # callee that allocates its own results falls through to its return
+            # statement. An imported traced helper skips both rules — its
+            # materialized return types are already the statement of what the
+            # call produces at this call site.
+            resolver = deps.traced_inline.get(fn.id)
+            if resolver is not None:
+                dep_returns = resolver(value, targets, local)
+            elif len(targets) > 1 and all(isinstance(target, ast.Name) for target in targets):
                 names = [target.id for target in targets if isinstance(target, ast.Name)]
                 result = _dep_out_metas_or_return(value, fn.id, targets[0], deps, local)
                 shared_meta = result.metas.get(names[0])
@@ -1419,7 +1484,7 @@ def _shape_inexact_axes(
     )
 
 
-def extract_local_tensor_metas(
+def extract_local_tensor_metas(  # noqa: PLR0913 - one arg per call-site fact
     func: Any,
     seed_meta: dict[str, TensorMeta] | None = None,
     caller_func_type: str = "orchestration",
@@ -1428,6 +1493,8 @@ def extract_local_tensor_metas(
     stop_at_call: ast.Call | None = None,
     constexpr_values: Mapping[str, str] | None = None,
     visible_only: bool = False,
+    traced_inline: Mapping[str, TracedInlineResolver] | None = None,
+    traced_inline_for: TracedInlineResolverFactory | None = None,
     *,
     discover_deps: _call_binding.DiscoverDeps,
 ) -> dict[str, TensorMeta]:
@@ -1770,6 +1837,19 @@ def extract_local_tensor_metas(
             dims.append(v if v is not None else parent_dim)
         return replace(src_meta, shape=tuple(dims), inexact_axes=frozenset(inexact_axes))
 
+    # A resolver is bound to the body it was built for, so the caller's map
+    # cannot answer for this body. When the bridge supplies the factory, derive
+    # the map here — for ``func``, the body this scan walks — and honor an
+    # explicit map only when one was handed in.
+    resolvers: Mapping[str, TracedInlineResolver] = (
+        traced_inline
+        if traced_inline is not None
+        else (
+            traced_inline_for(func, caller_func_type, dict(constexpr_values or {}))
+            if traced_inline_for is not None
+            else {}
+        )
+    )
     deps = _DepScan(
         io=scan_dep_io(func, caller_func_type, discover_deps=discover_deps),
         funcs={b.call_name: b.dep for b in discover_deps(func, caller_func_type)},
@@ -1778,6 +1858,8 @@ def extract_local_tensor_metas(
         scope=scope,
         owner=func_def.name,
         discover_deps=discover_deps,
+        traced_inline=dict(resolvers),
+        traced_inline_for=traced_inline_for,
     )
 
     # Dispatch table: pl.<attr>(...) → meta extraction function.
@@ -1841,7 +1923,7 @@ def extract_local_tensor_metas(
     return local if visible_only or stop_at_dep is not None or stop_at_call is not None else collected
 
 
-def resolve_dep_call_metadata(
+def resolve_dep_call_metadata(  # noqa: PLR0913 - one arg per call-site fact
     dep: "JITFunction",
     caller_func: Any,
     caller_tensor_meta: dict[str, TensorMeta],
@@ -1853,6 +1935,8 @@ def resolve_dep_call_metadata(
     caller_constexpr: Mapping[str, str] | None = None,
     *,
     discover_deps: _call_binding.DiscoverDeps,
+    traced_inline: Mapping[str, TracedInlineResolver] | None = None,
+    traced_inline_for: TracedInlineResolverFactory | None = None,
 ) -> tuple[
     dict[str, TensorMeta],
     dict[str, DataType],
@@ -1902,6 +1986,8 @@ def resolve_dep_call_metadata(
         stop_at_call=call_node,
         constexpr_values=caller_constexpr,
         discover_deps=discover_deps,
+        traced_inline=traced_inline,
+        traced_inline_for=traced_inline_for,
         visible_only=True,
     )
     # The extractor starts from caller_tensor_meta, then applies source-ordered

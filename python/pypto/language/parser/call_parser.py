@@ -1111,6 +1111,72 @@ class CallParser:
         return_types = self.inline_argument_return_types(ext_func, args, return_types)
         return self.make_call_with_return_type(gvar, args, return_types, span)
 
+    def parse_traced_inline_call(self, call_name: str, binding: Any, call: ast.Call) -> ir.Expr:
+        """Build the typed call to a traced-inline helper imported by the JIT bridge.
+
+        The binding object owns this call site's specialization: its
+        ``materialize`` traces the helper against the *parsed* arguments' own IR
+        types — the authoritative types, carrying layout, view, memory space,
+        storage and kind, which no source-level reconstruction preserved — and
+        returns the imported function, already named and registered for the
+        program. Everything else is the external-call contract: positional
+        arguments only, and return types deduced with the actual argument
+        dimensions.
+
+        Args:
+            call_name: The name the generated source calls the binding by.
+            binding: The bridge's call-site binding (``TracedInlineImport``).
+            call: The AST Call node.
+        """
+        span = self.services.span_tracker.get_span(call)
+        self.reject_keyword_args(call_name, call, span)
+        args = [self.callbacks.expression(arg) for arg in call.args]
+        try:
+            # The declared scalar dtype is the ABI, so an in-lattice argument is
+            # converted before the specialization reads its type — the same
+            # conversion temp this lane's ordinary calls bind.
+            args = binding.coerce_declared_scalar_args(args, self.services.builder, span)
+            function = binding.materialize(args)
+        except TypeError as exc:
+            # The bridge's type-contract refusals are user diagnostics naming the
+            # helper and the parameter: surface them with the call's own span
+            # (source-map remapped to the user's file) instead of letting the
+            # generic per-method wrapper bury them in "Failed to parse function".
+            raise ParserTypeError(str(exc), span=span) from exc
+        # The same conflict rules an external function answers to: an import
+        # cannot shadow a program method, and two distinct variants must never
+        # share a program name (the build's name allocation normally prevents
+        # both — these checks keep the failure loud if it ever does not).
+        if function.name in self.bindings.global_vars:
+            raise ParserSyntaxError(
+                f"Imported traced helper '{function.name}' conflicts with program function '{function.name}'",
+                span=span,
+                hint="Rename the helper or the program function to avoid the name conflict",
+            )
+        if (
+            function.name in self.bindings.external_funcs
+            and self.bindings.external_funcs[function.name] is not function
+        ):
+            raise ParserSyntaxError(
+                f"Conflicting imported traced helpers with name '{function.name}'",
+                span=span,
+                hint="Two specializations of one helper must not share a program name",
+            )
+        self.bindings.external_funcs[function.name] = function
+        runtime = binding.runtime_params
+        by_name = {param.name_hint: param for param in function.params}
+        missing = [name for name in runtime if name not in by_name]
+        if missing:
+            raise ParserSyntaxError(
+                f"Imported traced helper '{function.name}' lost parameter(s) {missing}",
+                span=span,
+                hint="Internal specialization error: the trace dropped a staged parameter",
+            )
+        return_types = ir.deduce_call_return_type(
+            [by_name[name] for name in runtime], args, list(function.return_types)
+        )
+        return self.make_call_with_return_type(ir.GlobalVar(function.name), args, return_types, span)
+
     @staticmethod
     def is_docstring(stmt: ast.stmt) -> bool:
         """Check if an AST statement is a docstring (string constant expression)."""

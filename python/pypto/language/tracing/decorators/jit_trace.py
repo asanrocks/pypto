@@ -56,7 +56,7 @@ import inspect
 import types
 import typing
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -75,6 +75,7 @@ from pypto.language.tracing.entry.annotation import capture_caller_names, source
 from pypto.language.tracing.entry.declaration import fold_auto_scope
 from pypto.language.tracing.execution import adapt_captured_callees
 from pypto.language.tracing.return_contract import check_specializing_return_values, pin_derived_return_types
+from pypto.language.typing._ir_facade import facade_from_ir_type
 from pypto.language.typing._runtime_scalar import RuntimeScalar
 from pypto.language.typing.arg_direction import (
     freevar_localns,
@@ -509,23 +510,37 @@ class _JitSpecializer:
         specialized values contradict is refused here, not silently
         retyped — only a declared dynamic extent may specialize.
         """
-        fn = _trace_with_annotations(
-            kernel if kernel is not None else self.kernel,
-            annotations,
-            None if derive_return else self._return_type,
-            function_type=self._function_type,
-            level=self._level,
-            role=self._role,
-            attrs=self._attrs,
-            localns=self._localns,
-            materialize_self=True,
-            specialize_global_callees=True,
-        )
-        if self._return_type is None or derive_return:
-            fn = pin_derived_return_types(fn)
-            if derive_return:
-                check_specializing_return_values(fn, self._return_type)
-        return _drop_inline_directions(fn, self._function_type)
+        assembly = _ACTIVE_ASSEMBLY.get()
+        key: tuple[Any, ...] | None = None
+        if assembly is not None:
+            # Every lane that traces under an assembly funnels through here —
+            # the callee lanes' own lookup misses for the in-flight variant,
+            # so the cycle guard lives at this single choke point.
+            key = _variant_key(
+                self.kernel, annotations, self._function_type, self._level, self._role, self._attrs
+            )
+            assembly.enter_variant_trace(key, self.kernel.__name__)
+        try:
+            fn = _trace_with_annotations(
+                kernel if kernel is not None else self.kernel,
+                annotations,
+                None if derive_return else self._return_type,
+                function_type=self._function_type,
+                level=self._level,
+                role=self._role,
+                attrs=self._attrs,
+                localns=self._localns,
+                materialize_self=True,
+                specialize_global_callees=True,
+            )
+            if self._return_type is None or derive_return:
+                fn = pin_derived_return_types(fn)
+                if derive_return:
+                    check_specializing_return_values(fn, self._return_type)
+            return _drop_inline_directions(fn, self._function_type)
+        finally:
+            if assembly is not None:
+                assembly.exit_variant_trace(key)
 
     # —— the callee lane: a call inside another trace ———
 
@@ -1171,60 +1186,18 @@ def _in_trace_annotation(name: str, arg: Any, kernel_name: str, hint: Any = None
     reaches a runtime slot, where it stays loud instead."""
     if is_staged(arg):
         ty = arg.unwrap().type
-        # The DistributedTensorType check must precede TensorType: the pybind
-        # flavour IS-A TensorType, so the plain branch would silently
-        # downgrade the window to a plain Tensor annotation (the retype the
-        # type-soundness contract forbids).
-        if isinstance(ty, ir.DistributedTensorType):
-            from pypto.language.distributed.typing import (  # noqa: PLC0415 — lazy: distributed pulls the op tier
-                DistributedTensor,
-            )
-
-            return DistributedTensor(
-                list(ty.shape),  # type: ignore[arg-type]
-                ty.dtype,
-                layout=ty.tensor_view,  # type: ignore[arg-type]  # slot takes a TensorView too
-                memref=ty.memref,
-                _annotation_only=True,
-            )
-        if isinstance(ty, ir.TensorType):
-            # shape entries carry over as-is (int or extent Expr — the
-            # annotation accepts both; ``_shape_dim`` normalizes at the
-            # type boundary), and so do the memref / tensor_view slots —
-            # dropping them would retype a layout-carrying argument.
-            return Tensor(
-                list(ty.shape),  # type: ignore[arg-type]
-                ty.dtype,
-                layout=ty.tensor_view,  # type: ignore[arg-type]  # slot takes a TensorView too
-                memref=ty.memref,
-                _annotation_only=True,
-            )
-        if isinstance(ty, ir.TileType):
-            # A loaded tile is a legitimate callee argument (an ``.inline``
-            # helper over a tile is the natural spelling). Carry the whole
-            # tile type — memory space and view included — so the callee's
-            # parameter is the argument's type, not a looser approximation.
-            from pypto.language.typing.tile import Tile  # noqa: PLC0415
-
-            return Tile(
-                list(ty.shape),  # type: ignore[arg-type]  # extents stay Exprs
-                ty.dtype,
-                memref=ty.memref,
-                memory_space=ty.memory_space,
-                tile_view=ty.tile_view,
-                _annotation_only=True,
-            )
-        if isinstance(ty, ir.ScalarType):
-            return Scalar(ty.dtype, _annotation_only=True)
-        if isinstance(ty, ir.ArrayType):
-            from pypto.language.typing import Array  # noqa: PLC0415
-
-            return Array(ty.extent, ty.dtype, _annotation_only=True)  # type: ignore[arg-type]  # Expr extent
-        raise TypeError(
-            f"call to {kernel_name!r} inside a trace: argument {name!r} has "
-            f"type {ty}, which has no annotation form (Tensor/DistributedTensor/"
-            "Tile/Scalar/Array only)"
-        )
+        try:
+            # The facade is built from the value's own IR type, so every field
+            # it carries — kind, layout/view, storage, tile memory space —
+            # crosses; the kind order and field plumbing live in one place,
+            # shared with the parser-lane import bridge.
+            return facade_from_ir_type(ty)
+        except TypeError:
+            raise TypeError(
+                f"call to {kernel_name!r} inside a trace: argument {name!r} has "
+                f"type {ty}, which has no annotation form (Tensor/DistributedTensor/"
+                "Tile/Scalar/Array only)"
+            ) from None
     if _is_host_scalar(arg):
         return arg
     if hint is not None and not _staged_declared(hint):
@@ -1257,8 +1230,43 @@ class _ProgramAssembly:
     def __init__(self) -> None:
         self.functions: list[ir.Function] = []
         self.by_key: dict[Any, ir.Function] = {}
+        # Variant keys whose trace is currently running, in start order — a
+        # variant registers only after its trace finishes, so a kernel that
+        # (transitively) calls itself misses the ``by_key`` lookup on every
+        # level; the running key is held here so the re-entry is refused as a
+        # cycle instead of re-tracing to the interpreter's recursion limit.
+        self._in_flight: dict[Any, str] = {}
         self._ids: set[int] = set()
         self._name_counts: dict[str, int] = {}
+        # Every name already spoken for: a registered function's, or one a
+        # composition frontend reserved. Suffix candidates are checked against
+        # this set, so a minted variant can never land on a taken name.
+        self._taken: set[str] = set()
+
+    def enter_variant_trace(self, key: Any, name: str) -> None:
+        """Mark one variant trace as running, refusing a re-entrant one.
+
+        A hit means the very variant being traced is reachable from its own
+        body (directly or through other traced kernels): it has no finite
+        traced form, so the refusal names the cycle — outermost first, closed
+        back onto the re-entered kernel — rather than letting the tracer
+        re-descend until the recursion limit.
+        """
+        if key in self._in_flight:
+            keys = list(self._in_flight)
+            cycle = [self._in_flight[k] for k in keys[keys.index(key) :]]
+            cycle.append(name)
+            raise TypeError(
+                f"traced kernel cycle: {' -> '.join(repr(n) for n in cycle)}. A traced "
+                "kernel cannot call itself, directly or through other traced "
+                "kernels — the variant is still being traced, so the call cannot "
+                "reuse it, and re-tracing never terminates. Unroll the recursion "
+                "or restructure the cycle into one body."
+            )
+        self._in_flight[key] = name
+
+    def exit_variant_trace(self, key: Any) -> None:
+        self._in_flight.pop(key, None)
 
     def register(self, fn: ir.Function, key: Any | None = None) -> None:
         if id(fn) in self._ids:
@@ -1269,6 +1277,7 @@ class _ProgramAssembly:
         # distinct functions and must not collide on ir.Program's
         # program-unique name check. unique_name suffixes on this count.
         self._name_counts[fn.name] = max(self._name_counts.get(fn.name, 0), 1)
+        self._taken.add(fn.name)
         self.functions.append(fn)
         if key is not None:
             self.by_key[key] = fn
@@ -1278,10 +1287,34 @@ class _ProgramAssembly:
         variant keeps the kernel's name (the caller's Call and the
         eager-trace name agree), each further distinct variant gets a
         numeric suffix — one helper instantiated at multiple shapes never
-        produces duplicate function names in one program."""
+        produces duplicate function names in one program.
+
+        A candidate that is already taken is skipped, not returned: the suffix
+        sequence (``base_2``, ``base_3``, …) can itself collide with a name the
+        program already holds — an entry method called ``leaf_2`` beside a
+        traced helper ``leaf`` — and handing that name out made the parser
+        reject the whole program as a duplicate function.
+        """
         count = self._name_counts.get(base, 0)
+        candidate = base if count == 0 else f"{base}_{count + 1}"
+        while candidate in self._taken:
+            count += 1
+            candidate = f"{base}_{count + 1}"
         self._name_counts[base] = count + 1
-        return base if count == 0 else f"{base}_{count + 1}"
+        self._taken.add(candidate)
+        return candidate
+
+    def reserve(self, names: Iterable[str]) -> None:
+        """Take ``names`` out of circulation before any function is registered.
+
+        A composition frontend may add functions to a program that already has
+        names of its own (a parser program's generated methods). Reserving them
+        makes the first variant of a same-named helper take the suffixed form
+        instead of colliding with the name that is already spoken for.
+        """
+        for name in names:
+            self._name_counts[name] = max(self._name_counts.get(name, 0), 1)
+            self._taken.add(name)
 
 
 _ACTIVE_ASSEMBLY: ContextVar[_ProgramAssembly | None] = ContextVar("pto_jit_assembly", default=None)
