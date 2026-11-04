@@ -11,6 +11,7 @@
 
 from typing import Any, TypeAlias, cast
 
+from pypto.language.typing.type_utils import to_expr
 from pypto.pypto_core import DataType
 from pypto.pypto_core.ir import ConstBool, Expr, Span
 
@@ -154,18 +155,17 @@ class Scalar(metaclass=ScalarMeta):
         return f"Scalar(expr={self.expr})"
 
     def __bool__(self) -> bool:
-        """Prevent implicit boolean conversion of symbolic Scalar values.
+        """Prevent implicit boolean conversion of staged Scalar values.
 
         Defined so that type checkers (pyright, mypy) do not infer that
-        ``if scalar:`` is always truthy.  At runtime, a symbolic IR
-        wrapper has no concrete truth value.
+        ``if scalar:`` is always truthy.  At runtime, a staged IR
+        wrapper has no host truth value.
 
         Raises:
             TypeError: Always — Scalar cannot be converted to bool.
         """
         raise TypeError(
-            "Cannot convert Scalar to bool. "
-            "Scalar wraps a symbolic IR expression and has no concrete truth value."
+            "Cannot convert Scalar to bool. Scalar wraps an IR expression and has no host truth value."
         )
 
     # ------------------------------------------------------------------
@@ -174,46 +174,46 @@ class Scalar(metaclass=ScalarMeta):
     # ------------------------------------------------------------------
 
     def __add__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() + (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() + (to_expr(other)))
 
     def __radd__(self, other: "int | float") -> "Scalar":
         return Scalar(expr=other + self.unwrap())
 
     def __sub__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() - (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() - (to_expr(other)))
 
     def __rsub__(self, other: "int | float") -> "Scalar":
         return Scalar(expr=other - self.unwrap())
 
     def __mul__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() * (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() * (to_expr(other)))
 
     def __rmul__(self, other: "int | float") -> "Scalar":
         return Scalar(expr=other * self.unwrap())
 
     def __truediv__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() / (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() / (to_expr(other)))
 
     def __rtruediv__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=(other.unwrap() if isinstance(other, Scalar) else other) / self.unwrap())
+        return Scalar(expr=(to_expr(other)) / self.unwrap())
 
     def __floordiv__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() // (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() // (to_expr(other)))
 
     def __rfloordiv__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=(other.unwrap() if isinstance(other, Scalar) else other) // self.unwrap())
+        return Scalar(expr=(to_expr(other)) // self.unwrap())
 
     def __mod__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() % (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() % (to_expr(other)))
 
     def __lshift__(self, other: "int | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() << (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() << (to_expr(other)))
 
     def __rlshift__(self, other: int) -> "Scalar":
         return Scalar(expr=other << self.unwrap())
 
     def __rshift__(self, other: "int | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() >> (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() >> (to_expr(other)))
 
     def __rrshift__(self, other: int) -> "Scalar":
         return Scalar(expr=other >> self.unwrap())
@@ -237,29 +237,29 @@ class Scalar(metaclass=ScalarMeta):
     def __eq__(self, other: object) -> "Scalar":  # type: ignore[override]
         if not isinstance(other, (Scalar, int, float)):
             return NotImplemented
-        return Scalar(expr=self.unwrap() == (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() == (to_expr(other)))
 
     def __ne__(self, other: object) -> "Scalar":  # type: ignore[override]
         if not isinstance(other, (Scalar, int, float)):
             return NotImplemented
-        return Scalar(expr=self.unwrap() != (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() != (to_expr(other)))
 
     def __hash__(self) -> int:
-        # Required when __eq__ is overridden. Scalar wraps a symbolic expression,
+        # Required when __eq__ is overridden. Scalar wraps an IR expression,
         # so we fall back to identity-based hashing.
         return id(self)
 
     def __lt__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() < (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() < (to_expr(other)))
 
     def __le__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() <= (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() <= (to_expr(other)))
 
     def __gt__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() > (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() > (to_expr(other)))
 
     def __ge__(self, other: "int | float | Scalar") -> "Scalar":
-        return Scalar(expr=self.unwrap() >= (other.unwrap() if isinstance(other, Scalar) else other))
+        return Scalar(expr=self.unwrap() >= (to_expr(other)))
 
     # ------------------------------------------------------------------
     # In-place operators for RangeIterator compatibility.
@@ -270,8 +270,13 @@ class Scalar(metaclass=ScalarMeta):
 
     @classmethod
     def __class_getitem__(cls, item: DataType) -> "Scalar":
-        """Support static type checkers for Scalar[dtype] syntax."""
-        return cls.__getitem__(item)
+        """The static-checker hook for ``Scalar[dtype]`` syntax.
+
+        Runtime never calls this — the ``ScalarMeta.__getitem__`` subscript
+        protocol takes precedence — but pyright resolves class subscripts
+        through this signature.
+        """
+        raise NotImplementedError
 
 
 class RuntimeScalarMarker(Scalar):
@@ -287,6 +292,14 @@ class RuntimeScalarMarker(Scalar):
     against the earlier contract — where a literal specialized the value into
     the artifact and this marker was the way to opt out — keep working
     unchanged. New code needs neither the keyword nor the default.
+
+    Under the tracing jit the declaration owns the parameter's world: a
+    ``pl.Scalar[dtype]`` parameter is already runtime, so ``RUNTIME`` is a
+    benign no-op and a host literal is accepted and ignored (the value
+    arrives at dispatch — the artifact is identical either way). Literal
+    *specialization* is the parsing-frontend jit's behavior; the tracing
+    jit never re-specializes from the call site. A kernel that wants a
+    baked scalar declares it with a plain Python annotation (a host knob).
 
     Subclasses [`Scalar`][pypto.language.Scalar] so that a type checker accepts it as the default
     of a scalar parameter — ``n: pl.Scalar[dtype] = pl.RUNTIME`` — for the same

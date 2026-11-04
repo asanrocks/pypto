@@ -9,8 +9,6 @@
 
 """Dynamic shape variables for use in type annotations."""
 
-from typing import Any
-
 from pypto.pypto_core import DataType
 from pypto.pypto_core.ir import Expr, ScalarType, Span, Var
 
@@ -24,6 +22,13 @@ class DynVar(Scalar):
     Inherits from Scalar so that DynVar is accepted wherever Scalar/IntLike
     is expected (e.g. shape parameters, TensorView valid_shape).
 
+    Extent ``ir.Var``s are shared **by name**: two ``pl.dynamic("T")``
+    objects (the per-module corpus idiom) unwrap to the same ``ir.Var``, so
+    cross-function structural equality and variant dedup key on the name the
+    author chose - the tracing counterpart of the parser frontend's shared
+    ``dyn_var_cache``. A distinct name is therefore a deliberate opt-out of
+    sharing (``lm_head``'s ``LM_HEAD_T_DYN``).
+
     Example:
         M = pl.dynamic("M")
         N = pl.dynamic("N")
@@ -33,14 +38,17 @@ class DynVar(Scalar):
             ...
     """
 
+    # The name -> shared extent Var registry (see the class docstring).
+    _BY_NAME: dict[str, Var] = {}
+
     def __init__(self, name: str) -> None:
         if not name.isidentifier():
             raise ValueError(f"DynVar name must be a valid identifier, got {name!r}")
         self.name = name
-        # Lazily populated on first use by TypeResolver.  Once set, all parsers
-        # that encounter this DynVar object share the same ir.Var instance,
+        # Lazily populated on first use by unwrap().  Once set, all paths
+        # that encounter this DynVar share the same ir.Var instance,
         # ensuring structural equality across @pl.function boundaries.
-        self._ir_var: Any = None
+        self._ir_var: Var | None = None
         # Bypass Scalar.__init__ (which requires dtype or expr) and set
         # its fields directly.  The actual expr is provided lazily via unwrap().
         self.dtype = DataType.INDEX
@@ -52,9 +60,16 @@ class DynVar(Scalar):
 
         This allows DynVar to participate in _normalize_intlike() and other
         Scalar-consuming paths without requiring prior TypeResolver resolution.
+        A first unwrap consults the shared name registry, so a same-named
+        DynVar from another module reuses this extent Var instead of minting
+        a structurally-distinct one.
         """
         if self._ir_var is None:
-            self._ir_var = Var(self.name, ScalarType(DataType.INDEX), Span.unknown())
+            shared = DynVar._BY_NAME.get(self.name)
+            if shared is None:
+                shared = Var(self.name, ScalarType(DataType.INDEX), Span.unknown())
+                DynVar._BY_NAME[self.name] = shared
+            self._ir_var = shared
         # Keep Scalar.expr in sync so direct .expr access returns a valid value.
         self.expr = self._ir_var
         return self._ir_var
