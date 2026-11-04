@@ -605,18 +605,26 @@ def test_staged_if_exact_construct_callbacks():
 
 def test_staged_if_branch_locals_isolation():
     """Branch-local writes stay in their own per-branch locals mapping until
-    the close commits the union."""
+    the close commits the union. A one-sided *host* bind commits as join
+    poison — host values mint no IR, so no verifier use-after-def check
+    exists to reject the read; a one-sided *staged* bind keeps its literal
+    (the IR verifier owns that rejection at compile time)."""
     rt, frame = _staged_interpreter()
     rt.eval_if(_Marker())
     rt.vars.x = "then"
-    assert rt.vars.x == "then"
+    assert rt.vars.x == "then"  # legal while branch-local
     rt.eval_else()
     # the then-branch mapping left the chain: ``x`` has no value on the else path
-    # (the unsoundness the IR verifier's use-after-def check rejects).
     with pytest.raises(UnboundLocalError):
         rt._route_read("x")
     rt.exit_construct()
-    assert rt._frames[-1].ns["x"] == "then"
+    # the one-sided host bind is poisoned at the join: the first read past it
+    # rejects instead of silently inlining the then-branch literal.
+    with pytest.raises(TypeError, match="bound on only one branch"):
+        rt._route_read("x")
+    # an unconditional rebind clears the poison, restoring plain host semantics
+    rt.vars.x = "rebound"
+    assert rt._route_read("x") == "rebound"
 
 
 def test_nested_staged_if_merge_stays_in_enclosing_branch_locals():
@@ -639,7 +647,9 @@ def test_nested_staged_if_merge_stays_in_enclosing_branch_locals():
     with pytest.raises(UnboundLocalError):
         rt._route_read("y")
     rt.exit_construct()  # outer close: both branch mappings commit into the namespace
-    assert rt._frames[-1].ns["y"] == "inner-then"
+    # the one-sided host bind is join poison: the first post-join read rejects
+    with pytest.raises(TypeError, match="bound on only one branch"):
+        rt._route_read("y")
 
 
 def test_join_stagedness_check_treats_bound_host_none_as_a_value():

@@ -19,7 +19,7 @@ membership)."""
 from __future__ import annotations
 
 import typing
-from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pypto.language.diagnostics import ParserSyntaxError, concise_error_message
 from pypto.language.facade import FACADE_TYPES, PARAMETERLESS_FACADES, Facade
@@ -27,16 +27,16 @@ from pypto.pypto_core import ir
 
 if TYPE_CHECKING:
     from pypto.ir.builder import IRBuilder
+    from pypto.language.tracing.collector.interpreter import Interpreter
+    from pypto.language.tracing.pto_constructs import PtoForConstruct as _PtoForConstruct
+    from pypto.language.tracing.semantics import PtoFrame
 
     # The explicit carry/leak bundle is opaque at this tier: the protocol
     # methods only pass it through to the staged-construct path, so a
     # structural alias is sufficient here.
     _LeakBundle = Any
 
-    # Staged as Any aliases until the trace-semantics commit provides the
-    # real types; this module's runtime surface is unchanged either way.
-    PtoFrame: TypeAlias = Any
-    PtoForConstruct: TypeAlias = Any
+    PtoForConstruct = _PtoForConstruct
 
 __all__ = [
     "ResultBindingTarget",
@@ -132,7 +132,7 @@ class YieldTarget(Protocol):
     dispatches ``on_yield`` to the exact Construct the interpreter selected.
     """
 
-    def on_yield(self, rt: Any, operands: list[object]) -> None: ...
+    def on_yield(self, rt: Interpreter[Facade], operands: list[object]) -> None: ...
 
 
 @runtime_checkable

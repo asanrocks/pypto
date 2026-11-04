@@ -16,7 +16,7 @@ automatic span tracking via the inspect module.
 
 import builtins
 import inspect
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any, Generic, Protocol, TypeVar
 
@@ -95,6 +95,35 @@ class IRBuilder:
         # spelling is only observable here — in IR it is indistinguishable
         # from no split.
         self._incore_user_splits: list[ir.SplitMode | None] = []
+        # The pre-emit hook: called before any operation that inserts a
+        # statement into the current region or opens a nested region. The
+        # tracing Sema installs it so a deferred declarable scope (a
+        # ``pl.at`` / ``pl.spmd`` carrier awaiting the body's leading
+        # ``pl.set_cache_policy(...)`` declarations) opens before the first
+        # statement lands — attrs are fixed at ``begin_scope``, so the scope
+        # must see every declaration first. Re-entrant calls (the hook itself
+        # emits through this builder) are suppressed by ``_emitting``; the
+        # hook is ``None`` on the parser frontend, which never defers.
+        self._pre_emit_hook: Callable[[], None] | None = None
+        self._emitting: bool = False
+
+    def set_pre_emit_hook(self, hook: Callable[[], None] | None) -> None:
+        """Install (or clear) the pre-emit hook — one trace driver, one Frame.
+
+        The hook is called at most once per outermost emission and must not
+        raise to skip an emission: it runs *before* the caller's statement is
+        built, so an exception aborts the emission exactly as the caller's
+        own failure would."""
+        self._pre_emit_hook = hook
+
+    def _pre_emit(self) -> None:
+        """Run the pre-emit hook unless already inside one (or none installed)."""
+        if self._pre_emit_hook is not None and not self._emitting:
+            self._emitting = True
+            try:
+                self._pre_emit_hook()
+            finally:
+                self._emitting = False
 
     def innermost_scope_kind(self) -> ir.ScopeKind | None:
         """The innermost open scope's kind, or ``None`` outside any scope.
@@ -147,6 +176,7 @@ class IRBuilder:
     ) -> None:
         actual_span = _pinned_span_or_unknown(span)
         attrs_list = list((attrs or {}).items())
+        self._pre_emit()
         self._builder.begin_for_loop(
             loop_var,
             _normalize_expr(start, actual_span),
@@ -162,6 +192,7 @@ class IRBuilder:
         return self._builder.end_for_loop(_pinned_span_or_unknown(span))
 
     def begin_while_loop(self, condition: int | ir.Expr, span: ir.Span | None = None) -> None:
+        self._pre_emit()
         actual_span = _pinned_span_or_unknown(span)
         self._builder.begin_while_loop(_normalize_expr(condition, actual_span), actual_span)
 
@@ -169,10 +200,12 @@ class IRBuilder:
         return self._builder.end_while_loop(_pinned_span_or_unknown(span))
 
     def begin_if(self, condition: int | ir.Expr, span: ir.Span | None = None) -> None:
+        self._pre_emit()
         actual_span = _pinned_span_or_unknown(span)
         self._builder.begin_if(_normalize_expr(condition, actual_span), actual_span)
 
     def begin_else(self, span: ir.Span | None = None) -> None:
+        self._pre_emit()
         self._builder.begin_else(_pinned_span_or_unknown(span))
 
     def end_if(self, span: ir.Span | None = None) -> ir.IfStmt:
@@ -233,6 +266,7 @@ class IRBuilder:
         actual_span = _pinned_span_or_unknown(span)
         core_num_expr = _normalize_expr(core_num, actual_span) if core_num is not None else None
         attrs_list = list(attrs) if attrs is not None else []
+        self._pre_emit()
         self._builder.begin_scope(
             scope_kind,
             actual_span,
@@ -740,6 +774,7 @@ class IRBuilder:
         Returns:
             AssignStmt: The created assignment statement
         """
+        self._pre_emit()
         actual_span = span if span is not None else self._capture_call_span()
         value_expr = _normalize_expr(value, actual_span)
         return self._builder.assign(var, value_expr, actual_span)
@@ -784,6 +819,7 @@ class IRBuilder:
             >>> # For function calls, type is auto-inferred from function signature:
             >>> result = ib.let("result", ir.Call(func_gvar, [x], span))
         """
+        self._pre_emit()
         actual_span = span if span is not None else self._capture_call_span()
         value_expr = _normalize_expr(value, actual_span)
 
@@ -857,6 +893,7 @@ class IRBuilder:
         Args:
             stmt: Statement to emit
         """
+        self._pre_emit()
         self._builder.emit(stmt)
 
     def push_pending_leading_comments(self, comments: list[str]) -> None:
@@ -894,6 +931,7 @@ class IRBuilder:
         Returns:
             ReturnStmt: The created return statement
         """
+        self._pre_emit()
         actual_span = span if span is not None else self._capture_call_span()
 
         # Normalize values to list and convert each element
@@ -924,6 +962,7 @@ class IRBuilder:
         Returns:
             EvalStmt: The created evaluation statement
         """
+        self._pre_emit()
         actual_span = span if span is not None else self._capture_call_span()
         expr_normalized = _normalize_expr(expr, actual_span)
         stmt = ir.EvalStmt(expr_normalized, actual_span)
@@ -939,6 +978,7 @@ class IRBuilder:
         Returns:
             The created break statement.
         """
+        self._pre_emit()
         actual_span = span if span is not None else self._capture_call_span()
         stmt = ir.BreakStmt(actual_span)
         self._builder.emit(stmt)
@@ -953,6 +993,7 @@ class IRBuilder:
         Returns:
             The created continue statement.
         """
+        self._pre_emit()
         actual_span = span if span is not None else self._capture_call_span()
         stmt = ir.ContinueStmt(actual_span)
         self._builder.emit(stmt)
@@ -974,6 +1015,7 @@ class IRBuilder:
         Returns:
             The created inline statement.
         """
+        self._pre_emit()
         actual_span = span if span is not None else self._capture_call_span()
         stmt = ir.InlineStmt(body, language, actual_span)
         self._builder.emit(stmt)
