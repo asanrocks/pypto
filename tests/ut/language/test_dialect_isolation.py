@@ -49,6 +49,34 @@ def test_typing_arg_direction_isolated_from_parser() -> None:
     _import_without_parser("pypto.language.typing.arg_direction")
 
 
+def test_shared_seam_exports_its_public_api() -> None:
+    """The seam declares one export list, and it names the public API.
+
+    ``type_utils`` also lists the private comparison helpers the parser
+    reconciles through. Appending them as a second ``__all__`` assignment —
+    rather than adding them to the one list — silently replaced the first, so
+    ``from ... import *`` yielded two private names and none of the API a
+    dialect consumer recognizes.
+    """
+    from pypto.language.typing import type_utils  # noqa: PLC0415 - regression seam
+
+    public = {
+        "annotation_to_return_slots",
+        "annotation_to_return_types",
+        "annotation_to_type",
+        "apply_result_type",
+        "from_expr",
+        "from_int",
+        "register_facade",
+        "to_expr",
+        "to_int",
+        "wrap_expr",
+    }
+    assert public <= set(type_utils.__all__)
+    for name in public:
+        assert callable(getattr(type_utils, name)), name
+
+
 def test_lazy_parser_spelling_still_works() -> None:
     code = (
         "import sys; import pypto.language as pl; "
