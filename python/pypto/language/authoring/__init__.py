@@ -9,12 +9,15 @@
 
 """The authoring tier — the shared surface between the stdlib and the tracer.
 
-Two views over one runtime (see
+Two protocols over one runtime (see
 ``docs/en/dev/language/07-authoring-recipes.md``): ``@pl.authoring.construct``
 — the constrained region protocol, a generator whose single ``yield`` is a body
 boundary, serving both the ``with`` and the ``for`` statement spellings of one
-construct — over the session that owns one invocation, its function units, and
-the dispatch effect.
+construct; and ``@pl.authoring.recipe`` — the unconstrained effect-composition
+form, a program over an authoring context (function units, body placement,
+dispatch, control), with ``@pl.authoring.body`` the prepared-body form awaiting
+an explicit placement. Both are views over the session that owns one
+invocation, its function units, and the dispatch effect.
 
 The stdlib's structural constructs (``pl.at``, ``pl.spmd``, ...) are this
 tier's reference clients — they are built on the same public capabilities an
@@ -46,6 +49,13 @@ from pypto.language.authoring.contracts import (
     FunctionContract,
     ParamSpec,
 )
+from pypto.language.authoring.recipe import (
+    RecipeCallable,
+    RecipeContext,
+    TraceableBody,
+    body,
+    recipe,
+)
 from pypto.language.authoring.session import (
     ControlContext,
     FunctionContext,
@@ -65,7 +75,12 @@ __all__ = [
     "FunctionContext",
     "LoopRegion",
     "ParamSpec",
+    "RecipeCallable",
+    "RecipeContext",
     "ScopeRegion",
+    "TraceableBody",
+    "body",
     "construct",
     "dispatch",
+    "recipe",
 ]

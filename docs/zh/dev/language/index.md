@@ -11,6 +11,7 @@
 | [集成手写 C++ Kernel](04-external-kernels.md) | 从 PyPTO 程序中调用已有的手写 C++ InCore kernel |
 | [GM 缓存访问策略](05-cache-policy.md) | `pl.set_cache_policy` / `pl.load(cache=...)` —— 声明式 GM 缓存策略、它的一致性契约，以及它如何抵达 codegen |
 | [构造配方](06-construct-recipes.md) | `@pl.authoring.construct` —— 无需触碰 tracer 即可编写新的 `with` 构造 |
+| [授权配方](07-authoring-recipes.md) | `@pl.authoring.recipe` —— 通用效果组合层：函数、body、调用、控制 |
 
 ## 另请参阅
 

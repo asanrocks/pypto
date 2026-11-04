@@ -34,7 +34,6 @@ import types
 from collections.abc import Sequence
 from typing import Any, cast
 
-from pypto.language.ambient import reset_active_frame, set_active_frame
 from pypto.language.authoring.contracts import (
     CollectedBody,
     FunctionArtifact,
@@ -46,6 +45,7 @@ from pypto.language.tracing.entry.declaration import Param
 from pypto.language.tracing.entry.traced import TracedCallable
 from pypto.language.tracing.execution import pin_declared_returns, run_instrumented
 from pypto.language.tracing.semantics import PtoFrame, PtoSema
+from pypto.pypto_core import ir
 
 __all__ = ["AuthoringSession", "ControlContext", "FunctionContext"]
 
@@ -58,15 +58,22 @@ __all__ = ["AuthoringSession", "ControlContext", "FunctionContext"]
 def _prepared(body: object) -> TracedCallable:
     """Normalize a body argument to its prepared :class:`TracedCallable`.
 
-    Accepts a prepared ``TracedCallable`` or a plain function (prepared on the
-    spot — preparation is idempotent by caching code-shaped facts only, but a
-    recipe should hand the prepared object to avoid re-instrumenting per
-    occurrence)."""
+    Accepts a :class:`TraceableBody`, a prepared ``TracedCallable``, or a
+    plain function (prepared on the spot — preparation is idempotent by
+    caching code-shaped facts only, but a recipe should hand the prepared
+    object to avoid re-instrumenting per occurrence)."""
+    from pypto.language.authoring.recipe import TraceableBody  # noqa: PLC0415 - the body/protocol cycle
+
+    if isinstance(body, TraceableBody):
+        return body._traced
     if isinstance(body, TracedCallable):
         return body
     if isinstance(body, types.FunctionType):
         return TracedCallable.from_callable(body)
-    raise TypeError(f"a recipe collects a prepared body — a TracedCallable or a plain function; got {body!r}")
+    raise TypeError(
+        f"a recipe collects a prepared body — a pl.authoring.body value, a TracedCallable, or a "
+        f"plain function; got {body!r}"
+    )
 
 
 #: The bodies currently being collected, innermost last — the recursion
@@ -670,14 +677,12 @@ class AuthoringSession:
                     "(facades or host values) directly"
                 )
         sema = PtoSema._for_splice(frame.sema, owner=prepared.__name__, auto_scope=auto_scope)
-        splice_frame = sema._prepare_frame()
+        sema._prepare_frame()
         runner = InstrumentedFunction(_live_function(prepared), _prefix(prepared), sema)
         guard = _collecting_guard(prepared, "splice_body")
-        token = set_active_frame(splice_frame)
         try:
-            return runner(*args, **(kwargs or {}))
+            return run_instrumented(runner, sema, args, kwargs)
         finally:
-            reset_active_frame(token)
             _COLLECTING.reset(guard)
 
     def emit_call(
@@ -687,10 +692,11 @@ class AuthoringSession:
 
         Pure caller-side construction: the detached ``ir.Call`` facade is
         returned to the recipe (which returns it to its caller's expression
-        position). ``key`` is the optional variant-dedupe key the callee
-        compositions use (same body, structically identical argument types
-        → one function); the program-assembly registration that consumes it
-        arrives with the jit envelope.
+        position), and the function is registered with the active program
+        assembly — under a program-unique name, so repeated compositions
+        never collide — exactly as every traced callee registers. ``key`` is
+        the optional variant-dedupe key the callee compositions use (same
+        body, structurally identical argument types → one function).
         """
         self._require_live()
         self._check_not_terminated("emit_call")
@@ -700,6 +706,9 @@ class AuthoringSession:
         fn = artifact.function
         from pypto.language.op.marker import Marker  # noqa: PLC0415 - the marker/op cycle
 
+        assembly = _active_assembly()
+        if assembly is not None:
+            fn = _register_assembly_function(assembly, fn, key=key)
         marker = Marker._from_ir_function(fn)
         return marker(*args, **kwargs)
 
@@ -726,3 +735,46 @@ class AuthoringSession:
         entry = FunctionArtifact(artifact.function, artifact.contract, entry=True)
         root.artifact = entry
         return entry
+
+
+# -----------------------------------------------------------------------------------------------------------
+# The program-assembly helpers
+# -----------------------------------------------------------------------------------------------------------
+
+
+#: The active program assembly, if an entry build is running. Interim home:
+#: the channel's final owner is the jit envelope (the assembly type is the
+#: envelope's internal class); the envelope re-binds this hook to its own
+#: channel when it arrives.
+_ACTIVE_ASSEMBLY: contextvars.ContextVar[Any] = contextvars.ContextVar("pto_active_assembly", default=None)
+
+
+def _active_assembly() -> Any:
+    """The active program assembly, if an entry build is running."""
+    return _ACTIVE_ASSEMBLY.get()
+
+
+def _register_assembly_function(assembly: Any, fn: ir.Function, key: Any) -> ir.Function:
+    """Register ``fn`` with the program assembly under a program-unique name.
+
+    The first function keeps its name; a later same-named function is
+    shallow-renamed before registration so the ``Call``'s GlobalVar matches
+    the registered name (the assembly's own uniqueness discipline)."""
+    if id(fn) in assembly._ids:  # noqa: SLF001 - the assembly is this tier's registry
+        return fn
+    candidate = assembly.unique_name(fn.name)
+    if candidate != fn.name:
+        fn = ir.Function(
+            candidate,
+            fn.params,
+            fn.return_types,
+            fn.body,
+            fn.span,
+            fn.func_type,
+            fn.level,
+            fn.role,
+            fn.attrs,
+            fn.requires_runtime_binding,
+        )
+    assembly.register(fn, key=key)
+    return fn
