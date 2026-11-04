@@ -147,19 +147,26 @@ class TestUserEntranceEquivalence:
         assert isinstance(mine.return_types[0], ir.ScalarType)
 
     def test_user_function_matches_builtin_multi_return(self):
-        """A flat multi-return contract: the Sema sees no structural return
-        type during the trace; the explicit contract is pinned after."""
+        """A structural tuple return: the parser spells ``return [a, b]`` and
+        the tracing entrance ``pl.Tuple(a, b)``; both build one TupleType."""
 
         @pl.function
-        def builtin(s: pl.Scalar[pl.FP32]) -> tuple[pl.Scalar[pl.FP32], pl.Scalar[pl.FP32]]:
-            return pl.add(s, s), pl.mul(s, 2.0)
+        def builtin(
+            s: pl.Scalar[pl.FP32],
+        ) -> pl.Tuple[pl.Scalar[pl.FP32], pl.Scalar[pl.FP32]]:
+            # The fixture states the parser's own multi-result spelling, which is a
+            # list in Python but one staged Tuple in the parsed program.
+            return [pl.add(s, s), pl.mul(s, 2.0)]  # pyright: ignore[reportReturnType]
 
-        def kernel(s: pl.Scalar[pl.FP32]) -> tuple[pl.Scalar[pl.FP32], pl.Scalar[pl.FP32]]:
-            return pl.add(s, s), pl.mul(s, 2.0)
+        def kernel(
+            s: pl.Scalar[pl.FP32],
+        ) -> pl.Tuple[pl.Scalar[pl.FP32], pl.Scalar[pl.FP32]]:
+            return pl.Tuple(pl.add(s, s), pl.mul(s, 2.0))
 
         mine = my_function(kernel)
         assert _structural_equal(builtin, mine)
-        assert len(mine.return_types) == 2
+        assert len(mine.return_types) == 1
+        assert isinstance(mine.return_types[0], ir.TupleType)
 
     def test_user_function_matches_builtin_classification_facts(self):
         """Function classification facts (type, auto_scope, strict SSA) flow
@@ -556,3 +563,7 @@ class TestDerivation:
         fn = body.invoke()
         assert "cols" not in fn.as_python()
         assert fn.param_directions[1] is ir.ParamDirection.Out
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

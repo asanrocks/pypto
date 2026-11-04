@@ -12,10 +12,11 @@
 A traced ``ir.Function`` is produced by one lifecycle, whichever tier owns
 the policy around it: the body's callees are adapted for one execution,
 the Sema's frame is installed as the active trace frame, the instrumented
-body runs inside it, and the previous frame is restored on every exit path.
-This module is that lifecycle, stated once — the entrance foundation
-(:mod:`pypto.language.tracing.entry`) and the decorator tier
-(``function_trace`` and the jit envelope) call it instead of carrying
+body runs inside it, the previous frame is restored on every exit path, and
+the completed trace is checked against its declared returns before they are
+pinned onto the signature. This module is that lifecycle, stated once — the
+entrance foundation (:mod:`pypto.language.tracing.entry`) and the decorator
+tier (``function_trace`` and the jit envelope) call it instead of carrying
 private copies that drift.
 
 The dependency direction is the layering: the policy tiers import this
@@ -32,26 +33,35 @@ from typing import Any
 from pypto.language.ambient import reset_active_frame, set_active_frame
 from pypto.language.op.marker import Marker
 from pypto.language.tracing.collector.driver import InstrumentedFunction
+from pypto.language.tracing.return_contract import (
+    check_declared_return_values,
+    check_return_paths,
+    rebuild_with_return_types,
+    same_return_types,
+)
 from pypto.language.tracing.semantics import PtoSema
 from pypto.pypto_core import ir
 
 __all__ = [
     "adapt_captured_callees",
     "adapt_global_callees",
+    "pin_declared_returns",
     "run_instrumented",
 ]
 
 
 def adapt_captured_callees(
-    kernel: types.FunctionType,
+    kernel: types.FunctionType, *, specialize: bool = False
 ) -> tuple[types.FunctionType, list[ir.Function]]:
     """Make captured standalone functions callable for one traced invocation.
 
-    A closure cell holding a standalone ``ir.Function`` is rebound to the
-    ``Marker`` that emits its detached call; the module's real cells are never
-    touched. The per-call variant lane belongs to the jit envelope and
-    rebinds these to its own wrapper instead.
-    """
+    ``specialize`` — the jit envelope's lanes: a captured callee routes
+    through the per-call variant lane (the same wrapper the module-global
+    lane uses), so a call-site host knob bakes identically whether the
+    callee was reached through a closure cell or a global name. The
+    standalone ``pl.function`` build keeps the plain ``Marker`` — the
+    parser-aligned verbatim lane the conformance oracle pins."""
+
     closure = kernel.__closure__
     if not closure:
         return kernel, []
@@ -141,3 +151,23 @@ def run_instrumented(
         return runner(*args, **(kwargs or {}))
     finally:
         reset_active_frame(token)
+
+
+def pin_declared_returns(fn: ir.Function, declared: Sequence[ir.Type] | None) -> ir.Function:
+    """Check a completed trace against its declared returns and pin them.
+
+    The finalization half every producer shares. The traced return paths
+    are verified first, declaration or not: a body whose alternative paths
+    disagree is refused here, because an empty or Unknown signature would
+    hide the disagreement from every later caller. A declared contract is
+    then compared against the traced values — never stamped over them —
+    and pinned onto the function when it agrees structurally. ``declared``
+    empty or ``None`` verifies the paths and keeps the traced return types.
+    """
+    actual = check_return_paths(fn)
+    if not declared:
+        return fn
+    check_declared_return_values(fn, declared, actual)
+    if not same_return_types(fn.return_types, declared):
+        fn = rebuild_with_return_types(fn, declared)
+    return fn
