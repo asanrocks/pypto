@@ -244,6 +244,12 @@ class RangeIterator(Generic[T]):
             "unroll": _ir.ForKind.Unroll,
             "pipeline": _ir.ForKind.Pipeline,
         }.get(self.kind, _ir.ForKind.Sequential)
+        # pl.hardware_loop() is a Sequential loop that additionally *requires*
+        # hardware qualification; the parser spells the same requirement, so the
+        # tracing lane must carry it too.
+        hardware_loop_policy = (
+            _ir.HardwareLoopPolicy.Require if self.kind == "hardware_loop" else _ir.HardwareLoopPolicy.Auto
+        )
         builder.begin_for_loop(
             loop_var,
             start,
@@ -251,6 +257,7 @@ class RangeIterator(Generic[T]):
             step,
             kind=kind,
             attrs=attrs,
+            hardware_loop_policy=hardware_loop_policy,
         )
         self._begun = True
         return loop_var
@@ -461,6 +468,55 @@ def parallel(
         attrs: Machine-only ForStmt attrs round-tripped through the printer.
     """
     return _make_range_iterator(*args, func_name="parallel", attrs=attrs, init_values=init_values)
+
+
+@overload
+def hardware_loop(stop: RangeArg, *, init_values: None = None) -> RangeIterator[Scalar]: ...
+
+
+@overload
+def hardware_loop(stop: RangeArg, *, init_values: tuple[T1]) -> RangeIterator[tuple[Scalar, tuple[T1]]]: ...
+
+
+@overload
+def hardware_loop(
+    stop: RangeArg, *, init_values: tuple[T1, T2]
+) -> RangeIterator[tuple[Scalar, tuple[T1, T2]]]: ...
+
+
+@overload
+def hardware_loop(
+    stop: RangeArg, *, init_values: tuple[T1, T2, T3]
+) -> RangeIterator[tuple[Scalar, tuple[T1, T2, T3]]]: ...
+
+
+@overload
+def hardware_loop(
+    stop: RangeArg, *, init_values: tuple[T1, T2, T3, T4]
+) -> RangeIterator[tuple[Scalar, tuple[T1, T2, T3, T4]]]: ...
+
+
+@overload
+def hardware_loop(
+    stop: RangeArg, *, init_values: tuple[T1, T2, T3, T4, T5]
+) -> RangeIterator[tuple[Scalar, tuple[T1, T2, T3, T4, T5]]]: ...
+
+
+def hardware_loop(
+    stop: RangeArg,
+    *,
+    init_values: tuple[Any, ...] | None = None,
+) -> RangeIterator[Scalar] | RangeIterator[tuple[Scalar, tuple[Any, ...]]]:
+    """Require a Sequential hardware loop over [0, stop) with step one.
+
+    Only valid inside an enclosing ``pl.reg_scope()``, including empty loops.
+    Integer scalar stops may be dynamic without a proven range; static stops
+    must fit the unsigned counter limit. Floating-point stops are rejected.
+    Static qualification is distinct from final artifact evidence. Unsupported
+    targets fail compilation rather than silently falling back to ordinary loops.
+    Static empty loops may be removed with their initial carry values preserved.
+    """
+    return _make_range_iterator(stop, func_name="hardware_loop", init_values=init_values)
 
 
 @overload
@@ -736,6 +792,7 @@ def cond(condition: bool | Scalar) -> None:
 
 __all__ = [
     "range",
+    "hardware_loop",
     "parallel",
     "unroll",
     "pipeline",

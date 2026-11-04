@@ -77,12 +77,10 @@ if TYPE_CHECKING:
 from .compat.diagnostics import static_assert, static_print
 from .constructs import optimizations as optimizations
 from .constructs.func_attrs import func_attr
-from .constructs.loops import cond, parallel, pipeline, range, unroll, while_
+from .constructs.loops import cond, hardware_loop, parallel, pipeline, range, unroll, while_
 from .constructs.optimizations import cross_core_slot, split
 from .constructs.scopes import ScopeMode, at, cluster, graph, manual_scope, reg_scope, scope, split_aiv, spmd
 from .constructs.submit import spmd_submit, submit
-# Still served by dsl_api: the hardware-loop selector has no constructs-tier owner yet.
-from .dsl_api import hardware_loop
 from .op import array_ops as array
 from .op import prefetch_ops as prefetch
 from .op import reg_ops as reg

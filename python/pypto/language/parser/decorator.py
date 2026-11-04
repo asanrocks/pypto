@@ -110,6 +110,18 @@ class InlineFunction:
     col_offset: int
     closure_vars: dict[str, Any]
 
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        # The parser splices the captured AST at ``helper(...)`` call sites
+        # inside a ``@pl.program`` body — the call is never executed through
+        # Python. A direct call means the surrounding function was not
+        # decorated; raise loudly instead of silently doing nothing.
+        raise RuntimeError(
+            "@pl.inline functions are only callable inside a @pl.program / "
+            "@pl.function body; the parser splices the body at each call "
+            "site. If you're seeing this, the surrounding function was not "
+            "decorated."
+        )
+
 
 def _strip_self_parameter(func_def: ast.FunctionDef) -> ast.FunctionDef:
     """Return a copy of func_def with the leading 'self' parameter removed.
@@ -283,8 +295,11 @@ def _attach_source_lines_to_error(
         error.source_lines = raw
 
 
+_FUNCTION_DECORATOR_NAMES = {"function"}
+
+
 def _has_pl_function_decorator(node: ast.FunctionDef) -> bool:
-    """Check if a function node has @pl.function decorator.
+    """Check if a function node has a recognized function decorator.
 
     Args:
         node: AST FunctionDef node to check
@@ -293,20 +308,17 @@ def _has_pl_function_decorator(node: ast.FunctionDef) -> bool:
         True if the node has @pl.function decorator
     """
     for decorator in node.decorator_list:
-        # Check various decorator patterns
-        # ast.Attribute: pl.function
+        # Check qualified and directly imported decorator patterns.
         if isinstance(decorator, ast.Attribute):
-            if decorator.attr == "function":
+            if decorator.attr in _FUNCTION_DECORATOR_NAMES:
                 return True
-        # ast.Name: function (if imported directly)
         elif isinstance(decorator, ast.Name):
-            if decorator.id == "function":
+            if decorator.id in _FUNCTION_DECORATOR_NAMES:
                 return True
-        # ast.Call: @pl.function() with parentheses
         elif isinstance(decorator, ast.Call):
-            if isinstance(decorator.func, ast.Attribute) and decorator.func.attr == "function":
+            if isinstance(decorator.func, ast.Attribute) and decorator.func.attr in _FUNCTION_DECORATOR_NAMES:
                 return True
-            elif isinstance(decorator.func, ast.Name) and decorator.func.id == "function":
+            if isinstance(decorator.func, ast.Name) and decorator.func.id in _FUNCTION_DECORATOR_NAMES:
                 return True
     return False
 
@@ -324,8 +336,8 @@ def _find_function_decorator_call(node: ast.FunctionDef) -> ast.Call | None:
         if not isinstance(decorator, ast.Call):
             continue
         func = decorator.func
-        if (isinstance(func, ast.Attribute) and func.attr == "function") or (
-            isinstance(func, ast.Name) and func.id == "function"
+        if (isinstance(func, ast.Attribute) and func.attr in _FUNCTION_DECORATOR_NAMES) or (
+            isinstance(func, ast.Name) and func.id in _FUNCTION_DECORATOR_NAMES
         ):
             return decorator
     return None
@@ -1397,4 +1409,9 @@ def program(cls: type | None = None, *, strict_ssa: bool = False) -> ir.Program 
         return _decorator(cls)
 
 
-__all__ = ["function", "inline", "program", "InlineFunction"]
+__all__ = [
+    "function",
+    "inline",
+    "program",
+    "InlineFunction",
+]
