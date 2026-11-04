@@ -199,6 +199,10 @@ class Construct(Generic[V]):
         # advertise region-local semantics (yield, completion, split mode)
         # through them.
         self._interface_tags: frozenset[str] = frozenset()
+        # The host-bound names visible when a staged loop's body began — the
+        # loop's carry set. A host value in it is fixed for the traced
+        # iteration and cannot advance across the untraced ones.
+        self._host_carry_entry: frozenset[str] | None = None
 
     def is_staged(self) -> bool:
         """Whether this Construct collects staged IR — its install-time
@@ -849,6 +853,10 @@ class Interpreter(Generic[V]):
         opened = self._frame().create_for_construct(self, iterable)
         if opened is not None:
             self._construct_stack.append(opened.construct)
+            if opened.construct.is_staged():
+                # The representative body iteration follows immediately, so the
+                # carry set is whatever was host-bound before it ran.
+                opened.construct._host_carry_entry = self.host_bound_names()
             return opened.construct.iterations()
         # The Frame's decline is the proof the value is a host iterable (the
         # generated ``for`` iterates the original when nothing is staged).
@@ -873,7 +881,13 @@ class Interpreter(Generic[V]):
             construct = created if created is not None else WhileConstruct[V]()
             self._construct_stack.append(construct)
             self._while_sites[thunk] = construct
-        return construct.test(thunk)
+        staged = construct.test(thunk)
+        if construct.is_staged() and construct._host_carry_entry is None:
+            # Activation happens at most once, on the iteration whose
+            # predicate the language chose to stage; the names host-bound at
+            # that moment are what later untraced iterations would advance.
+            construct._host_carry_entry = self.host_bound_names()
+        return staged
 
     def _is_open(self, construct: Construct[V]) -> bool:
         return any(entry is construct for entry in self._construct_stack)
@@ -987,10 +1001,12 @@ class Interpreter(Generic[V]):
         (``pl.const(...)``, the carried-host-value spelling in the *Parameter
         worlds* section of ``docs/en/dev/language/03-functions.md``).
 
-        The merged values themselves are otherwise unchecked: a name bound
-        on only some paths has no value on the missing path, and that
-        unsoundness is rejected by the IR verifier's use-after-def check at
-        compile time, not here.
+        The merged values themselves are otherwise unchecked except for
+        one-sided host binds: a staged name bound on only some paths has no
+        value on the missing path, and that unsoundness is rejected by the
+        IR verifier's use-after-def check at compile time. A *host* name
+        bound on only some paths mints no IR for that check to see, so it
+        is poisoned here like any other control-dependent host literal.
         """
         if else_ is not None:
             staged_query = self._frame().is_staged
@@ -1027,8 +1043,12 @@ class Interpreter(Generic[V]):
         time; this is the host→host case, visible only here, at the join.
 
         Both branches binding the *same* host literal is path-independent
-        and stays silent. A name first bound on one branch only (no pre-if
-        value) keeps its documented delegation to the use-site checks.
+        and stays silent. A host name first bound on one branch only (no
+        pre-if value) is equally poisoned: host values mint no IR, so the
+        verifier's use-after-def check — the documented delegation for the
+        staged case — never fires for them, and the kept literal would
+        silently inline at every post-join read. A *staged* one-sided bind
+        keeps the delegation (it mints IR the verifier checks).
         """
         staged_query = self._frame().is_staged
         for name, bound in union.items():
@@ -1053,8 +1073,22 @@ class Interpreter(Generic[V]):
             # the visible binding below is exactly the pre-if value (a bound
             # host ``None`` included — presence is explicit here).
             prior = _unwrap_join_poison(self._visible_binding(name))
-            if prior is _UNBOUND or staged_query(prior):
-                continue  # first bind (delegated), or the bind-time guards own the flip
+            if staged_query(prior):
+                continue  # the bind-time guards own the flip
+            if prior is _UNBOUND:
+                # A first bind on one branch: no delegation target exists for
+                # a host value (no IR, so no verifier use-after-def report) —
+                # the missing path has no value, and the kept literal would
+                # inline at every post-join read. Poisoned here, rejected at
+                # the first read; per-branch host scratch never read after
+                # the join stays legal, and an unconditional rebind clears
+                # the wrapper.
+                union[name] = _JoinPoisonedHost(
+                    bound,
+                    "is a host value bound on only one branch of this if "
+                    f"({bound!r} there, unbound on the other path)",
+                )
+                continue
             if not _host_literals_agree(bound, prior):
                 union[name] = _JoinPoisonedHost(
                     bound,
@@ -1423,6 +1457,21 @@ class Interpreter(Generic[V]):
         return any(
             construct.is_staged() and construct.kind in _CF_KINDS for construct in self._construct_stack
         )
+
+    def host_carried(self, name: str) -> bool:
+        """Whether ``name`` was host-bound before the innermost staged loop's body.
+
+        That is the fact that makes a host rebinding inside the body
+        unsound: the trace runs one representative iteration, so the new
+        value would be baked as a constant while the untraced iterations
+        expect it to advance. A name first bound *in* the body is not in the
+        carry set — it is per-iteration state, and rebinding it stays legal.
+        """
+        for construct in reversed(self._construct_stack):
+            if construct.is_staged() and construct.kind in _LOOP_KINDS:
+                entry = construct._host_carry_entry
+                return entry is not None and name in entry
+        return False
 
     def staged_control_flow_above(self, owner: object) -> bool:
         """Whether a staged if/for/while is active above the construct owning ``owner``.

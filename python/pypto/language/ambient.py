@@ -30,11 +30,10 @@ trace interpreter through the Frame.
 from __future__ import annotations
 
 from contextvars import ContextVar, Token
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING
 
-# Staged as an Any alias until the trace-semantics commit provides the
-# real Frame type; this module's runtime surface is unchanged either way.
-PtoFrame: TypeAlias = Any
+if TYPE_CHECKING:
+    from pypto.language.tracing.semantics import PtoFrame
 
 __all__ = [
     "active_frame",
