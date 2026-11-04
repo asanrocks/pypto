@@ -139,10 +139,27 @@ def _ambient_pre_emit_flush() -> None:
     unopened: its body's first statement would land in the Spmd scope ahead
     of the loop variable's ``get_block_idx`` definition — the free-var use
     the SSA verifier rejects. The ambient frame is exactly the frame whose
-    statements are being emitted."""
+    statements are being emitted.
+
+    A splice inverts the same argument for the frames *around* it. The splice
+    frame is ambient while the body runs, so the caller's pending scopes are
+    one link up the borrow chain, and they are still pending when the body's
+    first statement lands — a body that is the only statement in a deferred
+    ``pl.at`` would otherwise leave the caller's region unopened and its tiles
+    in an Orchestration function. Outermost first, and only on the way to an
+    actual emission: a body that emits nothing opens no region.
+    """
     frame = active_frame()
-    if frame is not None:
-        frame._flush_deferred_scopes()
+    if frame is None:
+        return
+    borrowed: list[PtoFrame] = []
+    outer = frame.borrowed_parent
+    while outer is not None:
+        borrowed.append(outer)
+        outer = outer.borrowed_parent
+    for ancestor in reversed(borrowed):
+        ancestor._flush_deferred_scopes()
+    frame._flush_deferred_scopes()
 
 
 _FACADE_TYPES = FACADE_TYPES
