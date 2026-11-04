@@ -541,7 +541,9 @@ def compile(  # noqa: PLR0913
         # best-effort wrapper; single-chip artifact compilation fails explicitly.
         artifact = None
     else:
-        artifact = _make_single_chip_artifact(result, lowered, len(returns), ArtifactExecutionMode.PROGRAM)
+        artifact = _make_single_chip_artifact(
+            result, lowered, _num_return_types(result, returns), ArtifactExecutionMode.PROGRAM
+        )
     return CompiledProgram(
         program,
         result.output_dir,
@@ -573,7 +575,22 @@ def _compile_artifact(  # pyright: ignore[reportUnusedFunction]
     if _is_distributed(result.lowered_program):
         raise ValueError("Artifact compilation requires a single chip after lowering")
     lowered, _, returns = _extract_func_param_infos(entry_function(result.lowered_program))
-    return _make_single_chip_artifact(result, lowered, len(returns), contract)
+    return _make_single_chip_artifact(result, lowered, _num_return_types(result, returns), contract)
+
+
+def _num_return_types(result: "_CompilationResult", returns: list[Any]) -> int:
+    """The artifact ABI's result count.
+
+    A persisted result mapping counts *delivered* values: a declared
+    structural ``pl.Tuple`` slot keeps one IR return position while its
+    elements — the values the packer hands the caller — are the results,
+    one mapping entry each. Without the mapping the declared positions are
+    the count (the write-through contract's aliases already agree with
+    them).
+    """
+    if result.result_indices is not None:
+        return len(result.result_indices)
+    return len(returns)
 
 
 def _compile_to_files(  # noqa: PLR0913
@@ -674,18 +691,20 @@ def _compile_to_files(  # noqa: PLR0913
         effective_backend_type = pipeline.backend_type
         effective_runtime = pipeline.runtime
 
-        if contract is ArtifactExecutionMode.PROGRAM and not _is_distributed(program):
+        # Read the result mapping from the lowered program: a traced host
+        # entry sits at HOST level before the outline passes demote it to the
+        # CHIP orchestration it assembles, so the pre-lowering levels would
+        # misread the compile as distributed and drop the mapping.
+        if contract is ArtifactExecutionMode.PROGRAM and not _is_distributed(transformed_program):
             try:
                 lowered_entry = entry_function(transformed_program)
             except ValueError:
                 lowered_entry = None
             if lowered_entry is not None:
                 num_synthesized = lowered_entry.attrs.get("entry_synthesized_count", 0)
-                if num_synthesized:
-                    result_indices = tuple(
-                        lowered_entry.attrs[f"entry_result_{i}"]
-                        for i in range(lowered_entry.attrs["entry_result_count"])
-                    )
+                count = lowered_entry.attrs.get("entry_result_count")
+                if count is not None:
+                    result_indices = tuple(lowered_entry.attrs[f"entry_result_{i}"] for i in range(count))
 
         if contract is ArtifactExecutionMode.KERNEL:
             lowered, _, _ = _extract_func_param_infos(entry_function(transformed_program))

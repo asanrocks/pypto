@@ -711,6 +711,55 @@ class TestCalleeReturnAnnotation:
 class TestReturnCreatedOutputs:
     """Fresh static entry outputs can acquire hidden host buffers at compilation."""
 
+    def test_a_scoped_create_still_defers_until_its_allocation_is_explicit(self):
+        """A create nested in a scope defers the ABI check to compilation.
+
+        The tracing boundary cannot yet see the backing allocation (it is not
+        top-level), so ``defer_unlowered`` must keep deferring it — the deferred
+        entry then materializes once lowering has made the create explicit.
+        """
+
+        @pl.jit_trace
+        def scoped_create(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
+            with pl.at(level=pl.Level.CORE_GROUP):
+                result = pl.create_tensor([64, 64], dtype=pl.FP32)
+                pl.store(pl.mul(pl.load(x, [0, 0], [64, 64]), 2.0), [0, 0], result)
+            return result
+
+        program = scoped_create.specialize()
+        entry = next(fn for fn in program.functions.values() if fn.name == "scoped_create")
+        adapted = materialize_entry_outputs(program, entry, defer_unlowered=True)
+        assert adapted.result_indices is None
+        assert adapted.num_synthesized == 0
+        # Asking without the defer flag on the unlowered trace would raise the
+        # incomplete-provenance error — the defer is what keeps this entry
+        # buildable until compilation owns the check.
+        with pytest.raises(TypeError, match="provenance is incomplete"):
+            materialize_entry_outputs(program, entry)
+
+    def test_incomplete_provenance_without_an_allocation_fails_loudly_at_the_boundary(self):
+        """A returned value the walk cannot follow fails at the trace boundary.
+
+        The lineage walk does not expand a tuple nested inside a structural
+        tuple, so ``pl.Tuple(pl.Tuple(a, b))`` reads as one undeliverable slot.
+        That is a provenance gap, not an unlowered allocation — deferring it
+        silently would surface later as a misleading "fresh allocation
+        required" error at final compile. The boundary that first observes the
+        incomplete map (the tracing entry check) must fail, naming the entry
+        and the incomplete map.
+        """
+
+        @pl.jit_trace.host
+        def nested_tuple(
+            x: pl.Tensor[[8, 8], pl.FP32],
+            a: pl.Out[pl.Tensor[[8, 8], pl.FP32]],
+            b: pl.Out[pl.Tensor[[8, 8], pl.FP32]],
+        ):
+            return pl.Tuple(pl.Tuple(a, b))
+
+        with pytest.raises(TypeError, match=r"nested_tuple.*provenance is incomplete.*\[None\]"):
+            nested_tuple.specialize()
+
     def test_returning_a_created_tensor_is_materializable(self):
         @pl.jit_trace
         def make_out(x: pl.Tensor[[64, 64], pl.FP32]) -> pl.Tensor[[64, 64], pl.FP32]:
@@ -831,6 +880,34 @@ class TestWriteThroughResultsAreDelivered:
         assert ir.returned_param_indices(entry, program) == [None]
         assert ir.delivered_param_indices(entry, program) == [2, 1]
 
+    def test_a_fully_delivered_declared_tuple_needs_no_program_adaptation(self):
+        """A declared structural ``pl.Tuple`` whose every element is delivered.
+
+        The position-faithful map reads ``[None]`` — one tuple slot, not a
+        bare parameter — so an ABI boundary keyed on positions alone would
+        refuse the entry as if it returned created values. The value-faithful
+        question ("does every delivered value live in a parameter?") is what
+        materialization must ask before it looks for fresh allocations: no
+        storage transformation, but the delivered map still disagrees with the
+        pure-Out declaration-order fallback, so it is carried for the artifact
+        metadata to persist.
+        """
+
+        @pl.jit_trace.host
+        def forward(
+            x: pl.Tensor[[8, 8], pl.FP32],
+            out: pl.Out[pl.Tensor[[8, 8], pl.FP32]],
+            logits: pl.Out[pl.Tensor[[8, 8], pl.FP32]],
+        ) -> pl.Tuple[pl.Tensor[[8, 8], pl.FP32], pl.Tensor[[8, 8], pl.FP32]]:
+            return relay_results(x, logits, out)
+
+        program = forward.specialize()
+        entry = next(fn for fn in program.functions.values() if fn.name == "forward")
+        adapted = materialize_entry_outputs(program, entry)
+        assert adapted.result_indices == (2, 1)
+        assert adapted.num_synthesized == 0
+        assert adapted.program is program
+
     def test_a_direct_tuple_call_survives_the_default_pipeline(self):
         # The body owns a CORE_GROUP scope, so let the pipeline outline it
         # from an orchestration entry rather than nesting it inside InCore.
@@ -883,6 +960,37 @@ class TestWriteThroughResultsAreDelivered:
         assert entry is not None
         adapted = materialize_entry_outputs(program, entry)
         assert adapted.result_indices == (1, len(entry.params))
+
+    def test_a_mixed_structural_tuple_materializes_its_created_element(self):
+        """A declared structural ``pl.Tuple`` with one delivered and one
+        created element.
+
+        The early exit flattens the tuple slot before asking the delivered
+        map, but the created-output path still asked the position-faithful
+        one — one tuple slot read ``[None]`` — so the created element could
+        not materialize and the entry was refused as if it returned no fresh
+        allocation at all. The created path flattens the same way, asked on
+        the candidate whose promoted creates are the parameters the
+        elements trace back to.
+        """
+
+        @pl.jit_trace
+        def forward(
+            x: pl.Tensor[[64, 64], pl.FP32],
+            a: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
+        ) -> pl.Tuple[pl.Tensor[[64, 64], pl.FP32], pl.Tensor[[64, 64], pl.FP32]]:
+            qa = project(x, a)
+            created = pl.create_tensor([64, 64], dtype=pl.FP32)
+            return pl.Tuple(qa, created)
+
+        program = forward.specialize()
+        entry = program.get_function("forward")
+        assert entry is not None
+        assert ir.returned_param_indices(entry, program) == [None]
+        assert ir.delivered_param_indices(entry, program) == [1, None]
+        adapted = materialize_entry_outputs(program, entry)
+        assert adapted.result_indices == (1, len(entry.params))
+        assert adapted.num_synthesized == 1
 
 
 class TestMultiResultSpelling:

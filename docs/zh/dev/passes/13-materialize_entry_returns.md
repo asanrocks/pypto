@@ -17,7 +17,8 @@ return out
 
 —— 交给调用者的东西无可读取：host 手上没有这个分配的句柄。本 pass 就是
 修补这一点的边界适配器，并且与前端无关：`@pl.jit` 入口与 `@pl.jit_trace`
-入口返回同样的新建分配时，经由同一个变换交付。
+入口返回同样的新建分配时，经由同一个变换交付（created-output 测试套件对
+两个装饰器参数化）。
 
 该 pass 是基于既有 pass 接口的 Python program pass
 （`python/pypto/ir/_entry_outputs.py`），不新增核心 IR 节点 —— 它改变的

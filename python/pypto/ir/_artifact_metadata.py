@@ -294,8 +294,13 @@ class ArtifactMetadata:
         object.__setattr__(self, "synthesized_outputs", tuple(self.synthesized_outputs))
         if self.result_indices is not None:
             object.__setattr__(self, "result_indices", tuple(self.result_indices))
-            if not self.synthesized_outputs:
-                raise ValueError("Physical result mapping requires synthesized outputs")
+            # The mapping also orders parameter-backed results whose provenance
+            # differs from the pure-Out declaration-order fallback (return
+            # order, duplicates, an InOut backing), where nothing is synthesized.
+            physical = self.parameters + self.synthesized_outputs
+            validate_return_aliases(physical, self.result_indices)
+            if len(self.result_indices) != self.num_return_types:
+                raise ValueError("Result mapping count does not match num_return_types")
         if self.synthesized_outputs:
             if ArtifactExecutionMode.KERNEL in self.execution_capabilities.modes:
                 raise ValueError("Kernel metadata cannot contain synthesized outputs")
@@ -303,9 +308,6 @@ class ArtifactMetadata:
                 raise ValueError("Synthesized outputs require a result mapping")
             physical = self.parameters + self.synthesized_outputs
             validate_parameter_names(physical)
-            validate_return_aliases(physical, self.result_indices)
-            if len(self.result_indices) != self.num_return_types:
-                raise ValueError("Result mapping count does not match num_return_types")
             if len(physical) != len(self.lowered_parameters):
                 raise ValueError("Physical output signature does not match lowered parameters")
             for output, lowered in zip(

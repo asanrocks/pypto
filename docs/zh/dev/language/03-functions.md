@@ -417,6 +417,46 @@ def entry(a: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP
 写穿调用方的变量，因此调用方能看到更新，外层循环也能推导出携带通道。把名字交还给它自己
 （`out = splice_into(x, out)`，写穿惯用法）不产生任何语句。
 
+返回值可通过参数缓冲区或入口新建的静态形状分配交付。入口声明的 `pl.Out` 缓冲区及能追溯到它的
+值保持原有写回行为。检查沿着值进行（`return_lineage`），而不是看变量名，因此“返回自己写过的缓冲区”的被调
+结果也算已交付：
+
+```python
+@pl.jit_trace.inline
+def project(x: pl.Tensor[[64, 64], pl.FP32], y: pl.Tensor[[64, 64], pl.FP32]):
+    y[:, :] = pl.add(x, 1.0)
+    return y
+
+@pl.jit_trace
+def tuple_of_results(
+    x: pl.Tensor[[64, 64], pl.FP32],
+    a: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
+    b: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
+):
+    qa = project(x, a)
+    qb = project(x, b)
+    return qa, qb                # 两个已交付结果，按扁平形式展开
+```
+
+多返回值可以写成一个 staged 的 `pl.Tuple`——产出 `TupleType` 的那个算子。在返回位置上，Python tuple
+字面量并不是 host 容器：它按解析器路径的扁平合约展开（`return a, b` 即 N 个结果），而 list 字面量与
+`pl.Tuple(a, b)` 是那个结构化的单个值。两者推导出同一个扁平签名
+（`-> tuple[pl.Tensor[...], pl.Tensor[...]]`），因此两条路径一致，唯一差异是物化出的
+`ReturnStmt`；把返回值写成 `pl.Tuple(...)` 从来不是必需的。PROGRAM 模式会将入口返回的
+顶层静态形状新分配转换为隐藏的 `Out` 参数。host 分配并返回缓冲区，公开签名不增加参数；
+两条前端路径共享此降级。混合结果保持源码返回顺序，重复结果保持别名关系。动态新建输出、
+没有交付映射的返回视图及无法提升生命周期的分配会被拒绝。KERNEL 模式仍要求结果由外部参数承载。
+
+返回元组的被调函数可以直接返回：`return callee(x, a, b)` 与先绑定结果再返回
+`pl.Tuple(first, second)` 具有相同的交付来源（delivery lineage）。分类沿着元组值的元素进行，
+经过多层转发调用时也保持一致。
+
+声明的 `->` 会与函数体实际产生的值核对，而不是直接盖在签名上。若声明为 `[16, 8]`
+而函数体返回 `[8, 8]`，或在双返回值声明下只返回一个值，追踪会立即抛出 `TypeError`，
+指明出错位置及两种类型。不同的 staged 返回路径也必须一致：两个分支返回不同类型时
+会被拒绝，而不是留下空签名，因为空签名会让后续每个调用者都看不到这一分歧。
+没有返回值的函数体保留其声明类型——jit 入口用 `pl.Out` 声明自己写入的输出缓冲区。
+
 `@pl.function` / `@pl.program` 声明仍使用 AST 路径。外部 kernel 没有可追踪的 Python 函数体，
 因此始终是声明：在追踪函数体内调用 `@pl.jit.extern` 桩函数会并入入口的 assembly，
 而 `pl.jit_trace` 本身没有 `extern` 表单。超出已验证表面的其余家族拼写（`opaque`）

@@ -20,7 +20,8 @@ return out
 — hands the caller nothing to read: the host holds no handle on the
 allocation. This pass is the boundary adapter that fixes that, and it is
 frontend-neutral: a `@pl.jit` entry and a `@pl.jit_trace` entry that both
-return a fresh allocation deliver through the same transformation.
+return a fresh allocation deliver through the same transformation (the
+created-output suites are parametrized over both decorators).
 
 The pass is a Python program pass (`python/pypto/ir/_entry_outputs.py`)
 over the existing pass interface — no new core IR node — because what it
