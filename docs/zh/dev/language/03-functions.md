@@ -267,6 +267,129 @@ def scale_relu(
 映射转发编译侧字段。凡是要*运行*编译器的请求——pass 转储、PTOAS 转储、编译
 profiling、显式输出目录、或携带 instrument 的外层 `PassContext`——绝不从缓存
 应答：每次都重新编译，随后的普通兼容调用仍复用原有的热产物。
+
+
+### 参数世界
+
+注解决定实参是运行时数据还是编译期常量：
+
+| 注解 | 世界 | 行为 |
+| --- | --- | --- |
+| `pl.Tensor`、`pl.Tile`、`pl.Out[...]`、`pl.Scalar[dtype]` | 运行时参数 | 进入生成签名；取值在分发时到达 |
+| 普通 Python 注解（`float`、`int`）或无注解 | host knob | 在追踪时烘焙进函数体；改变取值会专门化新产物 |
+
+传给运行时声明位置的 host 标量会提升为 `Scalar`。把 host 标量
+传给 tensor 位置，或把已 staged 的值传给 host knob，都会抛出指名参数的
+`TypeError`：参数世界由声明决定，而不由调用点决定。
+
+facade 声明除了参数世界，还拥有参数的*类型*。该路径从调用点推导被调函数的
+参数（正是这种推导让调用得到特化），但推导被声明所界定：位于声明槽位整数格内的
+整数实参会被*转换*到声明的 dtype——`pl.Scalar[pl.INT32]` 参数接受 INDEX 值并按
+INT32 使用，两个方向都如此，且转换会绑定到一个临时量
+（`_rank_int32 = pl.cast(r, pl.INT32)`），使发出的调用携带声明的类型。两套前端
+按同一条准入规则（`pypto.language.scalar_conversion`）发出同一条语句，因此被调
+函数对所有整数调用方只有一个签名，打印出的 IR 就是手写拼写。格之外的一切保留其
+拒绝两个固定宽度 dtype 之间、浮点、`pl.BOOL`、`pl.TASK_ID`、打包 FP4，以及
+张量/tile 的 dtype、shape、布局不匹配；`pl.Tensor[[8, 8], pl.FP32]` 参数仍
+拒绝 `[16, 8]` 或 BF16 实参。拒绝时抛出的 `TypeError` 同时列出两种类型，修复
+方式在调用点（`pl.cast`）或声明处。规则本身与它为何收窄见用户文档的
+“声明的标量 dtype 会做转换”（`docs/zh/user/language/00-types.md`）。裸 Python
+整数不做转换而是做*检查*：它不携带 dtype，因此超出范围的值在每次派发时都会被
+拒绝（标量值从不参与编译产物缓存键），而带类型的值则按上述规则转换。声明的动态维度（`pl.Tensor[[N, 8], ...]`）不属于矛盾：
+它声明的是“调用点传什么就是什么”，任何具体维度都会特化它。一个符号只表示一个
+维度：若 `N` 出现在多个参数中，为它提供的每个具体维度都必须一致。给两个 `N`
+形状的参数分别传入 `[16, 8]` 与 `[32, 8]` 会被拒绝；两者可能不同时应声明两个
+符号。Torch 没有 INDEX dtype，其 `int64` 存储是 host 载体，因此 torch `int64`
+实参进入声明的 INDEX 槽位时会桥接为 INDEX；显式的 `pl.INT64` facade 进入该槽位
+同样属于准入转换，会被记录为保值的类型变更而不是被省略。裸标记同理被拒绝：
+`vlen: pl.INDEX` 只声明 dtype 而不声明参数世界，本会变成 host knob，因此错误
+信息直接给出 `pl.Scalar[pl.INDEX]` 拼写。声明的**布局**以同样的方式桥接：torch
+tensor 不携带布局，因此 `pl.Tensor[[N, K], pl.FP16, pl.NZ]` 的 `NZ` 打包取自声明，
+而形状与 dtype 仍以实参为准——与声明维度矛盾的实参依然会被拒绝。
+
+**关键字用于指名已声明的参数。** 调用可以按名字绑定任意参数——
+`helper(x, out=out, factor=2.0)`——追踪器在任一路径读取之前就把该绑定折叠进
+声明顺序，因此专门化路径的注解、被调路径的变体键、派发桥接以及打印出的程序
+看到的都是一次位置调用。于是拼写永远不进入产物：上述两种写法专门化出同一个
+程序，这正是共享代码可以保留更清晰写法的原因。`device=` 与 `attrs=` 是调用点
+元数据而非参数（detached 调用会派发到该设备），`config=RunConfig(...)` 在顶层
+调用中选择编译开关。每种畸形拼写都按名字拒绝，而不是被静默丢弃：未知关键字、
+同一参数既按位置又按名字绑定、某个参数未被绑定、以及多余的位置实参。
+
+host knob 在 staged 控制流内部是只读的。函数体只追踪一次，所以循环推进的
+host 值——`for _ in pl.range(n)` 中的 `factor = factor * 2.0`——会把那一代表
+迭代的结果烘焙进每一次迭代，以及循环之后对它的任何读取。绑定检查会抛出
+`TypeError`，并指向 staged 拼写：用 `pl.const(...)` 绑定状态，让循环携带它。
+读取 host knob（或在函数体内绑定新的 host 临时变量）仍然合法——没有任何东西
+被携带。
+
+### 已支持的表面
+
+`examples/` 下每个被装饰的定义都在该路径上：显式输出（`pl.Out` / `pl.InOut`）
+入口及其 `incore`、`inline` 被调函数；针对运行时
+标量的 staged `for` / `if` / `while`；host knob；运行时标量参数；循环携带 tile 的
+tile assemble；`pl.parallel` 配合原子累加；scope 优化（`pl.split`、`deps=`）；
+valid-shape 循环；`host` / `graph` 入口及其逐 rank 分发与录制重放；以及上述分发缓存契约。
+
+该路径强制三种拼写，它们都是相对解析器路径的有意差异：
+
+| 解析器路径 | 追踪路径 | 原因 |
+| --- | --- | --- |
+| `vlen: pl.INDEX`、`scale: pl.FP32` | `pl.Scalar[pl.INDEX]`、`pl.Scalar[pl.FP32]` | 裸 dtype 标记只声明 dtype 而不声明参数世界，因此在装饰时被拒绝，错误信息给出该拼写 |
+| `for i, (acc,) in pl.range(n, init_values=(acc0,)):` + `pl.yield_` | 循环前绑定 `acc = acc0`，循环体末尾重新绑定 | 携带通道由重新绑定推导；`init_values=` 是同一组通道的打印器/解析器往返拼写，解析器仍会打印它 |
+| `inline` helper 参数上的 `pl.Out[pl.Tensor]` | 裸 `pl.Tensor` | helper 函数体在调用处被拼接，该参数本就是调用方变量的原地别名 |
+
+第四种是 host 字面量进入 staged 控制流：在 `pl.range` 下重新绑定 `factor = 1.0`
+会报错，携带标量需要类型化拼写 `pl.const(1.0, pl.FP32)`。
+
+#### 函数体拼接：`pl.authoring.body(...).splice(...)`
+
+`pl.authoring.body` 一次性预备一个 Python 函数（源码重写与编译）并返回可复用的函数体；`.splice(...)`
+在追踪内核内的每次出现处将其放置到调用者插入点：**不会产生函数、`GlobalVar` 或
+`ir.Call`** —— 程序只获得该函数体的语句。host 调用会被拒绝；该放置仅在活跃的 trace
+内执行。
+
+因为没有被调函数，也就没有 ABI，所以**注解不起作用**：`def twice(x)` 无需
+`pl.Tensor[[...]]` 声明，而同一个函数体可以服务多种参数类型（一次出现是 `Tensor`，
+下一次是 `Tile`）。这正是它与 `@pl.jit_trace.inline` 的差别：后者收集一次函数体、
+发出调用，因此必须声明参数与结果类型。
+
+```python
+@pl.authoring.body
+def twice(x):                 # 没有 IR 注解：没有被调函数
+    return pl.add(x, x)
+
+@pl.jit_trace
+def entry(a: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        tile = pl.load(a, [0, 0], [64, 64])
+        pl.store(twice.splice(tile), [0, 0], out)
+        out[:, :] = twice.splice(a)     # 同一个函数体，第二种参数类型
+    return out
+```
+
+`return` 是拼接局部的：值直接交给调用方的表达式位置，因此函数体可以交付一个由它创建、
+没有任何参数背书的值。但内部仍然是 staged 的：拼接会被粘进调用方的控制流，所以跨过
+函数体**内部** `pl.range` / `pl.if` 的值，仍遵守与外层函数相同的 staged 规则（以及相同
+的 `pl.const` 拼写）。
+
+本波次每个 trace 只允许一次拼接：拼接另一个函数体的函数体（嵌套或 host 递归）会被明确
+拒绝，而不是错误拼接。函数体自有的 scope 策略随函数体一起传递：
+`body.splice(..., auto_scope=False)` 让手动编写的 scope 区域合法，而调用方自己的策略
+仍管辖其他一切 —— 这就是 `@pl.jit_trace.inline(auto_scope=False)` 的拼接写法。
+
+拼接的参数是调用方值的**原地别名**，与 inline 拼接遵循同一条规则。重新绑定参数的函数体
+——包括在 `pl.at` scope 内的循环中携带的重新绑定，也就是每个 Qwen3 helper 的形状 —— 直接
+写穿调用方的变量，因此调用方能看到更新，外层循环也能推导出携带通道。把名字交还给它自己
+（`out = splice_into(x, out)`，写穿惯用法）不产生任何语句。
+
+`@pl.function` / `@pl.program` 声明仍使用 AST 路径。外部 kernel 没有可追踪的 Python 函数体，
+因此始终是声明：在追踪函数体内调用 `@pl.jit.extern` 桩函数会并入入口的 assembly，
+而 `pl.jit_trace` 本身没有 `extern` 表单。超出已验证表面的其余家族拼写（`opaque`）
+在装饰时抛出 `TypeError`，而不是追踪一条未验证的路径。
+
+这份清单就是边界：需要其中未列出的能力的 kernel 仍留在解析路径上，
+而追踪函数体调用解析路径上的 kernel 会直接报错，不会悄悄离开该前端。
 ## 函数
 
 ```python

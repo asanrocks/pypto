@@ -7,7 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""End-to-end ``allow_early_resolve`` coverage through the ``@pl.jit`` pipeline.
+"""End-to-end ``allow_early_resolve`` coverage through the ``@pl.jit_trace`` pipeline.
 
 JIT is a specialization layer, not a distinct dispatch surface: a JIT function
 body is specialized then parsed exactly like ``@pl.program`` source, so the
@@ -22,7 +22,7 @@ import pytest
 from pypto import codegen, ir
 
 
-@pl.jit
+@pl.jit_trace
 def _at_early_resolve_entry(a: pl.Tensor, c: pl.Out[pl.Tensor]):
     """A JIT entry whose outlined ``pl.at`` block opts into early-dispatch."""
     with pl.at(level=pl.Level.CORE_GROUP, allow_early_resolve=True):
@@ -32,7 +32,7 @@ def _at_early_resolve_entry(a: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def _at_no_flag_entry(a: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Same shape, no hint — must emit no early-resolve call."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -52,7 +52,7 @@ def test_jit_at_allow_early_resolve_emits_hint():
 
     a = torch.randn(128, 128, dtype=torch.float32)
     c = torch.zeros(128, 128, dtype=torch.float32)
-    program = _at_early_resolve_entry.lower(a, c)
+    program = _at_early_resolve_entry.compile_for_test(a, c)
 
     code = _orch_code(program)
     assert "set_allow_early_resolve(true);" in code, code
@@ -64,7 +64,7 @@ def test_jit_no_flag_emits_no_hint():
 
     a = torch.randn(128, 128, dtype=torch.float32)
     c = torch.zeros(128, 128, dtype=torch.float32)
-    program = _at_no_flag_entry.lower(a, c)
+    program = _at_no_flag_entry.compile_for_test(a, c)
 
     assert "set_allow_early_resolve" not in _orch_code(program)
 

@@ -32,12 +32,19 @@ into loadable binaries. It is internal and has no supported entry point.
 | A `@pl.jit` kernel and torch tensors | The result | `kernel(*args, config=...)` |
 | A `@pl.jit` kernel | The artifact, to dispatch repeatedly | `kernel.compile(*args, config=...)` |
 | A `@pl.jit` kernel | The IR, without codegen | `kernel.lower(*args)` |
+| A `@pl.jit_trace` kernel | The same three JIT entry points | `specialize()` / `lower()` / `compile()`, or a host call |
 | A `@pl.program` class | The artifact | `ir.compile(program, ...)` |
 | A `CompiledProgram` | One dispatch | `compiled(*args, config=...)` |
 | A `CompiledProgram` and device-resident data | Many dispatches | `ChipWorker.run(compiled, *args)` |
 | A `DistributedCompiledProgram` | Many dispatches | `compiled.prepare()` → `DistributedWorker.run(...)` |
 | A build directory on disk | One dispatch, no recompile | `CompiledProgram.from_dir(work_dir)(*args, config=...)` |
 | A `CompiledProgram` | Timed dispatches | `benchmark(compiled, args, ...)` |
+
+`@pl.jit_trace` is the tracing frontend's JIT decorator. It exposes the same
+entry points as `@pl.jit` -- `specialize()`, `lower()`, `compile()`, and the
+dispatch call -- so every `@pl.jit` row above applies to it unchanged; only the
+frontend that produces the IR differs.
+
 
 ## Internal torch adaptation
 

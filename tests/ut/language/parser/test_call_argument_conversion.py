@@ -22,6 +22,7 @@ applies; this lane gains no new refusal.
 """
 
 import pypto.language as pl
+import pytest
 from pypto.pypto_core import DataType, ir
 
 
@@ -147,6 +148,37 @@ class TestTheParsingLaneConverts:
         ir.assert_structural_equal(program, reparsed, enable_auto_mapping=True)
 
 
+class TestTheTracingLanePrintsTheSameStatement:
+    """One name and one shape, so the parity gate can compare the lanes."""
+
+    def test_the_tracer_emits_the_parsing_lane_temporary(self):
+        import pypto.language as pl_local  # noqa: PLC0415 — mirrors the fixture below
+
+        @pl_local.jit_trace
+        def callee(
+            x: pl_local.Tensor[[8, 8], pl_local.FP32],
+            rank: pl_local.Scalar[pl_local.INT32],
+            out: pl_local.Out[pl_local.Tensor[[8, 8], pl_local.FP32]],
+        ):
+            with pl_local.at(level=pl_local.Level.CORE_GROUP):
+                tile = pl_local.load(x, [0, 0], [8, 8])
+                pl_local.store(pl_local.add(tile, rank), [0, 0], out)
+            return out
+
+        @pl_local.jit_trace
+        def entry(
+            x: pl_local.Tensor[[8, 8], pl_local.FP32],
+            out: pl_local.Out[pl_local.Tensor[[8, 8], pl_local.FP32]],
+        ):
+            for r in pl_local.range(2):
+                out = callee(x, r, out)
+            return out
+
+        printed = entry.specialize().as_python()
+        assert "_rank_int32: pl.Scalar[pl.INT32] = pl.cast(r, pl.INT32)" in printed, printed
+        assert "self.callee(x, _rank_int32, out)" in printed, printed
+
+
 class TestAdmissionStaysNarrow:
     def test_the_shared_rule_admits_only_the_index_integer_lattice(self):
         from pypto.language.scalar_conversion import conversion_target  # noqa: PLC0415 — the rule under test
@@ -175,3 +207,7 @@ class TestAdmissionStaysNarrow:
 
         assert conversion_temp_name("rank", DataType.INT32) == "_rank_int32"
         assert conversion_temp_name("offset", DataType.INDEX) == "_offset_index"
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

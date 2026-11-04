@@ -1,3 +1,12 @@
+# Copyright (c) PyPTO Contributors.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# -----------------------------------------------------------------------------------------------------------
+
 """Characterization of the structural stdlib surface on the trace lane.
 
 The behavior pinned here is the contract the authoring-tier simplification
@@ -29,11 +38,7 @@ from pypto.language.tracing.semantics import PtoSema
 from pypto.pypto_core import ir
 
 F32 = torch.float32
-
-
 T8x8: TypeAlias = pl.Tensor[[8, 8], pl.FP32]
-
-
 OUT8x8: TypeAlias = pl.Out[T8x8]
 
 
@@ -200,6 +205,116 @@ def _entry_function(program: ir.Program, name: str) -> ir.Function:
     return by_name[name]
 
 
+# -----------------------------------------------------------------------------------------------------------
+# The deps channel — the submit spellings (the jit envelope's build lane)
+# -----------------------------------------------------------------------------------------------------------
+
+
+class TestSubmitDeps:
+    def test_a_scalar_task_id_rides_as_one_direct_edge(self):
+        @pl.jit_trace
+        def entry(a: T8x8, out: OUT8x8):
+            _, t0 = pl.submit(_dispatch_leaf, a, out)
+            _, t1 = pl.submit(_dispatch_leaf, a, out, deps=[t0])
+            return out
+
+        submits = _submits_of(_entry_program(entry))
+        assert len(submits) == 2
+        assert len(submits[1].deps) == 1
+        dep = submits[1].deps[0]
+        assert isinstance(dep, ir.Var)
+        assert isinstance(dep.type, ir.ScalarType) and dep.type.dtype == pl.TASK_ID
+
+    def test_a_whole_task_id_array_rides_as_one_direct_edge(self):
+        @pl.jit_trace
+        def entry(a: T8x8, out: OUT8x8):
+            _, t0 = pl.submit(_dispatch_leaf, a, out)
+            tids = pl.array.create(1, pl.TASK_ID)
+            tids[0] = t0
+            _, t1 = pl.submit(_dispatch_leaf, a, out, deps=[tids])
+            return out
+
+        submits = _submits_of(_entry_program(entry))
+        assert len(submits) == 2
+        assert len(submits[1].deps) == 1
+        dep = submits[1].deps[0]
+        assert isinstance(dep, ir.Var)
+        assert isinstance(dep.type, ir.ArrayType) and dep.type.dtype == pl.TASK_ID
+
+    def test_per_element_entries_synthesize_one_deps_array(self):
+        @pl.jit_trace
+        def entry(a: T8x8, out: OUT8x8):
+            _, t0 = pl.submit(_dispatch_leaf, a, out)
+            tids = pl.array.create(2, pl.TASK_ID)
+            tids[0] = t0
+            tids[1] = t0
+            _, t1 = pl.submit(_dispatch_leaf, a, out, deps=[tids[0], tids[1]])
+            return out
+
+        program = _entry_program(entry)
+        submits = _submits_of(program)
+        assert len(submits) == 2
+        # The whole list is replaced by one synthesized buffer Var.
+        assert len(submits[1].deps) == 1
+        dep = submits[1].deps[0]
+        assert isinstance(dep, ir.Var)
+        assert isinstance(dep.type, ir.ArrayType) and dep.type.dtype == pl.TASK_ID
+        # The buffer's construction: array.create(2) then two update_element
+        # rebinds, one per entry.
+        assert _buffer_chain(_entry_function(program, "entry"), id(dep)) == [
+            ("array.create", 1),
+            ("array.update_element", 3),
+            ("array.update_element", 3),
+        ]
+
+    def test_none_entries_drop_from_the_edge_list(self):
+        @pl.jit_trace
+        def entry(a: T8x8, out: OUT8x8):
+            _, t0 = pl.submit(_dispatch_leaf, a, out)
+            _, t1 = pl.submit(_dispatch_leaf, a, out, deps=[t0, None])
+            return out
+
+        submits = _submits_of(_entry_program(entry))
+        assert len(submits[1].deps) == 1  # the None sentinel contributes no edge
+
+    def test_mixing_a_whole_array_with_elements_is_loud(self):
+        @pl.jit_trace
+        def entry(a: T8x8, out: OUT8x8):
+            _, t0 = pl.submit(_dispatch_leaf, a, out)
+            tids = pl.array.create(1, pl.TASK_ID)
+            tids[0] = t0
+            with pytest.raises(TypeError, match="cannot mix a whole TASK_ID array"):
+                pl.submit(_dispatch_leaf, a, out, deps=[tids, tids[0]])
+            return out
+
+        entry.compile_for_test(_small_tensor(), _small_out())
+
+        @pl.jit_trace
+        def entry_swapped(a: T8x8, out: OUT8x8):
+            _, t0 = pl.submit(_dispatch_leaf, a, out)
+            tids = pl.array.create(1, pl.TASK_ID)
+            tids[0] = t0
+            with pytest.raises(TypeError, match="cannot mix a whole TASK_ID array"):
+                pl.submit(_dispatch_leaf, a, out, deps=[tids[0], tids])
+            return out
+
+        entry_swapped.compile_for_test(_small_tensor(), _small_out())
+
+    def test_a_non_taskid_value_is_loud(self):
+        @pl.jit_trace
+        def entry(a: T8x8, out: OUT8x8):
+            with pytest.raises(TypeError, match="must be a TaskId variable"):
+                pl.submit(_dispatch_leaf, a, out, deps=[a])
+            return out
+
+        entry.compile_for_test(_small_tensor(), _small_out())
+
+
+# -----------------------------------------------------------------------------------------------------------
+# The deps channel — the scope spellings (the raw collector trace)
+# -----------------------------------------------------------------------------------------------------------
+
+
 class TestScopeDeps:
     def test_spmd_scope_deps_ride_manual_dep_edges(self):
         def kernel(
@@ -298,6 +413,59 @@ class TestScopeDeps:
             directions={"out": ir.ParamDirection.Out},
         )
 
+    def test_the_submit_and_scope_spellings_agree_on_the_buffer_shape(self):
+        """One channel: the two spellings' Form-1 desugarings are the same shape.
+
+        The submit and scope spellings lower ``deps=`` through two trace-side
+        implementations today; this pin is the seam a single shared lowering
+        must keep — same statement kinds, same argument shapes, one buffer
+        Var replacing the whole list.
+        """
+
+        def via_scope(
+            x: T8x8,
+            out: OUT8x8,
+            tid: pl.Scalar[pl.TASK_ID],
+        ):
+            tids = pl.array.create(2, pl.TASK_ID)
+            tids[0] = tid
+            tids[1] = tid
+            with pl.spmd(2, name_hint="grid", deps=[tids[0], tids[1]]):
+                i = pl.tile.get_block_idx()
+                pl.store(pl.load(x, [i * 4, 0], [4, 8]), [i * 4, 0], out)
+
+        fn = _trace(
+            via_scope,
+            {"x": T8x8, "out": OUT8x8, "tid": pl.Scalar[pl.TASK_ID]},
+            directions={"out": ir.ParamDirection.Out},
+        )
+        edges = _manual_dep_edges(_first_scope(fn))
+        assert len(edges) == 1
+        scope_shape = _buffer_chain(fn, id(edges[0]))
+
+        @pl.jit_trace
+        def via_submit(a: T8x8, out: OUT8x8):
+            _, t0 = pl.submit(_dispatch_leaf, a, out)
+            tids = pl.array.create(2, pl.TASK_ID)
+            tids[0] = t0
+            tids[1] = t0
+            _, t1 = pl.submit(_dispatch_leaf, a, out, deps=[tids[0], tids[1]])
+            return out
+
+        program = _entry_program(via_submit)
+        submits = _submits_of(program)
+        assert len(submits[1].deps) == 1
+        submit_shape = _buffer_chain(_entry_function(program, "via_submit"), id(submits[1].deps[0]))
+        assert (
+            scope_shape
+            == submit_shape
+            == [
+                ("array.create", 1),
+                ("array.update_element", 3),
+                ("array.update_element", 3),
+            ]
+        )
+
     def test_a_non_taskid_value_is_loud_on_a_scope(self):
         def kernel(x: T8x8, out: OUT8x8):
             with pytest.raises(TypeError, match="TaskId"):
@@ -305,6 +473,11 @@ class TestScopeDeps:
                     pl.store(pl.load(x, [0, 0], [8, 8]), [0, 0], out)
 
         _trace(kernel, {"x": T8x8, "out": OUT8x8}, directions={"out": ir.ParamDirection.Out})
+
+
+# -----------------------------------------------------------------------------------------------------------
+# The scope body shapes — the deferred open and the dispatch body
+# -----------------------------------------------------------------------------------------------------------
 
 
 class TestScopeBodyShapes:
@@ -331,6 +504,27 @@ class TestScopeBodyShapes:
         fn = _trace(kernel, {"x": T8x8, "out": OUT8x8}, directions={"out": ir.ParamDirection.Out})
         assert _scope_kinds(fn) == [ir.SpmdScopeStmt]
         assert _first_scope(fn).name_hint == "empty_spmd"
+
+    def test_a_single_call_body_takes_the_direct_dispatch_shape(self):
+        """A one-call body dispatches directly: the call sits in the Spmd scope, no carrier.
+
+        Pinned on the envelope's build lane (the callee is a marked kernel,
+        so the body is a real call site): the dispatch scope holds exactly the
+        one call and no InCore carrier is outlined around it.
+        """
+
+        @pl.jit_trace
+        def entry(a: T8x8, out: OUT8x8):
+            with pl.spmd(2):
+                _dispatch_leaf(a, out)
+            return out
+
+        fn = _entry_function(_entry_program(entry), "entry")
+        assert _scope_kinds(fn) == [ir.SpmdScopeStmt]
+        spmd = _first_scope(fn)
+        # The single call is the dispatch body itself — an EvalStmt in the
+        # Spmd scope, no InCore carrier around it.
+        assert isinstance(spmd.body, ir.EvalStmt)
 
     def test_a_multi_statement_body_wraps_in_the_carrier(self):
         """An inline multi-statement body is auto-outlined into the InCore carrier.
