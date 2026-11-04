@@ -708,6 +708,9 @@ class PtoFrame:
         self._sema = sema
         self._rt: Interpreter[Facade] | None = None
         self._locals: dict[str, ir.Var] = {}
+        self._storage_names: dict[int, tuple[ir.Var, str]] = {}
+        self._storage_bases: dict[str, tuple[ir.Var, int]] = {}
+        self._storage_declarations: dict[str, ir.Var] = {}
         self._pending_comments: list[str] = []
         self._pending_iter_args: tuple[ir.IterArg, ...] | None = None
         # Declarable scopes whose ``begin_scope`` is deferred (see
@@ -781,6 +784,87 @@ class PtoFrame:
         """The tracing context passed to stdlib trace-protocol hooks."""
         return self._ctx
 
+    def register_storage(self, memory: ir.MemRef, name: str) -> None:
+        """Name declarations without emitting a runtime value or mutating host objects."""
+        key = id(memory.base_)
+        previous = self._storage_names.get(key)
+        if previous is not None and previous[1] != name:
+            raise ValueError(f"Storage declaration {previous[1]!r} cannot also be bound as {name!r}")
+        declaration_name = memory.base_.name_hint or name
+        claimed = self._storage_declarations.get(declaration_name)
+        if claimed is not None and claimed is not memory.base_:
+            raise ValueError(f"Two storage declarations claim {declaration_name!r}")
+        self._storage_declarations[declaration_name] = memory.base_
+        self._storage_names[key] = (memory.base_, name)
+
+    def _declared_storage_name(self, memory: ir.MemRef) -> str:
+        """The name a declared storage interns under: the base's hint, or the
+        local name a frame in the chain registered it under."""
+        if memory.base_.name_hint:
+            return memory.base_.name_hint
+        scope: PtoFrame | None = self
+        while scope is not None:
+            named = scope._storage_names.get(id(memory.base_))
+            if named is not None:
+                return named[1]
+            scope = scope.borrowed_parent
+        return ""
+
+    def resolve_storage(self, memory: ir.MemRef) -> ir.MemRef:
+        """Intern declaration bases within the function, including inline expansions."""
+        owner = self
+        while owner.borrowed_parent is not None:
+            owner = owner.borrowed_parent
+        name = self._declared_storage_name(memory)
+        if not name:
+            raise ValueError("Unnamed storage must be bound to a local name before use")
+        existing = owner._storage_bases.get(name)
+        if existing is None:
+            base = ir.Var(name, ir.PtrType(), memory.span)
+            owner._storage_bases[name] = (base, memory.slot_count_)
+        else:
+            base, slots = existing
+            if slots != memory.slot_count_:
+                raise ValueError(
+                    f"Storage {name!r} has conflicting slot counts {slots} and {memory.slot_count_}"
+                )
+        if not memory.is_pinned_:
+            raise ValueError("Storage binding requires an allocation declaration")
+        return ir.MemRef(
+            base, 0, 0, memory.span, is_pinned=True, slots=memory.slot_count_, slot=memory.slot_index_
+        )
+
+    def _intern_param_storage(self, param_type: ir.Type) -> ir.Type:
+        """Canonicalize a parameter annotation's declared storage into the frame.
+
+        Every other MemRef reaches the traced IR through ``resolve_storage``,
+        which interns one base per name per function — the parser does the
+        same for signature annotations. A parameter that kept its annotation's
+        original base would let an input Tile and a destination name one
+        allocation under two base identities, and the registry's base-identity
+        alias check would accept a collision the parser path refuses. An
+        unnamed declaration keeps its written identity: the facade lost the
+        source variable's name, and no destination can name it either."""
+        if not isinstance(param_type, (ir.TensorType, ir.TileType)):
+            return param_type
+        memory = param_type.memref
+        if memory is None or not memory.is_pinned_ or not self._declared_storage_name(memory):
+            return param_type
+        canonical = self.resolve_storage(memory)
+        if isinstance(param_type, ir.DistributedTensorType):
+            return ir.DistributedTensorType(
+                param_type.shape,
+                param_type.dtype,
+                canonical,
+                param_type.tensor_view,
+                param_type.window_buffer,
+            )
+        if isinstance(param_type, ir.TensorType):
+            return ir.TensorType(param_type.shape, param_type.dtype, canonical, param_type.tensor_view)
+        return ir.TileType(
+            param_type.shape, param_type.dtype, canonical, param_type.tile_view, param_type.memory_space
+        )
+
     # —— parameter binding (the decorator-adapter entrance) ——
     def bind_param(
         self,
@@ -807,7 +891,10 @@ class PtoFrame:
                 f"direction (only Tensor and Tile parameters support InOut)"
             )
         param_var = self._sema._builder.func_arg(
-            name, annotation_to_type(var), span=self._sema._source_span, direction=direction
+            name,
+            self._intern_param_storage(annotation_to_type(var)),
+            span=self._sema._source_span,
+            direction=direction,
         )
         self._locals[name] = param_var
         # A subscript annotation is a facade instance (``. __class__`` is its

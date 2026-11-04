@@ -9,9 +9,9 @@
 
 """MemRef wrapper type for PyPTO Language DSL.
 
-Thin subclass of ``ir.MemRef`` that widens the accepted ``base`` and
-``byte_offset`` parameters so that pyright accepts the ``pl.MemRef(...)``
-forms emitted by the IR printer inside ``@pl.program`` code:
+DSL subclass of ``ir.MemRef`` supporting traced declaration naming and
+expression-valued slot selection. Constructor overloads also widen ``base``
+and ``byte_offset`` for the printer's ``@pl.program`` forms:
 
 * ``base`` also accepts the ``pl.Ptr`` wrapper — for
   ``pl.MemRef(ptr_var, offset, size)`` where ``ptr_var`` is annotated as
@@ -21,11 +21,19 @@ forms emitted by the IR printer inside ``@pl.program`` code:
   constant offset as ``pl.const(0, pl.INT64)``, which is statically a ``Scalar``.
 """
 
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
+
+from pypto.language.ambient import active_frame
+from pypto.pypto_core import DataType
+
+if TYPE_CHECKING:
+    from pypto.language.protocol import TraceContext
 
 from pypto.pypto_core.ir import (
+    ConstInt,
     Expr,
     MemorySpace,
+    ScalarType,
     Span,
     Var,
 )
@@ -46,10 +54,10 @@ _ByteOffset = int | Expr | Scalar
 class MemRef(_IrMemRef):
     """DSL-level memory reference accepting ``pl.Ptr`` bases and Scalar offsets.
 
-    Identical to ``ir.MemRef`` at runtime. The overloads only widen what
-    pyright accepts so that printed IR — which uses ``pl.Ptr``-annotated
-    base variables and ``Scalar`` arithmetic byte offsets — type-checks
-    cleanly when re-loaded as a ``@pl.program``.
+    Runtime slot selection retains the integer IR expression. During tracing,
+    declaration bindings acquire a source name without emitting a data value.
+    Constructor overloads additionally allow printed IR with ``pl.Ptr`` bases
+    and ``Scalar`` offsets to type-check when reloaded as ``@pl.program``.
 
     Called with **no offset and size**, it declares an allocation of your own
     rather than describing an existing one: size and address are left for
@@ -107,13 +115,17 @@ class MemRef(_IrMemRef):
     pyright; it never reaches the underlying ``ir.MemRef`` constructor.
     """
 
-    def __getitem__(self, slot: "int | Scalar") -> "MemRef":
+    def __trace_bind__(self, ctx: "TraceContext", name: str) -> None:
+        """Record a declaration's source name without making it a staged data value."""
+        frame = active_frame()
+        if frame is not None and self.is_pinned_:
+            frame.register_storage(self, name)
+
+    def __getitem__(self, slot: object) -> _IrMemRef:
         """Select one slot of a multi-slot declared allocation.
 
-        Widened over ``ir.MemRef.__getitem__`` for the same reason as
-        ``_ByteOffset``: inside a ``@pl.program`` body the subscript is resolved
-        from the AST by the parser and may be a runtime index expression, which
-        pyright sees as a ``Scalar``. It never reaches the runtime binding.
+        The slot is an expression, not a host array lookup. Preserve a staged
+        index so SSA substitution and memory planning can resolve its address.
 
         Args:
             slot: Slot index — a constant, or an index expression in a program body
@@ -121,7 +133,27 @@ class MemRef(_IrMemRef):
         Returns:
             The same declaration bound to that slot
         """
-        return super().__getitem__(slot)  # type: ignore[arg-type]
+        if self.slot_count_ <= 1:
+            raise ValueError("MemRef slot selection requires slots > 1")
+        if isinstance(slot, bool):
+            raise TypeError("MemRef slot index must be an integer scalar, got bool")
+        if isinstance(slot, int):
+            index = ConstInt(slot, DataType.INDEX, self.span)
+        elif isinstance(slot, Scalar):
+            index = slot.unwrap()
+        elif isinstance(slot, Expr):
+            index = slot
+        else:
+            raise TypeError(f"MemRef slot index must be an integer scalar, got {type(slot).__name__}")
+        if not isinstance(index.type, ScalarType) or not index.type.dtype.is_int():
+            raise TypeError(f"MemRef slot index must be an integer scalar, got {index.type}")
+        if isinstance(index, ConstInt) and not 0 <= index.value < self.slot_count_:
+            raise ValueError(f"MemRef slot index {index.value} is outside [0, {self.slot_count_})")
+        if self.is_pinned_:
+            return _IrMemRef(self.base_, 0, 0, self.span, is_pinned=True, slots=self.slot_count_, slot=index)
+        return _IrMemRef(
+            self.base_, self.byte_offset_, self.size_, self.span, slots=self.slot_count_, slot=index
+        )
 
     @overload
     def __init__(self, span: Span = ..., slots: int = ...) -> None: ...

@@ -40,7 +40,7 @@ V = TypeVar("V")
 
 # The default Sema source, typed at the Any domain so it can default a
 # generic parameter (``NullSema`` is stateless and safely shared).
-_NULL_SEMA: Sema[Any] = NullSema()
+_NULL_SEMA: Sema[Any] = cast("Sema[Any]", NullSema())
 
 
 def _abort_preserving(sema: Sema[V]) -> None:
@@ -85,7 +85,7 @@ class InstrumentedFunction(Generic[V]):
         self,
         fn: types.FunctionType,
         prefix: str,
-        sema: Sema[Any] | SemaFactory[Any] = _NULL_SEMA,
+        sema: Sema[V] | SemaFactory[V] = _NULL_SEMA,
     ):
         self.fn = fn
         self.prefix = prefix
@@ -238,8 +238,8 @@ def _compile_instrumented(
 
 
 def instrument(
-    kernel: types.FunctionType, sema: Sema[Any] | SemaFactory[Any] = _NULL_SEMA
-) -> InstrumentedFunction[Any]:
+    kernel: types.FunctionType, sema: Sema[V] | SemaFactory[V] = _NULL_SEMA
+) -> InstrumentedFunction[V]:
     """Compile a kernel through the source rewriter and bind its Sema source.
 
     Instrumentation is performed when this function is called. ``sema`` is
