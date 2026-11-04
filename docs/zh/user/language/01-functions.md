@@ -109,6 +109,74 @@ def host_orch(
 
 `@pl.jit.host` 拒绝 `level=`（HOST 是隐含的）。
 
+### 选择追踪前端
+
+`@pl.jit` 解析函数体源码；`@pl.jit_trace` 则执行插桩后的函数体并记录操作。
+选择是按定义进行的，因此两者可以共存于同一程序；但跨调用时不行：helper
+必须与调用它的入口使用同一套装饰器。
+
+可观察的差别在于注解的含义。在 `@pl.jit_trace` 下，普通 Python 注解
+（`scale: float`）是烘焙进 kernel 的编译期旋钮，而 `pl.Scalar[dtype]` 是
+运行时参数，其取值在分发时到达：
+
+```python
+@pl.jit_trace
+def scale_relu(
+    x: pl.Tensor,
+    scale: float,                 # host knob：烘焙；改值会重新编译
+    out: pl.Out[pl.Tensor],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        tile = pl.load(x, [0, 0], [64, 64])
+        pl.store(pl.relu(pl.mul(tile, scale)), [0, 0], out)
+    return out
+```
+
+装饰时不执行任何内容。第一次 `.fn`、`.compile()`、`.lower()` 或宿主调用时
+收集一次函数体，之后复用；裸 `pl.Tensor` 无法确定 shape，因此该 kernel 每次
+调用都会重新追踪。函数体可以读取 `x.shape`——看到的 extent 即调用点的
+extent，静态维度为常量，动态维度为 `pl.tensor.dim` 读取。tensor 内容与
+`pl.Scalar` 参数的取值不会拆分已编译产物；
+shape、dtype 或 host knob 的改变则会。`config=RunConfig(...)` 调用遵循与
+`@pl.jit` 相同的编译配置；要求转储 pass 或对编译做 profiling 时，总是重新
+运行编译器，而不是复用缓存产物。
+
+host knob 在 staged 循环内部是只读的：函数体只追踪一次，所以在那里重新绑定
+（`for _ in pl.range(n)` 中的 `factor = factor * 2.0`）会把某一次迭代的取值
+烘焙进所有迭代。请改为用 staged 值携带状态——用 `pl.const(...)` 绑定，让循环
+更新它。
+
+该前端覆盖显式输出入口、其 `incore` / `inline` 被调函数，以及建立在其上的
+`host` / `graph` 编排入口。由返回值创建的输出，以及 `@pl.function` /
+`@pl.program` 声明，仍留在 `@pl.jit` 路径上；与之对应的 `@pl.jit_trace` 拼写
+（`opaque`、`extern`）在装饰时报错。外部 kernel 没有可追踪的 Python 函数体，
+它是一种声明：在追踪函数体内调用 `@pl.jit.extern` 桩函数，它会并入入口的 assembly。
+
+### 共享片段：`pl.authoring.body(...).splice(...)`
+
+`pl.authoring.body` 预备一个你想“粘贴”进调用方、而不是被调用的片段；`.splice(...)` 在每次出现时
+放置它。它的语句直接加入调用方的 IR —— 没有函数、没有调用 —— 因此完全不需要参数或结果注解：
+
+```python
+@pl.authoring.body
+def twice(x):
+    return pl.add(x, x)
+
+@pl.jit_trace
+def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        tile = pl.load(a, [0, 0], [64, 64])
+        pl.store(twice.splice(tile), [0, 0], out)   # 此处是 Tile ……
+        out[:, :] = twice.splice(a)                 # …… 此处是 Tensor
+    return out
+```
+
+当 helper 是一段片段而非一项契约时用它：它跳过 IR 签名，因此一个函数体可服务多种参数
+类型，它创建的值也可以在没有参数背书的情况下返回。仍有两项规则：它只在 trace 内运行
+（host 调用会被拒绝），且函数体**内部**仍受 staged 类型规则约束，与调用方完全一致。
+需要“收集一次 + 声明签名”时用 `@pl.jit_trace.inline`，没有东西可声明时用
+`pl.authoring.body(...).splice(...)`。
+
 ### 子函数返回的张量会保留 shape 和 dtype
 
 特化会给每个生成的参数打上具体的 shape 和 dtype，因此子函数返回的张量必须能追溯到某个来源。

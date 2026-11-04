@@ -11,6 +11,7 @@
 
 import pypto.language as pl
 import pytest
+import torch
 from pypto import ir
 from pypto.language.parser.diagnostics import InvalidOperationError, ParserSyntaxError
 
@@ -1076,6 +1077,50 @@ class TestBreakContinueErrors:
     # Note: "break/continue outside loop" is caught by Python's own syntax checker
     # before the DSL parser runs, so it cannot be tested via @pl.function.
     # The C++ BreakContinueCheck verifier covers this at the IR level.
+
+
+class TestControlFlowHelperExports:
+    """The parser lane's `pl.while_` / `pl.cond` runtime objects.
+
+    Regression: the tracing migration once removed the runtime exports,
+    breaking `from pypto.language import cond, while_` for existing parser-era
+    code. The parser resolves both spellings syntactically; the objects exist
+    for import compatibility and keep their upstream no-op behavior outside a
+    parsed body.
+    """
+
+    def test_while_and_cond_remain_importable(self):
+        from pypto.language import cond, while_  # noqa: PLC0415
+
+        assert callable(while_)
+        assert callable(cond)
+        assert cond(True) is None
+
+        iterator = while_(init_values=(1, 2.0))
+        assert next(iter(iterator)) == (1, 2.0)
+        with pytest.raises(StopIteration):
+            next(iterator)
+        with pytest.raises(ValueError, match="init_values"):
+            while_()
+
+    def test_while_and_cond_reject_a_trace(self):
+        """Inside a traced body the parser spellings fail loudly.
+
+        The tracing dialect spells loops as ordinary Python ``while``;
+        executing `pl.while_` under a trace would silently run one host
+        iteration instead of staging the loop.
+        """
+
+        @pl.jit_trace
+        def bad(x: pl.Tensor, out: pl.Out[pl.Tensor]):
+            for _i in pl.while_(init_values=(0,)):
+                pl.cond(True)
+
+        with pytest.raises(TypeError, match="parser-frontend syntax"):
+            bad.compile_for_test(
+                torch.empty(64, 64, dtype=torch.float32),
+                torch.empty(64, 64, dtype=torch.float32),
+            )
 
 
 if __name__ == "__main__":

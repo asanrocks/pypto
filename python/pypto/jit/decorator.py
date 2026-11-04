@@ -98,6 +98,35 @@ from .specializer import (
 # ---------------------------------------------------------------------------
 
 
+def _raise_if_inside_trace(kernel_name: str, *, declaration: bool = False) -> None:
+    """The jit-inside-jit guard: the AST runtime's pl.parse() pipeline must
+    never run inside a trace — it silently escapes the tracing frontend
+    and surfaces as a foreign error ("missing inferred tensor metadata")
+    with no indication the frontend was left.
+
+    A ``@pl.jit.extern`` stub is the one declaration that may specialize here:
+    it has no Python body to parse, and its rendered ``@pl.function`` is the
+    only form the call can emit. See :meth:`JITFunction._emit_extern_call`.
+    """
+    # Local import: this module may not import the language package at
+    # module level (pypto.language.__init__ imports pypto.jit — a cycle).
+    from pypto.language.ambient import active_frame  # noqa: PLC0415
+
+    if active_frame() is not None and not declaration:
+        raise RuntimeError(
+            f"call to {kernel_name!r}: @pl.jit (the parsing frontend) cannot run "
+            "inside a trace — the collection frontend is tracing; make the callee "
+            "a @pl.jit_trace function"
+        )
+
+
+def _inside_a_trace() -> bool:
+    """Whether a tracing body is currently collecting, without importing it eagerly."""
+    from pypto.language.ambient import active_frame  # noqa: PLC0415 - cycle-free laziness
+
+    return active_frame() is not None
+
+
 def _rewrite_jit_error(exc: Exception, rename_map: dict[str, str]) -> Exception:
     """Replace internal alpha-renamed aliases (e.g. ``x_v1``) with the user's
     original variable name (``x``) in the exception message.
@@ -177,6 +206,36 @@ class _Specialization(NamedTuple):
 
 
 # ---------------------------------------------------------------------------
+# RunConfig -> ir.compile() keyword forwarding
+# ---------------------------------------------------------------------------
+# The implementations live in the shared cache core
+# (``pypto.runtime.jit_cache``: the compile-request resolver and the
+# Buffer-IR/runtime lookups) and ``pypto.runtime.runner`` next to
+# ``RunConfig`` (the planner/dbC lookups) — all shared with the tracing
+# ``pl.jit_trace``; the private aliases below keep the parsing-frontend jit's
+# import surface stable for its unit tests.
+
+
+from pypto.runtime.jit_cache import (  # noqa: E402
+    resolve_compile_request as _resolve_compile_request,
+)
+from pypto.runtime.jit_cache import (  # noqa: E402
+    resolve_enable_buffer_ir as _resolve_enable_buffer_ir,
+)
+from pypto.runtime.jit_cache import (  # noqa: E402
+    resolve_enable_software_pipeline as _resolve_enable_software_pipeline,
+)
+from pypto.runtime.jit_cache import (  # noqa: E402
+    resolve_runtime_kind as _resolve_runtime,
+)
+from pypto.runtime.runner import (  # noqa: E402
+    resolve_enable_pypto_l0c_double_buffer as _resolve_enable_pypto_l0c_double_buffer,
+)
+from pypto.runtime.runner import (  # noqa: E402
+    resolve_memory_planner as _resolve_memory_planner,
+)
+
+# ---------------------------------------------------------------------------
 # RunConfig -> pass-pipeline keyword forwarding
 #
 # The compile-side half has no counterpart here: ``RunConfig.compile_kwargs()``
@@ -200,34 +259,6 @@ def _run_config_lower_kwargs(run_config: Any) -> dict[str, Any]:
         kwargs["enable_software_pipeline"] = run_config.enable_software_pipeline
     return kwargs
 
-
-# ---------------------------------------------------------------------------
-# RunConfig -> ir.compile() keyword forwarding
-#
-# The implementations live in the shared cache core
-# (``pypto.runtime.jit_cache``: the compile-request resolver and the
-# Buffer-IR/runtime lookups) and ``pypto.runtime.runner`` next to
-# ``RunConfig`` (the planner/dbC lookups); the private aliases below keep
-# this module's import surface stable for its unit tests.
-
-from pypto.runtime.jit_cache import (  # noqa: E402
-    resolve_compile_request as _resolve_compile_request,
-)
-from pypto.runtime.jit_cache import (  # noqa: E402
-    resolve_enable_buffer_ir as _resolve_enable_buffer_ir,
-)
-from pypto.runtime.jit_cache import (  # noqa: E402
-    resolve_enable_software_pipeline as _resolve_enable_software_pipeline,
-)
-from pypto.runtime.jit_cache import (  # noqa: E402
-    resolve_runtime_kind as _resolve_runtime,
-)
-from pypto.runtime.runner import (  # noqa: E402
-    resolve_enable_pypto_l0c_double_buffer as _resolve_enable_pypto_l0c_double_buffer,
-)
-from pypto.runtime.runner import (  # noqa: E402
-    resolve_memory_planner as _resolve_memory_planner,
-)
 
 # ---------------------------------------------------------------------------
 
@@ -344,6 +375,9 @@ class JITFunction:
         self._dep_graph_state: _CachedDepGraph | None = None
         self._cache: dict[CacheKey, Any] = {}  # CacheKey → CompiledProgram
         self._artifact_objects: dict[Any, Any] = {}
+        # Extern declarations are rendered per call-site type set; a mixed
+        # extern expands to several functions, so the whole program is cached.
+        self._extern_declarations: dict[Any, Any] = {}
         self._cache_lock = threading.RLock()
 
         # Preserve function metadata
@@ -960,6 +994,8 @@ class JITFunction:
         Returns:
             The specialization metadata and the consumed ``RunConfig``.
         """
+        _raise_if_inside_trace(self._func.__name__, declaration=self._func_type == "extern")
+
         # Extract RunConfig without mutating *kwargs* — although the caller's
         # ``**kwargs`` dict is normally owned by Python at this scope, building
         # a fresh dict is the same cost and removes the ambiguity for readers
@@ -1139,6 +1175,77 @@ class JITFunction:
                 values.append((index, "<extern>", external))
         return _persistent_dynamic_digest(state.persistent_source_hash, tuple(values))
 
+    def _extern_tensor_meta(self, args: tuple[Any, ...]) -> dict[str, TensorMeta]:
+        """The declaration's tensor parameters, typed from the call site.
+
+        An extern stub may annotate a parameter as a bare ``pl.Tensor``: its
+        body is C++, so the parser's dep-metadata scan has no caller AST to
+        read. The staged argument already carries the full type, which is the
+        same information a traced callee receives; a symbolic extent becomes a
+        synthesized dynamic symbol rather than a made-up constant. The
+        argument's layout crosses with the rest — the declaration's parameter
+        is what the call is checked against, and an ND declaration handed an
+        NZ buffer is the exact layout mismatch the verifier reports at the
+        call boundary.
+        """
+        meta: dict[str, TensorMeta] = {}
+        for name, argument in zip(self._param_names(), args):
+            unwrap = getattr(argument, "unwrap", None)
+            if unwrap is None:
+                continue
+            ty = unwrap().type
+            if not isinstance(ty, _ir.TensorType):
+                continue
+            dims: list[Any] = []
+            for index, dim in enumerate(ty.shape):
+                value = dim if isinstance(dim, int) else getattr(dim, "value", None)
+                if isinstance(value, int):
+                    dims.append(value)
+                else:
+                    dims.append(_tensor_meta.synthesized_dyn_dim(self.__name__, name, index))
+            meta[name] = TensorMeta(
+                tuple(dims), ty.dtype, layout=ty.tensor_view.layout if ty.tensor_view is not None else None
+            )
+        return meta
+
+    def _emit_extern_call(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        """Emit a call to a ``@pl.jit.extern`` declaration from inside a trace.
+
+        The stub has no body, so there is nothing to trace: its rendered
+        ``@pl.function`` declaration is the whole callee. Registering every
+        function the declaration produced also carries a ``core_type="mixed"``
+        extern's AIC/AIV members and group wrapper into the caller's program.
+        """
+        import pypto.language as pl  # noqa: PLC0415 - cycle-free laziness
+        from pypto.language.op.marker import Marker  # noqa: PLC0415 - same
+        from pypto.language.tracing.decorators.jit_trace import _ACTIVE_ASSEMBLY  # noqa: PLC0415 - same
+
+        tensor_meta = self._extern_tensor_meta(args)
+        # The layout joins the key: two same-shape/same-dtype arguments of
+        # different layouts render different declarations (an ND one and an
+        # NZ one), so reusing the first for the second would bind the wrong
+        # byte order at the call boundary.
+        key = tuple(
+            (name, tuple(map(str, entry.shape)), str(entry.dtype), str(entry.layout))
+            for name, entry in tensor_meta.items()
+        )
+        program = self._extern_declarations.get(key)
+        if program is None:
+            program = self._compile_to_program(tensor_meta, {}, {}, {}, pl)
+            self._extern_declarations[key] = program
+        functions = list(program.functions.values())
+        callee = next((function for function in functions if function.name == self.__name__), None)
+        if callee is None:
+            raise RuntimeError(
+                f"call to {self.__name__!r}: its @pl.jit.extern declaration did not produce a function "
+                f"of that name (got {[function.name for function in functions]})"
+            )
+        assembly = _ACTIVE_ASSEMBLY.get()
+        if assembly is not None:
+            for function in functions:
+                assembly.register(function)
+        return Marker._from_ir_function(callee)(*args, **kwargs)
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Specialize, compile (or serve from cache), and execute on device.
 
@@ -1172,6 +1279,8 @@ class JITFunction:
             attribute — read it from the runtime's ``[STRACE]`` log markers
             (simpler PR #1177).
         """
+        if self._func_type == "extern" and _inside_a_trace():
+            return self._emit_extern_call(args, kwargs)
         compiled, ordered_args, run_config = self._resolve_compiled(args, kwargs)
         if run_config is not None:
             return compiled(*ordered_args, config=run_config)
@@ -1531,6 +1640,16 @@ class JITFunction:
         rename_map = specializer.rename_map
         try:
             program = pl.parse(source, filename=self._diagnostic_filename, source_map=specializer.source_map)
+            from pypto.ir._entry_outputs import resolve_entry_return_type  # noqa: PLC0415
+
+            program = _ir.Program(
+                [
+                    resolve_entry_return_type(fn) if fn.name == self.__name__ else fn
+                    for fn in program.functions.values()
+                ],
+                program.name,
+                program.span,
+            )
             return program, rename_map
         except Exception as exc:
             rewritten = _rewrite_jit_error(exc, rename_map)
@@ -1649,6 +1768,11 @@ class JITFunction:
                         dep_func_names=dep_func_names_by_variant.get(key, {}),
                         dep_call_variants=dep_call_variants_by_variant.get(key, {}),
                         auto_scope=self._auto_scope,
+                        external_core_type=self._external_core_type,
+                        external_aic_source=self._external_aic_source,
+                        external_aiv_source=self._external_aiv_source,
+                        external_dual_aiv_dispatch=self._external_dual_aiv_dispatch,
+                        external_include_dirs=self._external_include_dirs,
                     )
                 )
                 continue

@@ -11,21 +11,29 @@
 
 The corpus suite proves the emitted IR is right. This one proves the lifecycle
 around it: decoration must not run a body; the first structural use collects it
-and later compatible uses reuse that trace; and a returned value must be
-delivered by a parameter — by *provenance*, so a callee result that returns its
-Out argument counts.
+and later compatible uses reuse that trace; runtime scalars and tensor contents
+must not split the artifact; a host knob, a shape/dtype change, or a compile
+option must; a runtime-only config must reach dispatch without recompiling; a
+world mismatch must fail loudly instead of silently tracing the wrong thing;
+and a returned value must be delivered by a parameter — by *provenance*, so a
+callee result that returns its Out argument counts.
 
-Everything here is CPU-side, so no code generation or device is needed; the
+Everything here is CPU-side. Compilation is spied at ``_compile_program`` and
+dispatch at the returned handle, so no code generation or device is needed; the
 device path is exercised by the system-tier corpus.
 """
 
 import pypto.language as pl
 import pytest
 import torch
+from pypto._target import ExecutionMode
+from pypto.backend import BackendType
 from pypto.ir._entry_outputs import materialize_entry_outputs
 from pypto.language.tracing.decorators import function as function_module
 from pypto.language.tracing.decorators import jit_trace as jit_module
-from pypto.pypto_core import ir
+from pypto.pypto_core import ir, passes
+from pypto.pypto_core.passes import MemoryPlanner
+from pypto.runtime import RunConfig
 
 from tests.ut.language.tracing.jit._traced_corpus_fixtures import annotated_add, controlled_accumulate
 
@@ -83,6 +91,34 @@ def trace_count(monkeypatch) -> dict[str, int]:
     return counter
 
 
+class _FakeCompiled:
+    """Stand-in for the compiled artifact: records the dispatch it receives."""
+
+    def __init__(self, log: list[tuple]) -> None:
+        self._log = log
+
+    def __call__(self, *args, config=None):
+        self._log.append(("dispatch", args, config))
+        return ("dispatched", args, config)
+
+
+@pytest.fixture
+def compile_log(monkeypatch) -> list[tuple]:
+    """Replace ``_compile_program`` so dispatch caching is observable CPU-side."""
+    log: list[tuple] = []
+
+    def fake_compile(program, config):
+        log.append(("compile", config))
+        return _FakeCompiled(log)
+
+    monkeypatch.setattr(jit_module, "_compile_program", fake_compile)
+    return log
+
+
+def _compiles(log: list[tuple]) -> int:
+    return sum(1 for entry in log if entry[0] == "compile")
+
+
 class TestDeferredCollection:
     """Decoration is inert; the first structural use collects the trace."""
 
@@ -113,6 +149,220 @@ class TestDeferredCollection:
         kernel.specialize(_tensor(), 3, 2.0, torch.empty(64, 64, dtype=F32))
         kernel.specialize(_tensor(), 3, 2.0, torch.empty(64, 64, dtype=F32))
         assert trace_count["n"] == 2, "a lazily traced kernel re-traces per call by design"
+
+
+class TestSpecializationReuse:
+    """The dispatch cache keys on the artifact contract, not on incidental state."""
+
+    def test_runtime_scalar_value_and_tensor_contents_do_not_split(self, compile_log):
+        kernel = _lazy_kernel()
+        out = torch.empty(64, 64, dtype=F32)
+
+        for n, contents in ((3, 1.0), (7, 2.0), (0, 3.0)):
+            kernel(torch.full((64, 64), contents, dtype=F32), n, 2.0, out)
+
+        assert _compiles(compile_log) == 1, "runtime scalars and contents must not recompile"
+
+    def test_shape_and_dtype_split_the_artifact(self, compile_log):
+        kernel = _lazy_kernel()
+        out64 = torch.empty(64, 64, dtype=F32)
+
+        kernel(_tensor(), 3, 2.0, out64)
+        kernel(_tensor((128, 64)), 3, 2.0, out64)
+        kernel(_tensor(dtype=torch.float16), 3, 2.0, out64)
+
+        assert _compiles(compile_log) == 3, "a shape or dtype change must compile a new artifact"
+
+    def test_host_knob_value_splits_the_artifact(self, compile_log):
+        kernel = _lazy_kernel()
+        out = torch.empty(64, 64, dtype=F32)
+
+        kernel(_tensor(), 3, 2.0, out)
+        kernel(_tensor(), 3, 2.0, out)
+        assert _compiles(compile_log) == 1
+
+        kernel(_tensor(), 3, 3.0, out)
+        assert _compiles(compile_log) == 2, "the baked host knob must specialize the trace"
+
+    def test_compile_option_splits_the_artifact(self, compile_log):
+        kernel = _lazy_kernel()
+        out = torch.empty(64, 64, dtype=F32)
+
+        kernel(_tensor(), 3, 2.0, out)
+        with passes.PassContext([], memory_planner=MemoryPlanner.PTOAS):
+            kernel(_tensor(), 3, 2.0, out)
+
+        assert _compiles(compile_log) == 2, "a compile option must not share a cached artifact"
+
+    def test_runtime_only_config_does_not_recompile_and_reaches_dispatch(self, compile_log):
+        kernel = _lazy_kernel()
+        out = torch.empty(64, 64, dtype=F32)
+
+        kernel(_tensor(), 3, 2.0, out, config=RunConfig(device_id=1))
+        kernel(_tensor(), 3, 2.0, out, config=RunConfig(device_id=2))
+
+        assert _compiles(compile_log) == 1, "a runtime-only field must not split compilation"
+        dispatches = [entry for entry in compile_log if entry[0] == "dispatch"]
+        assert [entry[2].device_id for entry in dispatches] == [1, 2], "config must reach dispatch"
+
+
+class TestCompileConfigForwarding:
+    """``config=`` reaches ``ir.compile`` through the canonical mapping.
+
+    ``RunConfig.compile_kwargs()`` is the one mapping onto ``ir.compile()``'s
+    parameters; the tracing jit must not carry a second one. A duplicated
+    mapping dropped ``dump_ptoas_passes``, so the flag silently did nothing
+    on this lane while working on the parser lane.
+    """
+
+    @pytest.fixture
+    def compile_kwargs_log(self, monkeypatch) -> list[dict]:
+        """Capture the kwargs each ``ir.compile`` call receives."""
+        log: list[dict] = []
+
+        def fake_compile(program, **kwargs):
+            log.append(kwargs)
+            return lambda *args, **kw: None
+
+        import pypto.ir as ir_module  # noqa: PLC0415
+
+        monkeypatch.setattr(ir_module, "compile", fake_compile)
+        return log
+
+    def test_host_call_forwards_the_canonical_kwargs(self, compile_kwargs_log):
+        kernel = _lazy_kernel()
+        out = torch.empty(64, 64, dtype=F32)
+
+        kernel(
+            _tensor(),
+            3,
+            2.0,
+            out,
+            config=RunConfig(platform="a2a3sim", dump_ptoas_passes=True),
+        )
+
+        assert len(compile_kwargs_log) == 1
+        kwargs = compile_kwargs_log[0]
+        assert kwargs["dump_ptoas_passes"] is True, "the canonical mapping's fields must all arrive"
+        assert kwargs["backend_type"] is BackendType.Ascend910
+        assert kwargs["execution_mode"] is ExecutionMode.SIM
+        assert "memory_planner" not in kwargs, "an unset optional field defers to ir.compile"
+        assert "device_id" not in kwargs, "a runtime-only field is not a compile input"
+
+    def test_explicit_compile_forwards_the_same_mapping(self, compile_kwargs_log):
+        kernel = _lazy_kernel()
+        out = torch.empty(64, 64, dtype=F32)
+
+        impl = kernel.compile(
+            _tensor(),
+            3,
+            2.0,
+            out,
+            config=RunConfig(
+                platform="a2a3sim",
+                dump_ptoas_passes=True,
+                memory_planner=MemoryPlanner.PTOAS,
+            ),
+        )
+
+        assert len(compile_kwargs_log) == 1
+        kwargs = compile_kwargs_log[0]
+        assert kwargs["dump_ptoas_passes"] is True
+        assert kwargs["memory_planner"] == MemoryPlanner.PTOAS
+        # The returned handle speaks the runtime ABI: the staged-declared
+        # positions (x, n, out) — the host knob was consumed at compile.
+        impl(_tensor(), 3, out)
+
+    def test_no_config_defers_to_ir_compile_defaults(self, compile_kwargs_log):
+        kernel = _lazy_kernel()
+        kernel(_tensor(), 3, 2.0, torch.empty(64, 64, dtype=F32))
+        assert compile_kwargs_log == [{}], "no config means no kwargs — ir.compile owns the defaults"
+
+
+class TestDiagnosticRequestsBypassTheCache:
+    """A request to run the compiler is never served from the artifact cache.
+
+    Diagnostic options change what a compilation *does*, not the artifact it
+    produces, so they stay out of the cache key — which is exactly why the
+    lookup must be skipped: a warm entry would silently swallow the request.
+    The parsing-frontend jit holds the same contract through the same shared
+    resolver; these pins are the tracing lane's half.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _default_sensitive_env(self, monkeypatch):
+        # The PassContext-vs-default bypass check compares against the
+        # process-default verification level; an outer PYPTO_VERIFY_LEVEL
+        # would invert it.
+        monkeypatch.delenv("PYPTO_VERIFY_LEVEL", raising=False)
+
+    @pytest.mark.parametrize(
+        "options",
+        [
+            {"dump_passes": True},
+            {"dump_ptoas_passes": True},
+            {"compile_profiling": True},
+            {"save_kernels_dir": "requested-output"},
+            {"diagnostic_phase": passes.DiagnosticPhase.PRE_PIPELINE},
+            {"disabled_diagnostics": passes.DiagnosticCheckSet()},
+        ],
+    )
+    @pytest.mark.parametrize("warm", [False, True])
+    def test_diagnostic_requests_compile_fresh_and_leave_the_cache_alone(self, compile_log, options, warm):
+        kernel = _lazy_kernel()
+        out = torch.empty(64, 64, dtype=F32)
+        if warm:
+            kernel(_tensor(), 3, 2.0, out)
+        before = dict(kernel._cache)  # noqa: SLF001 — the cache is the object under test
+
+        kernel(_tensor(), 3, 2.0, out, config=RunConfig(**options))
+        kernel(_tensor(), 3, 2.0, out, config=RunConfig(**options))
+
+        assert _compiles(compile_log) == (3 if warm else 2), "each request must run the compiler"
+        assert kernel._cache == before, "a diagnostic compile must not insert or evict"  # noqa: SLF001
+
+    def test_custom_pass_checks_bypass_a_warm_cache(self, compile_log):
+        kernel = _lazy_kernel()
+        out = torch.empty(64, 64, dtype=F32)
+
+        kernel(_tensor(), 3, 2.0, out)
+        with passes.PassContext([], verification_level=passes.VerificationLevel.ROUNDTRIP):
+            kernel(_tensor(), 3, 2.0, out)
+            kernel(_tensor(), 3, 2.0, out)
+        assert _compiles(compile_log) == 3, "an instrumented context must actually run"
+
+        kernel(_tensor(), 3, 2.0, out)
+        assert _compiles(compile_log) == 3, "an ordinary call still reuses the warm artifact"
+
+    def test_conflicting_config_raises_even_on_a_warm_cache(self, compile_log):
+        kernel = _lazy_kernel()
+        out = torch.empty(64, 64, dtype=F32)
+
+        kernel(_tensor(), 3, 2.0, out)
+        with passes.PassContext([], memory_planner=MemoryPlanner.PTOAS):
+            with pytest.raises(RuntimeError, match="memory_planner"):
+                kernel(_tensor(), 3, 2.0, out, config=RunConfig(memory_planner=MemoryPlanner.DSA_RP))
+
+        assert _compiles(compile_log) == 1, "the conflict must fire before any compilation"
+
+
+class TestWorldMismatchIsLoud:
+    """A misplaced argument must fail instead of silently tracing the wrong world."""
+
+    def test_host_scalar_into_a_tensor_slot(self):
+        kernel = _lazy_kernel()
+        with pytest.raises(TypeError, match="runtime parameter"):
+            kernel(3.5, 3, 2.0, torch.empty(64, 64, dtype=F32))
+
+    def test_tensor_into_a_host_knob(self):
+        kernel = _lazy_kernel()
+        with pytest.raises(TypeError, match="host"):
+            kernel(_tensor(), 3, _tensor(), torch.empty(64, 64, dtype=F32))
+
+    def test_tensor_into_a_scalar_slot(self):
+        kernel = _lazy_kernel()
+        with pytest.raises(TypeError):
+            kernel(_tensor(), _tensor(), 2.0, torch.empty(64, 64, dtype=F32))
 
 
 @pl.jit_trace.incore
@@ -701,6 +951,39 @@ class TestMultiResultSpelling:
             "pl.Tensor[[64, 64], pl.FP32]",
             "pl.Tensor[[64, 64], pl.FP32]",
         ]
+
+
+class TestValuelessEntryPipeline:
+    """An entry that writes its Out parameter and returns nothing lowers."""
+
+    def test_valueless_entry_runs_the_pipeline(self):
+        """The terminal scope's dead intermediates must not become returns.
+
+        The InCore outliner's no-context fallback used to export every
+        non-scalar definition of the scope, so the outlined function declared
+        tile-typed returns and the tile conversion rejected them with an
+        INTERNAL_CHECK — for a shape the tracing contract supports (a body
+        with no value-bearing return keeps its declared type; the entry
+        describes its output buffer through ``pl.Out``).
+        """
+        torch = pytest.importorskip("torch")
+
+        @pl.jit_trace
+        def valueless_add(
+            a: pl.Tensor[[32, 32], pl.FP32],
+            b: pl.Tensor[[32, 32], pl.FP32],
+            out: pl.Out[pl.Tensor[[32, 32], pl.FP32]],
+        ):
+            with pl.at(level=pl.Level.CORE_GROUP):
+                left = pl.load(a, [0, 0], [32, 32])
+                right = pl.load(b, [0, 0], [32, 32])
+                pl.store(pl.add(left, right), [0, 0], out)
+
+        a = torch.zeros(32, 32, dtype=torch.float32)
+        b = torch.zeros(32, 32, dtype=torch.float32)
+        out = torch.empty(32, 32, dtype=torch.float32)
+        program = valueless_add.lower(a, b, out)
+        assert isinstance(program, ir.Program)
 
 
 if __name__ == "__main__":

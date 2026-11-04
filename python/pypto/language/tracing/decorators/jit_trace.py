@@ -478,11 +478,13 @@ class _JitSpecializer:
                     f"expr-wrapping facade (a value from inside another trace) — "
                     f"a jit call specializes with annotation-mode facades (shape + dtype)"
                 )
-        if has_torch or config is not None:
+        if has_torch:
+            return self._dispatch(args, bridged, config)
+        if config is not None:
             raise TypeError(
-                f"call to {self.kernel.__name__!r}: compiled dispatch (torch-tensor "
-                "arguments, config=) arrives with the compile lane; a "
-                "facade/scalar call returns the traced function"
+                f"call to {self.kernel.__name__!r}: config= applies to compiled "
+                "dispatch (torch-tensor arguments); a facade/scalar call returns "
+                "the traced function and compiles nothing"
             )
         return self._trace_with(dict(zip(self._param_names, bridged)))
 
@@ -647,6 +649,80 @@ class _JitSpecializer:
         )
         return bridged, has_torch
 
+    def _dispatch(self, args: tuple[Any, ...], bridged: list[Any], config: RunConfig | None = None) -> Any:
+        # A diagnostic request (a dump, a profile, an explicit output dir, an
+        # outer context with instruments) is a request to *run* the compiler,
+        # decided before any cache lookup — the shared resolver both jit lanes
+        # use. It also validates pass-context conflicts here, so an invalid
+        # combination raises even when a compatible artifact is already warm.
+        # The request compiles fresh and leaves the ordinary cache untouched.
+        from pypto.runtime.jit_cache import resolve_compile_request  # noqa: PLC0415 — torch is a runner dep
+
+        _, bypass = resolve_compile_request(config)
+        key = None if bypass else self._cache_key(bridged, config)
+        compiled = self._cache.get(key) if key is not None else None
+        if compiled is None:
+            compiled = _compile_program(self._build_program(bridged), config)
+            if key is not None:
+                self._cache[key] = compiled
+        # Host knobs were consumed at trace time — dispatch speaks
+        # the runtime ABI only (the staged-declared positions), never the
+        # baked values; a runtime-scalar marker unwraps to its raw value.
+        dispatch_args = tuple(
+            a.value if isinstance(a, RuntimeScalar) else a
+            for a, name in zip(args, self._param_names)
+            if _staged_declared(self._param_hints.get(name))
+        )
+        if config is None:
+            return compiled(*dispatch_args)
+        return compiled(*dispatch_args, config=config)
+
+    def _cache_key(self, bridged: list[Any], config: RunConfig | None = None) -> tuple[Any, ...]:
+        # The compile-identity suffix (platform, strategy, distributed config,
+        # planner, dbC flag, runtime ABI, Buffer IR, source locations —
+        # resolved from the RunConfig, any active PassContext, and the
+        # environment) splits the cache so two compile configurations never
+        # share one artifact (the dispatch-cache key in the *Collection timing
+        # and reuse* section of ``docs/en/dev/language/03-functions.md``).
+        # Shared with the parsing-frontend jit through pypto.runtime.jit_cache.
+        from pypto.runtime.jit_cache import (  # noqa: PLC0415 — torch is a runner dep
+            TensorKeyInfo,
+            run_config_compile_identity,
+        )
+
+        parts: list[Any] = []
+        for name, arg in zip(self._param_names, bridged):
+            if isinstance(arg, RuntimeScalar):
+                # The entry runtime-scalar marker: type-only — one artifact
+                # serves every value (the whole point of the spelling).
+                parts.append(("runtime_scalar", str(arg.dtype)))
+            elif is_staged(arg) and isinstance(arg, Tensor):
+                declared = self._param_hints.get(name)
+                declared_shape = getattr(declared, "shape", None)
+                shape = tuple(arg.shape or ())
+                if declared_shape is not None and len(declared_shape) == len(shape):
+                    # A declared dynamic extent is part of the artifact's
+                    # runtime contract, not its specialization key. The
+                    # eager record already preserves that extent in the IR;
+                    # keying it by each concrete dispatch shape would rebuild
+                    # an equivalent binary for every batch size.
+                    shape = tuple(
+                        None if isinstance(declared_dim, ir.Var) or hasattr(declared_dim, "_ir_var") else dim
+                        for declared_dim, dim in zip(declared_shape, shape)
+                    )
+                # A bridged staged facade is annotation-mode, so its dtype is
+                # always materialized; a None here would mean a runtime-mode
+                # value escaped into the host dispatch path.
+                assert arg.dtype is not None
+                parts.append(TensorKeyInfo(name, shape, arg.dtype, arg.layout))
+            else:
+                # A baked host knob joins the key by value; the constexpr
+                # identity keeps list-valued knobs hashable.
+                folded = constexpr_value_key(arg)
+                parts.append((type(arg).__name__, arg if folded is None else folded))
+        parts.append(run_config_compile_identity(config))
+        return tuple(parts)
+
     # —— the program build shared by compile / compile_for_test ———
 
     def _build_program(self, bridged: list[Any]) -> ir.Program:
@@ -758,6 +834,53 @@ class _JitSpecializer:
         program = self._build_program(bridged)
         return PassManager.get_strategy(OptimizationStrategy.Default).run_passes(program)
 
+    def compile(self, *args: Any, config: RunConfig | None = None, **kwargs: Any) -> Any:
+        """Build + compile for the signature implied by *args*; returns the
+        ``CompiledProgram`` (device dispatch is its ``__call__``).
+
+        For an eagerly traced kernel (annotation-determined), *args* carry
+        no specialization power: the eager trace's program — with its
+        declared dynamic extents — is the artifact, and the args only need
+        to be compatible with the declaration (the golden runner's dummy
+        tensors satisfy this by construction). A static extent is the
+        declaration, not a specialization hint: a call at a different shape is
+        refused unless the parameter declares a dynamic extent.
+
+        Name-keyed *kwargs* are the annotation-driven scalar vocabulary (the
+        golden runner's ``compile_runtime`` form: ``compile(config=...,
+        layer_id=5, moe_epoch=pl.RUNTIME)``). The declaration owns every
+        parameter's world, so no compile-time input re-specializes:
+        ``pl.RUNTIME`` on a runtime-declared (``pl.Scalar``) parameter is a
+        benign no-op — it is one already — and a host literal is accepted
+        and ignored (the value arrives at dispatch; the artifact is
+        identical either way). A ``pl.runtime(v, dtype)`` marker is likewise
+        a no-op. A keyword naming a host-knob parameter, an unknown name, or
+        a non-scalar value is loud.
+
+        ``config=RunConfig(...)`` is consumed here — never forwarded to the
+        kernel — and its compile-side fields (``strategy``, ``dump_passes``,
+        diagnostics, ...) are forwarded to ``ir.compile()`` so the returned
+        artifact honours the same knobs as ``kernel(*args, config=...)``.
+        Runtime-side fields (``device_id``, DFX flags, ...) do not apply: they
+        affect dispatch, not the compiled artifact.
+
+        Each call compiles a fresh artifact (no cache), so an explicit
+        compile-then-call freezes exactly one materialization. The returned
+        handle's calling signature is the **runtime ABI** — host knobs were
+        consumed at compile and are no longer parameters, so passing a value
+        at their position is an arity error naming the consumed knob, never a
+        silent freeze.
+        """
+        config = _checked_run_config(config)
+        self._check_compile_kwargs(kwargs)
+        bridged, _ = self._bridge_args(args)
+        compiled = _compile_program(self._build_program(bridged), config)
+        runtime_names = tuple(
+            name for name in self._param_names if _staged_declared(self._param_hints.get(name))
+        )
+        knob_names = tuple(name for name in self._param_names if name not in runtime_names)
+        return _CompiledImpl(compiled, runtime_names, knob_names, self.kernel.__name__)
+
     def specialize(self, *args: Any, **kwargs: Any) -> ir.Program:
         """Specialize and return the **pre-pass** ``ir.Program``.
 
@@ -806,6 +929,34 @@ class _JitSpecializer:
             inherit_outer_report_instruments=False,
             **lower_kwargs,
         ).transformed_program
+
+    def warmup(self, *args: Any, config: RunConfig | None = None, **kwargs: Any) -> Any:
+        """Compile and prepare the device binaries without dispatching.
+
+        The mirror of ``JITFunction.warmup``: compile under the same
+        arguments/config (no cache read or write), then load every
+        chip-level binary the compiled handle exposes. Returns the compiled
+        handle; execution stays a separate operation on it."""
+        from pypto.ir.compiled_program import CompiledProgram  # noqa: PLC0415
+        from pypto.ir.distributed_compiled_program import DistributedCompiledProgram  # noqa: PLC0415
+
+        compiled = self.compile(*args, config=config, **kwargs)
+        if isinstance(compiled, DistributedCompiledProgram):
+            from pypto.runtime.distributed_runner import _assemble_chip_callables  # noqa: PLC0415
+
+            _assemble_chip_callables(compiled)
+        elif isinstance(compiled, CompiledProgram):
+            if compiled.orchestration_names:
+                for name in compiled.orchestration_names:
+                    compiled[name].load()
+            else:
+                compiled.load()
+        else:
+            raise TypeError(
+                f"@pl.jit function '{self.__name__}': device-free warmup is not supported "
+                f"for compiled result {type(compiled).__name__}"
+            )
+        return compiled
 
     def _bind_sample_args(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, ...]:
         """Bind positional + by-name sample arguments to signature order.
@@ -1216,8 +1367,8 @@ def _variant_key_part(annotation: Any) -> Any:
     """One annotation's variant-key component: a bake-able host scalar keys
     on its VALUE (a baked constant must not dedupe with a different
     constant), every staged facade keys on its primitive identity — kind,
-    dtype, extent strings — the same fields the dispatch cache keys on,
-    fetched straight off the facade without building or
+    dtype, extent strings — the same fields the dispatch cache keys on
+    (``_cache_key``), fetched straight off the facade without building or
     printing an ``ir.Type`` (the format callback otherwise runs a ruff
     subprocess per printed type, and the C++ structural hash does not cover
     every Type kind — e.g. ``DistributedTensorType``).
@@ -1829,6 +1980,92 @@ class _LazyGlobalFn(Marker):
         surviving = {p.name_hint for p in callee.params}
         runtime_args = tuple(a for a, n in zip(args, param_names) if n in surviving)
         return Marker._from_ir_function(callee), runtime_args
+
+
+class _CompiledImpl:
+    """``jit.compile()``'s return: one frozen materialization
+    whose calling signature is the runtime ABI.
+
+    Host knobs were consumed at compile — they are no longer parameters —
+    so arguments beyond the runtime positions are an arity error naming the
+    consumed knob, not a silent freeze. Fewer arguments are forwarded
+    unchanged and ``CompiledProgram.__call__`` owns the return-style
+    convention. Everything else (``isinstance``, attributes,
+    equality, ``prepare``/``warmup`` surfaces) delegates to the wrapped
+    program via the ``__class__`` projection.
+    """
+
+    def __init__(
+        self,
+        compiled: Any,
+        runtime_names: tuple[str, ...],
+        knob_names: tuple[str, ...],
+        kernel_name: str,
+    ) -> None:
+        self._wrapped = compiled
+        self._runtime_names = runtime_names
+        self._knob_names = knob_names
+        self._kernel_name = kernel_name
+
+    @property
+    def __class__(self) -> type[Any]:  # noqa: N805 — the isinstance-delegation idiom  # type: ignore[reportIncompatibleVariableOverride]
+        # ``type()`` of the wrapped object: ``type[Any]`` is the only spelling
+        # that describes "whatever the wrapped impl is" without widening the
+        # result to an unknown type argument.
+        return typing.cast("type[Any]", type(self._wrapped))
+
+    def __call__(self, *args: Any, config: RunConfig | None = None) -> Any:
+        if len(args) > len(self._runtime_names):
+            knobs = ", ".join(self._knob_names) or "none"
+            names = ", ".join(self._runtime_names) or "(no arguments)"
+            raise TypeError(
+                f"impl of {self._kernel_name!r} takes at most "
+                f"{len(self._runtime_names)} runtime argument(s) ({names}); got "
+                f"{len(args)}. Host knob(s) {knobs} were consumed at compile — "
+                "request a new compilation for a different value."
+            )
+        if config is not None:
+            return self._wrapped(*args, config=config)
+        return self._wrapped(*args)
+
+    def __eq__(self, other: object) -> bool:
+        # The __class__ projection makes the impl *claim to be* the wrapped
+        # program, so equality must agree with that claim: identity-keyed
+        # lookups against mappings built from the inner object (e.g.
+        # DistributedWorker.register's _states, keyed by the programs the
+        # worker was constructed from) would otherwise miss — the worker is
+        # built from the wrapped program while the caller holds the impl.
+        if self is other:
+            return True
+        return self._wrapped == other
+
+    def __hash__(self) -> int:
+        return hash(self._wrapped)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wrapped, name)
+
+    def __getitem__(self, key: Any) -> Any:
+        # The ``__class__`` projection covers ``isinstance`` and attribute
+        # reads, but operators look up dunders on the type, so warmup's
+        # ``compiled[name]`` (per-orchestration ``load``) would miss it.
+        return self._wrapped[key]
+
+
+def _compile_program(program: ir.Program, config: RunConfig | None = None) -> Any:
+    from pypto.ir import compile as ir_compile  # noqa: PLC0415 — cycle-free laziness
+    from pypto.runtime.jit_cache import resolve_compile_request  # noqa: PLC0415 — torch is a runner dep
+
+    kwargs: dict[str, Any] = {}
+    if config is not None:
+        # The shared compile-request resolver: ``RunConfig.compile_kwargs()``
+        # (the one mapping onto ``ir.compile()``'s parameters, the same one the
+        # parsing-frontend jit and direct callers use) plus the dump-level
+        # coercion, the source-location default, and the pass-context conflict
+        # validation ``ir.compile()`` would perform anyway. With no config, no
+        # kwargs: the call defers to ``ir.compile()``'s own defaults.
+        kwargs, _ = resolve_compile_request(config)
+    return ir_compile(program, **kwargs)
 
 
 def _checked_run_config(config: object) -> RunConfig | None:

@@ -370,6 +370,162 @@ run the compiler — pass dumps, PTOAS dumps, compile profiling, an explicit
 output directory, or an outer `PassContext` with instruments — are never
 served from the cache: each one compiles fresh, and an ordinary compatible
 call afterwards still reuses the warm artifact.
+
+
+### Parameter worlds
+
+The annotation decides whether an argument is runtime data or a compile-time
+constant:
+
+| Annotation | World | Behaviour |
+| ---------- | ----- | --------- |
+| `pl.Tensor`, `pl.Tile`, `pl.Out[...]`, `pl.Scalar[dtype]` | runtime parameter | Part of the generated signature; the value arrives at dispatch |
+| a plain Python annotation (`float`, `int`) or none | host knob | Baked into the trace; changing the value specializes a new artifact |
+
+A host scalar passed to a runtime-declared slot lifts into a `Scalar`.
+A host scalar passed to a tensor slot, or a staged value passed to a host knob,
+is a `TypeError` naming the parameter: the world is a property of the
+declaration, not of the call.
+
+A facade declaration owns the parameter's *type*, not only its world. The
+lane derives a callee's parameter from the call site — that derivation is what
+specializes a call — but the derivation is bounded by the declaration, and an
+integer argument inside the declared slot's lattice is *converted* to the
+declared dtype: a `pl.Scalar[pl.INT32]` parameter takes an INDEX value as INT32,
+in either direction, and the conversion is bound to a temporary
+(`_rank_int32 = pl.cast(r, pl.INT32)`) so the emitted call carries the declared
+type. Both frontends emit the same statement, from the same admission rule
+(`pypto.language.scalar_conversion`), so the callee has one signature for every
+integer caller and printed IR is the hand-written spelling. Everything outside
+the lattice keeps its refusal — two fixed-width dtypes, floats, `pl.BOOL`,
+`pl.TASK_ID`, packed FP4, and every tensor/tile dtype, shape or layout
+mismatch — as a `TypeError` naming both types, with the repair at the call site
+(`pl.cast`) or in the declaration. The rule, and why it is narrow, is the user
+document's "Declared scalar dtypes convert"
+(`docs/en/user/language/00-types.md`). A bare Python integer is not converted
+but *checked*: it carries no dtype, so an out-of-range value is refused at every
+dispatch (a scalar value never splits the artifact cache) while a typed value
+converts. A
+declared dynamic extent (`pl.Tensor[[N, 8], ...]`) is not a contradiction: it
+states "whatever the call site passes", so any concrete extent specializes it.
+One symbol names one dimension: if `N` appears in several parameters, every
+concrete extent supplied for it must agree. Passing `[16, 8]` and `[32, 8]` to
+two `N`-shaped parameters is refused; declare a second symbol when the two may
+differ. Torch has no INDEX dtype; its `int64` storage is the host carrier, so a
+torch `int64` sample into a declared INDEX slot bridges to INDEX; an explicit
+`pl.INT64` facade into that slot is an admitted conversion too, recorded as a
+value-preserving type change rather than elided. A bare marker is
+refused for the same reason (`vlen: pl.INDEX` states a dtype but no world, so it
+would have become a host knob): the error names the `pl.Scalar[pl.INDEX]`
+spelling. The declared **layout** bridges the same way: a torch tensor carries
+no layout, so `pl.Tensor[[N, K], pl.FP16, pl.NZ]` takes its `NZ` packing from the
+declaration while shape and dtype still answer to the sample — a sample that
+contradicts the declared extent is still refused.
+
+**A keyword names a declared parameter.** A call may bind any parameter by
+name — `helper(x, out=out, factor=2.0)` — and the tracer folds that binding into
+the declaration order before any lane reads it, so the specialize lane's
+annotations, the callee lane's variant key, the dispatch bridge and the printed
+program all see one positional call. The spelling is therefore never part of the
+artifact: the two forms above specialize to the same program, which is what lets
+shared code keep the clearer of the two. `device=` and `attrs=` stay call-site
+metadata rather than parameters (a detached call dispatches to that device),
+and `config=RunConfig(...)` selects the compile knobs at a top-level call. Every
+malformed spelling is refused by name instead of being silently dropped: an
+unknown keyword, a parameter bound both positionally and by keyword, a parameter
+bound nowhere, and a surplus positional argument.
+
+A host knob is read-only inside staged control flow. The body is traced once,
+so a host value the loop advances — `factor = factor * 2.0` under
+`for _ in pl.range(n)` — would bake that representative iteration's result into
+every iteration and into whatever reads the name after the loop. The binding
+guard raises `TypeError` instead and names the staged spelling: bind the state
+with `pl.const(...)` and let the loop carry it. Reading a host knob (or binding
+fresh host scratch inside the body) stays legal — nothing is carried.
+
+### Supported surface
+
+Every decorated definition under `examples/` is on this lane: explicit-output
+(`pl.Out` / `pl.InOut`) entries with their `incore` and `inline` callees,
+staged `for` / `if` / `while` over runtime scalars, host knobs, runtime scalar
+parameters, tile assembly with loop-carried tiles, `pl.parallel` with atomic
+accumulation, scope optimizations (`pl.split`, `deps=`), valid-shape loops,
+the `host` / `graph` entrances with their per-rank dispatch and recorded
+replay, and the dispatch-cache contract.
+
+Three spellings the lane requires, each a deliberate difference from the
+parser lane:
+
+| Parser lane | Tracing lane | Why |
+| ----------- | ------------ | --- |
+| `vlen: pl.INDEX`, `scale: pl.FP32` | `pl.Scalar[pl.INDEX]`, `pl.Scalar[pl.FP32]` | A bare data-type marker states a dtype but no world, so it is refused at decoration with a `TypeError` naming this spelling |
+| `for i, (acc,) in pl.range(n, init_values=(acc0,)):` + `pl.yield_` | bind `acc = acc0` before the loop, rebind at the end of the body | The carried channels are derived from the rebinding; `init_values=` is the printer/parser round-trip spelling of the same channels, and the parser still prints it |
+| `pl.Out[pl.Tensor]` on an `inline` helper parameter | bare `pl.Tensor` | The helper body is spliced at the call site, so the parameter is already an in-place alias of the caller's variable |
+
+A host literal carried into staged control flow is a fourth: `factor = 1.0`
+rebound under `pl.range` raises, and the typed spelling `pl.const(1.0, pl.FP32)`
+is what a carried scalar needs.
+
+#### Body splice: `pl.authoring.body(...).splice(...)`
+
+`pl.authoring.body` prepares a Python function once (source rewrite and compile) and
+returns a reusable body; `.splice(...)` places it at the caller's insertion
+point at every occurrence inside a traced kernel: **no function, `GlobalVar`,
+or `ir.Call` is emitted** — the program gains the body's statements and
+nothing else. A host call is refused; the placement only executes inside an
+active trace.
+
+Because there is no callee there is no ABI, so **annotations play no role**:
+`def twice(x)` needs no `pl.Tensor[[...]]` declaration, and one body serves
+several argument types (a `Tensor` at one occurrence, a `Tile` at the next).
+This is the difference from `@pl.jit_trace.inline`, which collects one body,
+emits calls, and therefore must declare its parameter and result types.
+
+```python
+@pl.authoring.body
+def twice(x):                 # no IR annotation: there is no callee
+    return pl.add(x, x)
+
+@pl.jit_trace
+def entry(a: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        tile = pl.load(a, [0, 0], [64, 64])
+        pl.store(twice.splice(tile), [0, 0], out)
+        out[:, :] = twice.splice(a)     # the same body, a second argument type
+    return out
+```
+
+`return` is splice-local: the value crosses to the caller's expression
+position, so a body may deliver a value it created without any parameter
+backing it. The interior is still staged, though: the splice is pasted into
+the caller's control flow, so a value crossing `pl.range` / `pl.if` *inside*
+the body obeys the same staged rules (and the same `pl.const` spelling) as the
+enclosing function.
+
+This wave allows one splice at a time per trace: a body that splices another
+body — nesting or host recursion — is refused loudly rather than mis-spliced.
+The body's authored scope policy travels with it:
+`body.splice(..., auto_scope=False)` keeps a hand-scoped body's explicit
+regions legal while the caller's own policy still governs everything else,
+which is the splice spelling of `@pl.jit_trace.inline(auto_scope=False)`.
+
+A splice's parameters are **in-place aliases** of the caller's values, the
+same rule the inline splice follows. A body that rebinds one — including a
+rebind carried by a loop inside a `pl.at` scope, the shape every Qwen3 helper
+uses — writes through the caller's variable, so the caller sees the update and
+the enclosing loop derives its carried channel. Handing a name back to itself
+(`out = splice_into(x, out)`, the write-through idiom) emits nothing.
+
+`@pl.function` / `@pl.program` declarations continue to use the AST lane. An
+external kernel has no Python body to trace, so it stays a declaration: calling
+a `@pl.jit.extern` stub from a traced body joins the entry's assembly, while
+`pl.jit_trace` has no `extern` form of its own. The remaining family spellings
+beyond the verified surface (`opaque`) raise a `TypeError` at decoration
+instead of tracing an unverified lane.
+
+That list is the boundary: a kernel that needs a capability it leaves out stays
+on the parsing lane, and a traced body that calls a parser-lane kernel raises
+instead of silently leaving the frontend.
 ## Functions
 
 ```python

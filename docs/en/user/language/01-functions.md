@@ -138,6 +138,83 @@ silently folding into one program.
 
 `@pl.jit.host` rejects `level=` (HOST is implicit).
 
+### Opting into the tracing frontend
+
+`@pl.jit` parses a kernel body. `@pl.jit_trace` records it by executing an
+instrumented copy instead. The choice is per definition, so both can coexist in
+a program -- but not across a call: a helper must use the same decorator family
+as the entry that calls it.
+
+The observable difference is what an annotation means. Under `@pl.jit_trace`, a
+plain Python annotation (`scale: float`) is a compile-time knob baked into the
+kernel, while `pl.Scalar[dtype]` is a runtime parameter whose value arrives at
+dispatch:
+
+```python
+@pl.jit_trace
+def scale_relu(
+    x: pl.Tensor,
+    scale: float,                 # host knob: baked; changing it recompiles
+    out: pl.Out[pl.Tensor],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        tile = pl.load(x, [0, 0], [64, 64])
+        pl.store(pl.relu(pl.mul(tile, scale)), [0, 0], out)
+    return out
+```
+
+Decoration runs nothing. The body is collected once at the first `.fn`,
+`.compile()`, `.lower()`, or host call and reused after; a bare `pl.Tensor`
+leaves the shape unknown, so that kernel re-traces per call. A body may read
+`x.shape` — the extents it sees are the call site's, static dims as constants
+and dynamic dims as `pl.tensor.dim` reads. Tensor contents and
+a `pl.Scalar` parameter's value never split the compiled artifact; a shape,
+dtype, or host-knob change does. A `config=RunConfig(...)` call honors the same
+compile knobs as `@pl.jit`; asking it to dump passes or profile a compilation
+always runs the compiler rather than reusing a cached artifact.
+
+A host knob is read-only inside a staged loop: the body is traced once, so
+rebinding it there (`factor = factor * 2.0` under `for _ in pl.range(n)`) would
+bake one iteration's value into all of them. Carry the state as a staged value
+instead — bind it with `pl.const(...)` and let the loop update it.
+
+This frontend covers explicit-output entries, their `incore` / `inline`
+callees, and the `host` / `graph` orchestrators built over them. Outputs created
+by the return value, and `@pl.function` / `@pl.program` declarations, remain on
+the `@pl.jit` lane; the `@pl.jit_trace` spellings for them (`opaque`, `extern`)
+raise at decoration. An external kernel is a declaration with no Python body to
+trace: call a `@pl.jit.extern` stub from a traced body and it joins the entry's
+assembly.
+
+### Shared snippets: `pl.authoring.body(...).splice(...)`
+
+`pl.authoring.body` prepares a snippet you want pasted into its caller rather than
+called; `.splice(...)` places it at every occurrence. Its statements join the
+caller's IR — no function, no call — so it needs no parameter or result
+annotations at all:
+
+```python
+@pl.authoring.body
+def twice(x):
+    return pl.add(x, x)
+
+@pl.jit_trace
+def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        tile = pl.load(a, [0, 0], [64, 64])
+        pl.store(twice.splice(tile), [0, 0], out)   # a Tile here ...
+        out[:, :] = twice.splice(a)                 # ... a Tensor there
+    return out
+```
+
+Use it when a helper is a snippet rather than a contract: it skips the IR
+signature, so one body serves several argument types, and a value it creates can
+be returned without a parameter backing it. Two rules still apply — it only runs
+inside a trace (a host call is refused), and staged typing still governs the
+body's interior, exactly as it does in the caller. Reach for
+`@pl.jit_trace.inline` when you want the body collected once and its signature
+declared; reach for `pl.authoring.body(...).splice(...)` when there is nothing to declare.
+
 ### What a sub-function hands back keeps its shape and dtype
 
 Specialization stamps every generated parameter with a concrete shape and dtype, so a

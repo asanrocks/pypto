@@ -29,12 +29,18 @@ PyPTO 的编译与执行入口比它拥有的概念要多，而且好几个名�
 | 一个 `@pl.jit` 内核和 torch 张量 | 结果 | `kernel(*args, config=...)` |
 | 一个 `@pl.jit` 内核 | 产物，用于反复派发 | `kernel.compile(*args, config=...)` |
 | 一个 `@pl.jit` 内核 | IR，不做 codegen | `kernel.lower(*args)` |
+| 一个 `@pl.jit_trace` 内核 | 同样的三个 JIT 入口 | `specialize()` / `lower()` / `compile()`，或宿主调用 |
 | 一个 `@pl.program` 类 | 产物 | `ir.compile(program, ...)` |
 | 一个 `CompiledProgram` | 派发一次 | `compiled(*args, config=...)` |
 | 一个 `CompiledProgram` 和常驻设备的数据 | 派发多次 | `ChipWorker.run(compiled, *args)` |
 | 一个 `DistributedCompiledProgram` | 派发多次 | `compiled.prepare()` → `DistributedWorker.run(...)` |
 | 磁盘上的一个构建目录 | 派发一次，不重新编译 | `CompiledProgram.from_dir(work_dir)(*args, config=...)` |
 | 一个 `CompiledProgram` | 计时派发 | `benchmark(compiled, args, ...)` |
+
+`@pl.jit_trace` 是追踪前端的 JIT 装饰器。它提供与 `@pl.jit` 相同的入口——
+`specialize()`、`lower()`、`compile()` 以及分发调用——因此上表中每一行
+`@pl.jit` 都同样适用，区别只在于生成 IR 的前端。
+
 
 ## 内部 torch 适配
 

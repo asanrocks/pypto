@@ -577,6 +577,127 @@ def test_incomplete_tuple_alias_keeps_legacy_side_effect_calls(tmp_path, monkeyp
     assert "fill" in config
 
 
+def test_tracing_entry_can_call_a_single_core_extern(tmp_path):
+    """A bodyless extern declaration is callable from a tracing entry.
+
+    There is no Python body to trace, so the parser frontend's guard does not
+    apply: the declaration's rendered ``@pl.function`` is registered into the
+    caller's assembly and the call is emitted against it.
+    """
+    cpp = _write_kernel(tmp_path)
+
+    # Bare slots on purpose: a C++ body gives the parser no caller AST to read,
+    # so the call site supplies the declaration's concrete types.
+    @pl.jit.extern(core_type="aiv", source=cpp)
+    def relu(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...
+
+    @pl.jit_trace
+    def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
+        relu(a, out)
+        return out
+
+    a = torch.zeros(64, 64, dtype=torch.float32)
+    out = torch.zeros(64, 64, dtype=torch.float32)
+    program = entry.specialize(a, out)
+    functions = {function.name: function for function in program.functions.values()}
+
+    assert {"entry", "relu"} <= set(functions)
+    relu_fn = functions["relu"]
+    assert relu_fn.func_type == ir.FunctionType.AIV
+    assert "external_source" in relu_fn.attrs
+    assert [str(dim) for dim in relu_fn.params[0].type.shape] == ["64", "64"]
+    assert "self.relu(a, out)" in str(program)
+
+
+def test_tracing_entry_registers_a_mixed_extern_group_and_members(tmp_path):
+    """A mixed extern's AIC/AIV members ride along with the group wrapper."""
+    cpp = _write_kernel(tmp_path)
+
+    @pl.jit.extern(core_type="mixed", aic_source=cpp, aiv_source=cpp)
+    def pa(
+        a: pl.Tensor[[64, 64], pl.FP32],
+        out: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
+    ) -> pl.Tensor[[64, 64], pl.FP32]: ...
+
+    @pl.jit_trace
+    def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]) -> pl.Tensor:
+        pa(a, out)
+        return out
+
+    a = torch.zeros(64, 64, dtype=torch.float32)
+    out = torch.zeros(64, 64, dtype=torch.float32)
+    program = entry.specialize(a, out)
+    functions = {function.name for function in program.functions.values()}
+
+    assert {"entry", "pa", "pa_aic", "pa_aiv"} <= functions
+
+
+def test_tracing_entry_types_an_extern_slot_with_the_arguments_layout(tmp_path):
+    """A staged argument's layout crosses into the rendered declaration.
+
+    The declaration's parameter is what the emitted call is checked against,
+    so a bare ``pl.Tensor`` slot handed an NZ view must not render as the ND
+    default — the verifier would reject the call boundary with a layout
+    mismatch (an ND declaration bound to an NZ buffer).
+    """
+    cpp = _write_kernel(tmp_path)
+
+    @pl.jit.extern(core_type="aiv", source=cpp)
+    def relu(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...
+
+    @pl.jit_trace
+    def entry(a: pl.Tensor[[64, 64], pl.FP32, pl.NZ], out: pl.Out[pl.Tensor]) -> pl.Tensor:
+        relu(a, out)
+        return out
+
+    a = torch.zeros(64, 64, dtype=torch.float32)
+    out = torch.zeros(64, 64, dtype=torch.float32)
+    program = entry.specialize(a, out)
+    relu_fn = next(function for function in program.functions.values() if function.name == "relu")
+
+    param_type = relu_fn.params[0].type
+    assert isinstance(param_type, ir.TensorType), param_type
+    assert param_type.tensor_view is not None
+    assert param_type.tensor_view.layout == ir.TensorLayout.NZ, param_type
+
+
+def test_tracing_entries_do_not_reuse_a_declaration_across_layouts(tmp_path):
+    """The extern declaration cache keys on the layout, not shape and dtype alone.
+
+    Two entries — an ND one and an NZ one of the same shape and dtype — each
+    get the declaration matching their argument; a layout-blind key handed
+    the second entry the first entry's declaration.
+    """
+    cpp = _write_kernel(tmp_path)
+
+    @pl.jit.extern(core_type="aiv", source=cpp)
+    def relu(a: pl.Tensor, out: pl.Out[pl.Tensor]): ...
+
+    @pl.jit_trace
+    def nd_entry(a: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor]) -> pl.Tensor:
+        relu(a, out)
+        return out
+
+    @pl.jit_trace
+    def nz_entry(a: pl.Tensor[[64, 64], pl.FP32, pl.NZ], out: pl.Out[pl.Tensor]) -> pl.Tensor:
+        relu(a, out)
+        return out
+
+    a = torch.zeros(64, 64, dtype=torch.float32)
+    out = torch.zeros(64, 64, dtype=torch.float32)
+
+    nd_program = nd_entry.specialize(a, out)
+    nd_relu = next(function for function in nd_program.functions.values() if function.name == "relu")
+    assert nd_relu.params[0].type.tensor_view is None, nd_relu.params[0].type
+
+    # The second entry specializes after the first: a layout-blind key would
+    # serve it the ND declaration cached for the first entry's program.
+    nz_program = nz_entry.specialize(a, out)
+    nz_relu = next(function for function in nz_program.functions.values() if function.name == "relu")
+    assert nz_relu.params[0].type.tensor_view is not None
+    assert nz_relu.params[0].type.tensor_view.layout == ir.TensorLayout.NZ, nz_relu.params[0].type
+
+
 def test_single_core_extern_include_dirs_reach_kernel_descriptor(tmp_path):
     cpp = _write_kernel(tmp_path)
     include_dir = tmp_path / "include"

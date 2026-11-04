@@ -38,8 +38,21 @@ def add_returns_out(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
+@pl.jit_trace
+def traced_add_returns_out(
+    a: pl.Tensor[[ROWS, ROWS], pl.FP32],
+    b: pl.Tensor[[ROWS, ROWS], pl.FP32],
+    out: pl.Out[pl.Tensor[[ROWS, ROWS], pl.FP32]],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        left = pl.load(a, [0, 0], [ROWS, ROWS])
+        right = pl.load(b, [0, 0], [ROWS, ROWS])
+        pl.store(pl.add(left, right), [0, 0], out)
+    return out
+
+
 class TestCompileLoweredProgram:
-    """``ir.compile`` accepts a post-pass program."""
+    """``ir.compile`` accepts a post-pass program on both frontends."""
 
     def test_parsing_lane_lowered_program_compiles(self, tmp_path):
         torch = pytest.importorskip("torch")
@@ -50,6 +63,18 @@ class TestCompileLoweredProgram:
         lowered = add_returns_out.lower(a, b, out)
         compiled = ir.compile(
             lowered, output_dir=str(tmp_path / "parsing"), skip_ptoas=True, dump_passes=False
+        )
+        assert isinstance(compiled, CompiledProgram)
+
+    def test_tracing_lane_lowered_program_compiles(self, tmp_path):
+        torch = pytest.importorskip("torch")
+        a = torch.zeros(ROWS, ROWS, dtype=torch.float32)
+        b = torch.zeros(ROWS, ROWS, dtype=torch.float32)
+        out = torch.empty(ROWS, ROWS, dtype=torch.float32)
+
+        lowered = traced_add_returns_out.lower(a, b, out)
+        compiled = ir.compile(
+            lowered, output_dir=str(tmp_path / "tracing"), skip_ptoas=True, dump_passes=False
         )
         assert isinstance(compiled, CompiledProgram)
 
