@@ -16,7 +16,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import TypeGuard
 
 from pypto.pypto_core import DataType
 from pypto.pypto_core import ir as _ir
@@ -111,17 +111,17 @@ def _is_nonscalar_sequence(value: object) -> TypeGuard["Sequence[object]"]:
 
 
 def _normalize_expr(
-    value: Any,
+    value: object,
     span: _ir.Span | None = None,
     int_dtype: DataType = DataType.INDEX,
     float_dtype: DataType = DataType.FP32,
 ) -> _ir.Expr:
     """Convert Python values to IR expressions.
 
-    The operand-boundary converter (``_submit_expr``'s doctrine): the value
-    arrives from dynamic callers, so the parameter is honestly ``Any`` and
-    the isinstance chain is the contract — everything but int/float/Expr is
-    loud.
+    The operand-boundary converter (the doctrine of
+    ``pypto.language.authoring.dispatch.submit_expr``): the value arrives from
+    dynamic callers, so the parameter is honestly ``object`` and the isinstance
+    chain is the contract — everything but int/float/Expr is loud.
 
     Args:
         value: Python int/float or existing Expr
@@ -724,12 +724,16 @@ def return_value_types(fn: "_ir.Function") -> list["_ir.Type"]:
     exclusive branch. Those statements describe alternative paths, not extra
     function results. Merge equivalent paths and return an UnknownType marker
     when paths disagree so the declared-return check still rejects the program.
+
+    A value whose own type is ``UnknownType`` stays in its path — dropping it
+    would let a known+unknown path pair compare equal (the dropped slot is the
+    disagreement), so the unknown *is* the mismatch marker.
     """
     paths: list[list[_ir.Type]] = []
 
     class _V(_ir.IRVisitor):
         def visit_return_stmt(self, op: _ir.ReturnStmt) -> None:
-            values = [value.type for value in op.value if not isinstance(value.type, _ir.UnknownType)]
+            values = [value.type for value in op.value]
             # A direct multi-return call is represented as one TupleType
             # expression in the body, while the function signature carries
             # the parser-compatible flat element list. Recover that boundary
@@ -829,20 +833,19 @@ def derived_return_types(fn: "_ir.Function") -> list["_ir.Type"]:
     spell every one of them. ``[]`` otherwise — the derivation is
     all-or-nothing, never partial.
 
-    Two guards keep the pin from lying (the migration contract: no
-    annotation that misreports the values operations produce):
+    All-or-nothing because a partial pin misreports the values operations
+    produce:
 
     * Paths disagree (``return_value_types`` yields an UnknownType) → no
       pin. A signature carrying UnknownType would type every caller query
       as Unknown — and a Submit's ``Tuple[<ret>, TASK_ID]`` built from it
       is exactly the silently-wrong state. The parser's call-typing
-      fallback (``first_return_value_types`` below) keeps ``[]`` for the
+      fallback (``first_return_value_types`` below) returns ``[]`` for the
       same reason.
     * Any recovered type is inexpressible (a body-local extent Var) → no
       pin for the *whole* function. Pinning the expressible subset of a
-      multi-return would change the signature's arity — a stronger lie
-      than keeping ``[]`` (the AST keeps ``return_types=[]`` for exactly
-      this case).
+      multi-return would change the signature's arity — a worse misreport
+      than declaring no return types at all.
     """
     actual = return_value_types(fn)
     if not actual or any(isinstance(t, _ir.UnknownType) for t in actual):

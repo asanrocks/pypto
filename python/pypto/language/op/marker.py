@@ -255,7 +255,7 @@ class Marker:
         # declared/derived return types, or a genuinely void body. A body
         # whose return paths disagree or whose types the signature cannot
         # spell stays unpinned — a submit referencing it stays loud instead
-        # of guessing TASK_ID-only (see ``_check_submit_callee``).
+        # of guessing TASK_ID-only (see ``authoring.dispatch.check_callee``).
         self.implicit_returns_pinned = bool(self.return_types) or not return_value_types(function)
 
     def on_submit_reference(self) -> None:

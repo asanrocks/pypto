@@ -9,11 +9,6 @@
 
 """Unit tests for orchestration code generation (core cases, part 1)."""
 
-# TEMPORARY (deleted by the constructs staging commit): loop-carried values
-# surface the honest `Tensor | Scalar` union until the loop machinery's typing
-# lands; these rules are that transition's test-shape noise, not a bug signal.
-# pyright: reportReturnType=false
-
 import re
 
 import pypto.language as pl

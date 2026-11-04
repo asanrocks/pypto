@@ -13,11 +13,6 @@ and online update kernels) compiles through the full pass pipeline and
 generates non-empty MLIR for each InCore function.
 """
 
-# TEMPORARY (deleted by the constructs staging commit): loop-carried values
-# surface the honest `Tensor | Scalar` union until the loop machinery's typing
-# lands; these rules are that transition's test-shape noise, not a bug signal.
-# pyright: reportArgumentType=false, reportReturnType=false
-
 import pypto.language as pl
 import pytest
 from pypto import backend, ir

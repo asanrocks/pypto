@@ -15,7 +15,7 @@ tpop ops accept optional shape/dtype kwargs to create typed results.
 """
 
 from collections.abc import Sequence
-from typing import overload
+from typing import Any, overload
 
 from pypto.ir.op import system_ops as _ir_ops
 from pypto.ir.op.system_ops import (
@@ -35,6 +35,7 @@ from pypto.ir.op.system_ops import (
 )
 from pypto.ir.utils import _get_span_or_capture
 from pypto.pypto_core import DataType
+from pypto.pypto_core import ir as _ir_core
 from pypto.pypto_core.ir import Call, ConstInt, Expr, PipeType, Span
 
 from ..typing import Array, IntLike, Scalar, Tensor, Tile, to_expr
@@ -504,30 +505,6 @@ def task_invalid(*, span: Span | None = None) -> Scalar:
     return Scalar(DataType.TASK_ID, call)
 
 
-def task_dummy(*, deps: Sequence[Scalar | Array | None]) -> Scalar:
-    """Dependency-only dummy TaskId barrier.
-
-    This is a parser construct: ``pl.system.task_dummy(deps=[...])`` is
-    intercepted syntactically and lowered to ``system.task_dummy`` with manual
-    dep edges. The body exists so the public DSL name resolves for static
-    checkers and imports.
-
-    Args:
-        deps: TaskIds the barrier waits on -- each a ``pl.Scalar[pl.TASK_ID]``
-            returned by ``pl.submit``, or a ``pl.array`` of them for fan-in.
-            ``None`` entries are skipped, so a conditionally-produced TaskId needs
-            no branch at the call site.
-
-    Returns:
-        A ``pl.Scalar[pl.TASK_ID]`` that becomes ready once every dep has. Depend on
-        it instead of listing all of `deps` again at each consumer.
-    """
-    raise RuntimeError(
-        "pl.system.task_dummy is a DSL parser construct and cannot be called directly; "
-        "use it as `barrier = pl.system.task_dummy(deps=[task_id])` inside a @pl.function body."
-    )
-
-
 def available_cluster_count(*, span: Span | None = None) -> Scalar:
     """This run's MIX cluster (= AIC) count, as reported by the runtime.
 
@@ -581,6 +558,34 @@ def available_aiv_count(*, span: Span | None = None) -> Scalar:
     """
     call = _ir_ops.available_aiv_count(span=span)
     return Scalar(DataType.INT32, call)
+
+
+def task_dummy(*, deps: Sequence[Scalar | Array | None]) -> Scalar:
+    """Dependency-only dummy TaskId barrier.
+
+    ``pl.system.task_dummy(deps=[...])`` builds the ``system.task_dummy``
+    call with the ``dummy_task``/``manual_dep_edges`` attrs. Codegen lowers it
+    to a phase-fence dummy submit whose ``manual_dep_edges`` are packed into
+    ``Arg::set_dependencies`` (per-edge ``is_valid()`` guards) before
+    ``rt_submit_dummy_task`` — the runtime dep-edge semantic is realized, so
+    this is a full facade (retired by the same evidence as
+    ``pl.submit``)."""
+    actual_span = _get_span_or_capture(None, frame_offset=1)
+    base = _ir_core.create_op_call("system.task_dummy", [], {}, actual_span)
+    # The shared ``deps=`` coercion (the parser's Form-1 desugaring, ported):
+    # a per-element TASK_ID read (``arr[i]``) folds into a synthesized array
+    # so ``manual_dep_edges`` stays Var-only — the same contract ``pl.submit``
+    # / ``pl.spmd`` / ``pl.at`` honor (the migration guide's "existing
+    # dependency lists keep working" promise covers this op too).
+    from pypto.language.ambient import active_frame  # noqa: PLC0415 - avoid an import cycle
+    from pypto.language.authoring.dispatch import coerce_deps  # noqa: PLC0415 - avoid an import cycle
+
+    dep_exprs = coerce_deps(deps, "pl.system.task_dummy", active_frame())
+    attrs: list[tuple[str, Any]] = [("dummy_task", True)]
+    if dep_exprs:
+        attrs.append(("manual_dep_edges", dep_exprs))
+    call = _ir_core.Call(base.op, base.args, base.kwargs, attrs, base.type, base.span)
+    return Scalar(DataType.TASK_ID, call)
 
 
 # The op-call error boundary: classify user-facing (TypeError, ValueError)

@@ -75,22 +75,11 @@ if TYPE_CHECKING:
 
 from .compat.diagnostics import static_assert, static_print
 from .constructs import optimizations as optimizations
+from .constructs.func_attrs import func_attr
+from .constructs.loops import cond, parallel, pipeline, range, unroll, while_
 from .constructs.optimizations import cross_core_slot, split
-from .dsl_api import (
-    at,
-    cluster,
-    cond,
-    func_attr,
-    graph,
-    parallel,
-    pipeline,
-    range,
-    split_aiv,
-    spmd,
-    unroll,
-    while_,
-    yield_,
-)
+from .constructs.scopes import ScopeMode, at, cluster, graph, manual_scope, reg_scope, scope, split_aiv, spmd
+from .constructs.submit import spmd_submit, submit
 from .op import array_ops as array
 from .op import prefetch_ops as prefetch
 from .op import reg_ops as reg
@@ -261,7 +250,6 @@ from .op.unified_ops import (
     xor,
     xors,
 )
-from .scope import ScopeMode, manual_scope, reg_scope, scope, spmd_submit, submit
 from .typing import (
     RUNTIME,
     Array,
@@ -364,8 +352,28 @@ TASK_ID = DataType.TASK_ID
 # ``pl.TaskId`` is equivalent to ``pl.Scalar[pl.TASK_ID]``.
 TaskId = Scalar[TASK_ID]
 
+
+def yield_(*values: Any) -> Any:
+    """Yield values from a scope (for, if).
+
+    This function is used to explicitly return values from nested scopes
+    and create SSA phi nodes.
+
+    Args:
+        *values: Values to yield
+
+    Returns:
+        The yielded value(s). For single value, returns the value.
+        For multiple values, returns tuple.
+    """
+    if len(values) == 1:
+        return values[0]
+    return tuple(values)
+
+
 __all__ = [
     "authoring",
+    "yield_",
     "jit",
     "JITFunction",
     "function",
@@ -397,7 +405,6 @@ __all__ = [
     "unroll",
     "pipeline",
     "while_",
-    "yield_",
     "cond",
     "static_print",
     "static_assert",
