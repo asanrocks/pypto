@@ -37,6 +37,9 @@ class InlineFunction:
     col_offset: int
     closure_vars: dict[str, Any]
 
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Only reachable inside a decorated body; the parser splices the AST at call sites."""
+
 class DSLFunction(ir.Function, Generic[_R_co]):
     """Typing-only view of a decorated DSL function.
 

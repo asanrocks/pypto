@@ -262,6 +262,12 @@ def parse(
     # built by the decorators (which run during exec) can remap spans (#1612).
     exec_ns = _AutoDynVar(temp_module.__dict__)
     map_token = active_source_map.set(source_map)
+    from .decorator import function as parser_function, program as parser_program  # noqa: I001, PLC0415
+
+    saved_function = pl.function
+    saved_program = pl.program
+    pl.function = parser_function
+    pl.program = parser_program
     try:
         _prevalidate_decorator_args(code, filename)
         exec(compiled_code, exec_ns)
@@ -284,6 +290,8 @@ def parse(
             ) from e
         raise RuntimeError(f"Error executing code from {filename}: {e}") from e
     finally:
+        pl.function = saved_function
+        pl.program = saved_program
         active_source_map.reset(map_token)
         # Clean up linecache entry
         if filename in linecache.cache:
