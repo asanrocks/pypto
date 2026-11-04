@@ -109,6 +109,27 @@ DDR ──────────► Vec ────────────�
 
 `offsets` 与 `shape` 是被搬运的那块张量区域 —— 偏移是**张量**内的偏移，shape 是结果 tile 的尺寸。
 
+### 显式存储绑定（Storage binding）
+
+在 `pl.load`、`pl.move` 或 `pl.create_tile` 上通过 `memref=` 选择声明的分配或
+槽位。其他创建 Tile 结果的生产者可在赋值或拆包前调用 `pl.bind_storage`：
+
+```python
+pool = pl.MemRef(slots=2)
+tile = pl.load(x, offsets, shape, target_memory=pl.Mem.Vec, memref=pool[i % 2])
+result = pl.bind_storage(pl.exp(tile), pl.MemRef("scratch"))
+```
+
+形状、数据类型和视图由生产者推导；绑定只选择存储，不复制数据。多结果采用与
+结果一一对应的引用序列，`None` 保留该结果的自动放置。必须绑定尚未赋值的
+生产者，不能重新放置已有变量。视图、存储和原地更新继承输入或目标存储。
+绑定时生产者的内存空间必须已确定。
+
+声明的分配与无关的编译器管理存储隔离。各槽位大小一致；常量索引检查边界，
+运行时索引由调用者保证不越界。两个独立产生且同时存活的值不能占用同一槽位。
+追踪前端的局部类型注解不决定存储。容量、流水线和 PTOAS 限制见
+[声明与规划器约定](../../dev/language/00-python_syntax.md)。
+
 ### 标量元素访问
 
 `pl.read` 与 `pl.write` 按下标访问**张量**的单个元素，中间不经过 tile：

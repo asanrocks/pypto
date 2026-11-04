@@ -32,6 +32,34 @@ import pypto.language as pl
 
 ## 类型系统
 
+### 基于值的存储绑定（Storage binding）
+
+追踪前端的局部类型注解不决定存储。应在构造生产者时绑定分配：
+
+```python
+pool = pl.MemRef(slots=2)
+for i in pl.range(steps):
+    tile = pl.load(x, [0, 0], [64, 64], target_memory=pl.Mem.Vec,
+                   memref=pool[i % 2])
+    result = pl.bind_storage(pl.exp(tile), pl.MemRef("scratch"))
+```
+
+`load`、`move` 和 `create_tile` 支持仅限关键字的 `memref` 简写。
+`pl.bind_storage(producer, reference)` 是一般形式，适用于创建 Tile 结果的
+算术、归约和矩阵运算。多结果采用与结果一一对应的引用序列，`None` 表示自动放置。
+必须在赋值或拆包前绑定。这是构造操作，不执行复制，也不能重新放置已产生的值。
+视图、原地更新和存储操作继承输入或目标的存储，不接受独立绑定。
+
+形状、数据类型和视图由生产者推导；绑定只在结果类型中加入分配引用。
+内存空间必须已确定，必要时通过 `target_memory` 指定。引用只保存在
+`Call.type` 中，不在不透明关键字参数中重复。槽位（Slot）表达式参与 IR 替换。
+打印使用保留结果类型的无损调用形式。
+
+匿名声明采用局部绑定名；同一函数内的内联命名引用共享分配基址，冲突的槽位数会报错。
+独立追踪拥有独立基址。常量槽位索引检查边界，运行时索引由调用者保证不越界。
+现有容量、隔离、存活期、流水线和规划器限制同样适用。Buffer IR 不支持的槽位
+程序继续使用 Tile IR，不能通过丢弃声明来获得转换资格。
+
 ### 标量类型
 
 ```python

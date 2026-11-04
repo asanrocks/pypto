@@ -31,6 +31,7 @@ from pypto.language.tracing.decorators.jit_trace import (  # noqa: SLF001 — th
     _variant_key,
     _variant_key_part,
 )
+from pypto.language.typing._ir_facade import facade_from_ir_type
 from pypto.pypto_core import ir
 
 F32 = torch.float32
@@ -296,6 +297,56 @@ class TestVariantKeyComposition:
         program = two_idx.specialize(_sample())
         variants = [fn.name for fn in program.functions.values() if fn.name.startswith("take_idx")]
         assert len(variants) == 2, f"distinct same-named Vars must not share a variant: {variants}"
+
+
+class TestStorageVariantIdentity:
+    """A callee's parameter type carries its argument's declared storage.
+
+    ``annotation_to_type`` bakes the facade's ``memref`` into the parameter
+    type, so two call sites differing only in explicit storage are different
+    types — the same rule the layout key encodes, one field over.
+    """
+
+    @staticmethod
+    def _bound_facade(memref: ir.MemRef):
+        x = ir.Var("x", ir.TileType([64, 64], pl.FP32, memory_space=pl.Mem.Vec), ir.Span.unknown())
+        result = pl.bind_storage(pl.exp(pl.Tile(expr=x)), memref)
+        return facade_from_ir_type(result.unwrap().type)
+
+    def test_distinct_declared_storage_gets_distinct_keys(self):
+        a = self._bound_facade(ir.MemRef("scratch_a"))
+        b = self._bound_facade(ir.MemRef("scratch_b"))
+        assert _variant_key_part(a) != _variant_key_part(b)
+
+    def test_one_declaration_shared_by_two_values_dedupes(self):
+        pool = ir.MemRef("pool")
+        assert _variant_key_part(self._bound_facade(pool)) == _variant_key_part(self._bound_facade(pool))
+
+    def test_storage_splits_end_to_end_variants(self):
+        """Two call sites binding different storage need one variant each."""
+
+        @pl.jit_trace.inline
+        def keep(t: pl.Tile):
+            return t
+
+        @pl.jit_trace
+        def two_storages(
+            x: pl.Tensor[[64, 64], pl.FP32],
+            out: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
+        ):
+            with pl.at(level=pl.Level.CORE_GROUP):
+                tile = pl.load(x, [0, 0], [64, 64])
+                keep(pl.bind_storage(pl.exp(tile), ir.MemRef("scratch_a")))
+                keep(pl.bind_storage(pl.exp(tile), ir.MemRef("scratch_b")))
+            return out
+
+        program = two_storages.specialize(_sample(), _sample())
+        variants = [
+            fn for fn in program.functions.values() if fn.name != program.name and fn.name.startswith("keep")
+        ]
+        assert len(variants) == 2, f"different declared storage is a different type: {variants}"
+        bases = {param.type.memref.base_.name_hint for fn in variants for param in fn.params}
+        assert bases == {"scratch_a", "scratch_b"}, bases
 
 
 class TestWrapperKindVariantIdentity:

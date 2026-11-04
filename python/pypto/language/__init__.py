@@ -250,6 +250,7 @@ from .op.unified_ops import (
     xor,
     xors,
 )
+from .storage import bind_storage
 from .tracing.decorators.jit_trace import jit as jit_trace
 from .typing import (
     RUNTIME,
@@ -374,6 +375,7 @@ def yield_(*values: Any) -> Any:
 
 __all__ = [
     "authoring",
+    "bind_storage",
     "yield_",
     "jit",
     "jit_trace",

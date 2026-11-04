@@ -126,6 +126,31 @@ memory map.
 `offsets` and `shape` are the region of the tensor being moved — the offsets are into the
 **tensor**, and the shape is the size of the resulting tile.
 
+### Explicit storage binding
+
+Use `memref=` on `pl.load`, `pl.move`, or `pl.create_tile` to select a declared
+allocation or slot. For other allocating Tile producers, use `pl.bind_storage`
+before assigning or unpacking the result:
+
+```python
+pool = pl.MemRef(slots=2)
+tile = pl.load(x, offsets, shape, target_memory=pl.Mem.Vec, memref=pool[i % 2])
+result = pl.bind_storage(pl.exp(tile), pl.MemRef("scratch"))
+```
+
+The producer infers shape, dtype, and view; binding selects its storage without
+copying data. Multiple results take a sequence with one reference per result;
+`None` keeps that result automatically placed. Bind a detached producer, rather
+than an existing variable. Views, stores, and in-place updates inherit their
+input or destination storage. A bound producer must have a resolved memory space.
+
+A declared allocation is isolated from unrelated compiler-managed storage.
+Its slots are equally sized; constant indices are bounds-checked and runtime
+indices must remain in range. Independently produced values cannot occupy one
+slot while both remain live. Local annotations do not establish storage in the
+tracing frontend. See the [declaration and planner contracts](../../dev/language/00-python_syntax.md#declared-allocations-one-argument-memref)
+for capacity, pipeline, and PTOAS restrictions.
+
 ### Scalar element access
 
 `pl.read` and `pl.write` reach a single element of a **tensor** by index, with no tile in
