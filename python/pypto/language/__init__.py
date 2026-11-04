@@ -250,6 +250,7 @@ from .op.unified_ops import (
     xor,
     xors,
 )
+from .tracing.decorators.jit_trace import jit as jit_trace
 from .typing import (
     RUNTIME,
     Array,
@@ -375,6 +376,7 @@ __all__ = [
     "authoring",
     "yield_",
     "jit",
+    "jit_trace",
     "JITFunction",
     "function",
     "inline",

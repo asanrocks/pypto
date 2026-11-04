@@ -3358,7 +3358,7 @@ class TestConstexprOperandResolution:
 
 
 def test_scalar_param_dtype_constant_is_rendered_by_value():
-    """``pl.Scalar[<constant>]`` compiles under @pl.jit as it does in @pl.program:
+    """``pl.Scalar[<constant>]`` compiles under @pl.jit_trace as it does in @pl.program:
     the generated module binds only ``pl`` / ``pld``, so the constant's name
     would be undefined there."""
 
@@ -3515,7 +3515,7 @@ class TestInlineFuncIntegration:
         hand-written equivalent.
 
         The pass-level tests in tests/ut/ir/transforms/test_inline_functions.py
-        cover detailed structural correctness (Phase 0d).
+        cover detailed structural correctness.
         """
         torch = pytest.importorskip("torch")
 

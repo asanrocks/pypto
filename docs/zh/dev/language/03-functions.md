@@ -215,6 +215,58 @@ constexpr 参数不在该列表中，产物已经把它解析掉了。
 或使用 `specialize()`/`lower()`。公共缓存策略、统计和仅用元数据预热的 CLI 参见
 [JIT 持久缓存](../10-jit-cache.md)。
 
+## 追踪前端：`@pl.jit_trace`
+
+同一个 JIT kernel 的 IR 可以由两套前端生成，装饰器按定义逐个选择。
+`@pl.jit` 解析函数体（即上文所述的路径）；`@pl.jit_trace` 执行函数体的插桩副本，
+并记录实际发生的操作。导入 `pypto.language` 不会改变任何事情：每个定义仍然
+使用自己装饰器指定的那条路径。
+
+```python
+@pl.jit_trace
+def scale_relu(
+    x: pl.Tensor,
+    scale: float,
+    out: pl.Out[pl.Tensor],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        tile = pl.load(x, [0, 0], [64, 64])
+        pl.store(pl.relu(pl.mul(tile, scale)), [0, 0], out)
+    return out
+```
+
+`@pl.jit_trace` 与 `@pl.jit` 共享入口（`specialize`、`lower`、`compile`，
+以及传入 torch tensor 的宿主调用）。家族拼写中，已验证的是：`incore` 与
+`inline` 被调函数，以及 `host` 与 `graph` 入口——它们都是解析路径同名拼写的别名，
+保留同一个函数种类、level、role 与 kwarg 表面（见下文
+[已支持的表面](#已支持的表面)）。`opaque` 与 `extern` 在装饰时抛出 `TypeError`：
+`@pl.jit.extern` 是没有 Python 函数体可供追踪的声明，`opaque` 则允许追踪器词汇表
+以外的函数体。helper 必须与调用它的入口声明在同一条路径上：
+追踪函数体调用 AST 路径的 `@pl.jit` kernel 会直接报错，而不是静默切换前端；
+解析器路径的循环拼写（`pl.while_`、`pl.cond`）在追踪中同样报错——追踪方言
+使用普通 Python `while`。
+
+### 收集时机与复用
+
+装饰时不追踪任何内容。第一次结构化使用——`.fn`、`.specialize()`、`.lower()`、
+`.compile()`，或传入 torch tensor 的宿主调用——会执行一次函数体并保留记录，
+之后兼容的使用直接复用该记录。若注解没有确定某个 shape（裸 `pl.Tensor`），
+仅凭声明无法追踪，该 kernel 每次调用都会重新追踪。在函数体中读取该 shape
+从第一次调用起即可用：`x.shape` 的 lowering 与解析前端一致——静态维度折叠为
+常量，动态维度是一条运行时 `pl.tensor.dim` 读取，在编排函数体中直接命名参数
+声明的 extent 符号。裸注解因此不妨碍依赖 shape 的函数体，只是去掉了声明时
+的那次追踪。
+
+分发缓存以产物契约为键：tensor 的 shape、dtype 与 layout，host knob 的取值，
+以及编译身份（platform、strategy、distributed config、memory planner、dbC
+标志、runtime ABI、Buffer IR、源码位置）。tensor 的*内容*和
+`pl.Scalar[...]` 参数的*取值*不进入键——标量在生成程序中仍是运行时参数，
+因此一份产物服务所有取值。
+
+`config=RunConfig(...)` 调用通过所有 jit 路径共用的 `RunConfig.compile_kwargs()`
+映射转发编译侧字段。凡是要*运行*编译器的请求——pass 转储、PTOAS 转储、编译
+profiling、显式输出目录、或携带 instrument 的外层 `PassContext`——绝不从缓存
+应答：每次都重新编译，随后的普通兼容调用仍复用原有的热产物。
 ## 函数
 
 ```python

@@ -232,8 +232,8 @@ def _trace_with_annotations(  # noqa: PLR0913 - one kwarg per trace fact
     ``Marker``s, and module-global ones become callable in the execution
     copy of the globals. Pre-adapted kernels (the jit dispatch lane) pass
     through both adaptations unchanged."""
-    kernel, _captured = adapt_captured_callees(kernel)
-    kernel = adapt_global_callees(kernel)
+    kernel, _captured = adapt_captured_callees(kernel, specialize=specialize_global_callees)
+    kernel = adapt_global_callees(kernel, specialize=specialize_global_callees)
     sema = PtoSema(
         name=kernel.__name__,
         return_type=annotation_to_type(return_type) if is_staged(return_type) else None,

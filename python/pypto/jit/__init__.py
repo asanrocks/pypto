@@ -7,11 +7,13 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""PyPTO JIT compilation module.
+"""PyPTO JIT compilation module — the parsing-frontend jit.
 
-Provides the ``@pl.jit`` decorator for writing kernel functions that are
-automatically specialized, compiled, and executed on first call based on the
-shapes and dtypes of their torch tensor arguments.
+This package is the ``@pl.jit`` implementation: AST specialization
+(source rewriting into ``@pl.program`` form), the compile cache, and
+device execution. The opt-in tracing counterpart is ``@pl.jit_trace``
+(:mod:`pypto.language.tracing.decorators.jit_trace`); the two lanes share the
+compile-identity contract through :mod:`pypto.runtime.jit_cache`.
 
 Example::
 
