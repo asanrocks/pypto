@@ -10,6 +10,7 @@ The Python DSL as the compiler sees it.
 | [Functions and Program Structure](03-functions.md) | Function types, parameter directions, cross-module reuse, printing IR |
 | [Integrating Hand-Written C++ Kernels](04-external-kernels.md) | Calling an existing hand-written C++ InCore kernel from a PyPTO program |
 | [GM Cache-Access Policy and L2 Hints](05-cache-policy.md) | Scope declarations and per-transfer `cache=` controls: unified `CachePolicy` for A2/A3 runtime aliases and A5 modes |
+| [Construct Recipes](06-construct-recipes.md) | `@pl.authoring.construct` — authoring new `with` constructs without touching the tracer |
 
 ## See Also
 
