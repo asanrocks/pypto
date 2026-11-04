@@ -319,13 +319,15 @@ def _coerce_args(  # noqa: PLR0912 — branches for in-place vs return + scalar/
 def _result_indices(metadata: ArtifactMetadata | None, output_indices: list[int]) -> list[int]:
     """Physical argument indices that carry the entry's logical results.
 
-    Hidden synthesized outputs extend the positional argument list past the
-    logical parameters, so the persisted mapping — not the pure Out indices —
-    restores logical result order and aliasing. Without synthesized outputs,
-    the pure Out parameters are the results in declaration order.
+    The persisted mapping is authoritative whenever the artifact recorded one:
+    hidden synthesized outputs extend the positional argument list past the
+    logical parameters, and a parameter-backed result set whose provenance
+    differs from the pure-Out declaration order (return order, duplicates, an
+    InOut backing) would otherwise be packed in the wrong order or dropped.
+    Artifacts recorded before the mapping existed carry none, and keep the
+    pure-Out declaration-order fallback.
     """
-    if metadata is not None and metadata.synthesized_outputs:
-        assert metadata.result_indices is not None
+    if metadata is not None and metadata.result_indices is not None:
         return list(metadata.result_indices)
     return output_indices
 

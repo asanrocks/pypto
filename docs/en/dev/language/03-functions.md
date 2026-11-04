@@ -556,6 +556,59 @@ uses — writes through the caller's variable, so the caller sees the update and
 the enclosing loop derives its carried channel. Handing a name back to itself
 (`out = splice_into(x, out)`, the write-through idiom) emits nothing.
 
+A return delivers a value through a parameter-backed buffer or a fresh,
+static-shape entry allocation. Existing `pl.Out` buffers and values that trace
+back to them keep their write-through behavior. The check follows the value
+(`return_lineage`), not the variable name, so a callee result that returns the
+buffer it wrote is delivered:
+
+```python
+@pl.jit_trace.inline
+def project(x: pl.Tensor[[64, 64], pl.FP32], y: pl.Tensor[[64, 64], pl.FP32]):
+    y[:, :] = pl.add(x, 1.0)
+    return y
+
+@pl.jit_trace
+def tuple_of_results(
+    x: pl.Tensor[[64, 64], pl.FP32],
+    a: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
+    b: pl.Out[pl.Tensor[[64, 64], pl.FP32]],
+):
+    qa = project(x, a)
+    qb = project(x, b)
+    return qa, qb                # two delivered results, spliced flat
+```
+
+Multiple results are one staged `pl.Tuple` — the operator that yields a
+`TupleType`. A Python tuple literal at the return position is not a host
+container there: it splices into the parser lane's flat contract (`return a, b`
+is N results), while a list literal and `pl.Tuple(a, b)` are the one structural
+value. Both derive the same flat signature
+(`-> tuple[pl.Tensor[...], pl.Tensor[...]]`), so the two lanes agree and the
+materialized `ReturnStmt` is the only difference; spelling a return as
+`pl.Tuple(...)` is never required. In PROGRAM mode, a fresh top-level allocation
+returned by the entry is
+lowered to a hidden `Out` argument. The host allocates its buffer and returns it
+without adding a parameter to the public signature. Both frontends use this
+lowering. Mixed results retain source return order, and repeated results retain
+their aliasing. Dynamic created outputs, returned views without a delivery
+mapping, and allocations whose lifetime cannot be promoted are rejected.
+KERNEL mode continues to require results backed by external parameters.
+
+A tuple-valued callee call can be returned directly: `return callee(x, a, b)`
+has the same delivery lineage as binding its results and returning
+`pl.Tuple(first, second)`. Classification follows the tuple value's elements,
+including through multiple forwarding calls.
+
+A declared `->` is checked against the values, never stamped over them. If the
+body returns a `[8, 8]` buffer under a declared `[16, 8]`, or returns one value
+under a two-result declaration, tracing stops with a `TypeError` naming the
+position and both types. Alternative staged paths must also agree: two branches
+returning different result types are refused instead of leaving the signature
+empty, because an empty signature would hide the disagreement from every later
+caller. A body with no value-bearing return keeps its declared type — a jit entry
+describes the output buffer it writes through `pl.Out`.
+
 `@pl.function` / `@pl.program` declarations continue to use the AST lane. An
 external kernel has no Python body to trace, so it stays a declaration: calling
 a `@pl.jit.extern` stub from a traced body joins the entry's assembly, while
