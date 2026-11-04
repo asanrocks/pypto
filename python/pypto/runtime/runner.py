@@ -32,6 +32,7 @@ Compilation is :func:`pypto.ir.compile`'s job; nothing here compiles for you.
     compiled(a, b, c, config=config)
 """
 
+import dataclasses
 import functools
 import importlib.util
 import inspect
@@ -60,7 +61,7 @@ from pypto._target import (
 )
 from pypto.backend import BackendType
 from pypto.ir.pass_manager import OptimizationStrategy, PassDumpLevel
-from pypto.pypto_core.passes import DiagnosticCheckSet, DiagnosticPhase, MemoryPlanner
+from pypto.pypto_core.passes import DiagnosticCheckSet, DiagnosticPhase, MemoryPlanner, PassContext
 
 from .device_tensor import DeviceTensor
 
@@ -278,7 +279,7 @@ class RunConfig:
             (simpler#844 selective tensor dump).
         enable_pmu: AICore PMU event type. ``0`` disables collection;
             ``>0`` enables and selects the event (``2`` = PIPE_UTILIZATION,
-            ``4`` = MEMORY — see ``runtime/docs/dfx/pmu-profiling.md``).
+            ``4`` = MEMORY).
             Output: ``<work_dir>/dfx_outputs/pmu.csv``. Mirrors
             ``--enable-pmu N``.
         enable_dep_gen: Capture simpler dependency edges into
@@ -764,6 +765,65 @@ RunConfig.__signature__ = _RUN_CONFIG_SIGNATURE.replace(  # type: ignore[attr-de
 )
 
 
+# ---------------------------------------------------------------------------
+# RunConfig -> cache-key resolution helpers
+#
+# Shared by every jit entrance (the tracing ``pl.jit_trace`` and the AST jit,
+# ``pl.jit``) through ``pypto.runtime.jit_cache``. The compile-side *keyword*
+# mapping is not here: ``RunConfig.compile_kwargs()`` is the one mapping onto
+# ``ir.compile()``'s parameters, used by both lanes and by direct callers.
+# ---------------------------------------------------------------------------
+
+
+def freeze_config_value(value: Any) -> Any:
+    """Recursively convert a value into a hashable, deterministic form.
+
+    Dataclasses become a tuple of ``(field_name, frozen_value)`` pairs and
+    lists/tuples become tuples, so a ``DistributedConfig`` (which has a mutable
+    ``device_ids`` list and is therefore unhashable) can participate in a
+    cache key. Field-name pairing keeps the key stable and self-describing if
+    new fields are added.
+    """
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return tuple((f.name, freeze_config_value(getattr(value, f.name))) for f in dataclasses.fields(value))
+    if isinstance(value, (list, tuple)):
+        return tuple(freeze_config_value(v) for v in cast("tuple[object, ...]", value))
+    return value
+
+
+def resolve_memory_planner(run_config: "RunConfig | None") -> MemoryPlanner:
+    """Resolve the planner a compile would actually use, for a cache key.
+
+    Mirrors ``ir.compile()``'s own precedence — explicit argument, then the
+    active ``PassContext``, then ``PYPTO``. Reading the context matters: the
+    planner is most often selected by wrapping a call in
+    ``with PassContext([], memory_planner=...)``, which never reaches
+    ``RunConfig`` at all. Keying only on the ``RunConfig`` field would let a
+    PTOAS-wrapped call reuse a PYPTO-compiled artifact.
+    """
+    if run_config is not None and run_config.memory_planner is not None:
+        return run_config.memory_planner
+    ctx = PassContext.current()
+    if ctx is not None:
+        return ctx.get_memory_planner()
+    return MemoryPlanner.PYPTO
+
+
+def resolve_enable_pypto_l0c_double_buffer() -> bool:
+    """Resolve the effective dbC=2 (L0C double-buffer) opt-in for a cache key.
+
+    Like :func:`resolve_memory_planner`, this flag is most often set by wrapping
+    a call in ``with PassContext([], enable_pypto_l0c_double_buffer=True)``,
+    which ``ir.compile()`` inherits. ``RunConfig`` does not carry this
+    PassContext-only flag, so the active context is the only source. Keying on
+    it matters: without it a JIT kernel first compiled with the flag off would
+    be handed that dbC=1 artifact when later called under a context with the
+    flag on (or vice versa).
+    """
+    ctx = PassContext.current()
+    return ctx.get_enable_pypto_l0c_double_buffer() if ctx is not None else False
+
+
 @dataclass
 class RunResult:
     """Result of a program run or harness test execution.
@@ -812,7 +872,7 @@ class RunResult:
 # what compilation reads, what a dispatch reads, and which diagnostics a
 # dispatch collects. ``RunConfig`` keeps every field and every caller — these
 # are the vocabulary underneath it, and what code that only needs one half
-# should take. See ``docs/en/dev/08-entry-points.md``.
+# should take.
 # ---------------------------------------------------------------------------
 
 

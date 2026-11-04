@@ -9,6 +9,12 @@
 
 """In-process specialization keys for @pl.jit.
 
+The compile-option half of the key is shared with the tracing ``pl.jit``
+through ``pypto.runtime.jit_cache`` (one contract: every artifact-affecting
+dimension splits both caches identically). This module keeps the
+specializer-owned halves — the ``source_hash`` provenance and the
+``make_cache_key`` composition over it.
+
 Persistent dispatch uses full typed identities and immutable transactions in
 ``_persistent`` and ``artifact_cache``. Dynamic dimensions use None so runtime
 extents do not create unnecessary specializations.
@@ -17,11 +23,11 @@ extents do not create unnecessary specializations.
 import dataclasses
 import hashlib
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 
 from pypto.pypto_core import DataType
-from pypto.pypto_core.passes import MemoryPlanner, RuntimeKind, runtime_kind_to_name
+from pypto.pypto_core.passes import MemoryPlanner, RuntimeKind
+from pypto.runtime.jit_cache import TensorKeyInfo, compile_option_identity
 
 if TYPE_CHECKING:
     from pypto.ir.pass_manager import OptimizationStrategy
@@ -52,25 +58,9 @@ compiled under an older contract can never be served to a newer request.
 """
 
 
-@dataclass(frozen=True)
-class TensorCacheInfo:
-    """Per-tensor component of a cache key.
-
-    Attributes:
-        name: Parameter name.
-        shape: Shape tuple with None for dynamic dimensions.
-        dtype: DataType of the tensor.
-        layout: Annotated tensor layout, or None when the annotation omits it.
-            Included because a layout may reach the annotation through a
-            closure variable (``L = pl.NZ; ... pl.Tensor[[...], pl.FP32, L]``),
-            leaving the source text — and thus ``source_hash`` — unchanged
-            while the compiled artifact differs.
-    """
-
-    name: str
-    shape: tuple[int | None, ...]
-    dtype: DataType
-    layout: "TensorLayout | None" = None
+# Compatibility alias for the shared per-tensor key component; the definition
+# lives in the lane-neutral cache core.
+TensorCacheInfo = TensorKeyInfo
 
 
 class CacheKey(NamedTuple):
@@ -223,7 +213,7 @@ def make_cache_key(  # noqa: PLR0913 — args are the key's components, one per 
             None if (name, i) in dynamic_dims else dim for i, dim in enumerate(concrete_shape)
         )
         tensor_infos.append(
-            TensorCacheInfo(
+            TensorKeyInfo(
                 name=name,
                 shape=keyed_shape,
                 dtype=tensor_dtypes[name],
@@ -232,21 +222,21 @@ def make_cache_key(  # noqa: PLR0913 — args are the key's components, one per 
         )
 
     dist_key = _freeze(distributed_config) if distributed_config is not None else None
-    effective_pypto_dbc = enable_pypto_l0c_double_buffer and memory_planner in (
-        None,
-        MemoryPlanner.PYPTO,
-    )
+    # The artifact-affecting compile options come from the shared cache core
+    # (``pypto.runtime.jit_cache``) so the tracing lane's dispatch key splits
+    # on exactly the same dimensions; only the specializer-owned provenance
+    # slots (scalar contract, dep layouts) are composed here.
     compile_opts = (
         ("scalar_semantics", SCALAR_SEMANTICS),
-        ("analyze_auto_scopes_for_deps", analyze_auto_scopes_for_deps),
-        ("emit_source_loc", emit_source_loc),
-        ("memory_planner", None if memory_planner is None else str(memory_planner)),
-        ("enable_pypto_l0c_double_buffer", effective_pypto_dbc),
         ("dep_layouts", dep_layouts),
-        ("runtime", runtime_kind_to_name(runtime)),
-        ("enable_buffer_ir", enable_buffer_ir),
-        ("buffer_ir_version", 7 if enable_buffer_ir else 0),
-        ("enable_software_pipeline", enable_software_pipeline),
+    ) + compile_option_identity(
+        analyze_auto_scopes_for_deps=analyze_auto_scopes_for_deps,
+        memory_planner=memory_planner,
+        enable_pypto_l0c_double_buffer=enable_pypto_l0c_double_buffer,
+        runtime=runtime,
+        enable_buffer_ir=enable_buffer_ir,
+        emit_source_loc=emit_source_loc,
+        enable_software_pipeline=enable_software_pipeline,
     )
     return CacheKey(
         source_hash,
