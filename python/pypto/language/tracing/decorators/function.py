@@ -41,12 +41,12 @@ from pypto.language.tracing.entry.declaration import fold_auto_scope
 from pypto.language.tracing.execution import (
     adapt_captured_callees,
     adapt_global_callees,
+    pin_declared_returns,
     run_instrumented,
 )
 from pypto.language.tracing.return_contract import (
+    check_return_paths,
     rebuild_with_return_types,
-    return_value_types,
-    same_return_types,
 )
 from pypto.language.tracing.semantics import PtoSema
 from pypto.language.typing import (
@@ -275,39 +275,41 @@ def _apply_return_contract(fn: ir.Function, return_type: object) -> ir.Function:
     """Pin the declared ``->`` onto a completed trace, reconciling
     under-specified slots.
 
-    A fully-concrete contract is the existing lane: pinned onto the
-    Function when the traced types differ (the declared signature *is* the
-    signature). A contract containing **bare facade classes** (``->
-    pl.Tensor``; ``-> tuple[pl.Tensor, pl.Scalar[pl.TASK_ID]]`` — the
-    corpus's submit-style multi-return) is under-specified: each bare
-    slot's shape and dtype come from the traced return and its kind is
-    class-checked against the declared facade (typing from values — a
-    bare class states no shape, so it cannot lie, it under-specifies).
-    Concrete slots in a mixed contract are checked slot-wise. An extern
-    stub has no body to derive from, so a bare slot there is loud — extern
-    contracts must be concrete."""
+    A fully-concrete contract is checked against the traced values before it
+    is pinned: spelling a declared signature onto a body that produced
+    different values reports the declaration, not the program. A contract
+    containing **bare facade classes** (``-> pl.Tensor``; ``-> tuple[pl.Tensor,
+    pl.Scalar[pl.TASK_ID]]`` — the corpus's submit-style multi-return) is
+    under-specified: each bare slot's shape and dtype come from the traced
+    return and its kind is class-checked against the declared facade (typing
+    from values — a bare class states no shape, so it cannot lie, it
+    under-specifies). Concrete slots in a mixed contract are checked slot-wise.
+    An extern stub has no body to derive from, so a bare slot there is loud —
+    extern contracts must be concrete."""
     slots = annotation_to_return_slots(return_type)
+    # The paths are verified before the slots are consulted: a body whose
+    # alternative paths disagree is refused with or without a declaration,
+    # because an empty signature would hide the disagreement from every
+    # later caller.
+    actual = check_return_paths(fn)
     if slots is None:
         return fn
     if not any(isinstance(slot, type) for slot in slots):
-        declared_return_types = typing.cast("list[ir.Type]", slots)
-        if declared_return_types and not same_return_types(fn.return_types, declared_return_types):
-            fn = rebuild_with_return_types(fn, declared_return_types)
-        return fn
+        return pin_declared_returns(fn, typing.cast("list[ir.Type]", slots))
     if EXTERNAL_SOURCE_ATTR in (fn.attrs or {}):
         raise TypeError(
             f"kernel {fn.name!r}: a bare facade class in the return contract "
             f"{return_type!r} cannot be derived — an extern stub has no body; "
             "annotate the return fully (pl.Tensor[[shape], dtype])"
         )
-    actual = list(fn.return_types) or return_value_types(fn)
-    if len(actual) != len(slots):
+    traced_values = actual or list(fn.return_types)
+    if len(traced_values) != len(slots):
         raise TypeError(
             f"kernel {fn.name!r}: the declared `->` {return_type!r} has "
-            f"{len(slots)} slot(s) but the traced body returns {len(actual)} value(s)"
+            f"{len(slots)} slot(s) but the traced body returns {len(traced_values)} value(s)"
         )
     composed: list[ir.Type] = []
-    for i, (slot, traced) in enumerate(zip(slots, actual)):
+    for i, (slot, traced) in enumerate(zip(slots, traced_values)):
         if isinstance(slot, type):
             facade = facade_class_for_type(traced)
             if facade is None or not issubclass(facade, slot):
@@ -336,11 +338,9 @@ def _declared_return_matches(declared: ir.Type, actual: ir.Type) -> bool:
     For ``Tile`` (and ``Tensor``) the annotation can express only shape +
     dtype: memory space and ``TileView`` (e.g. ``valid_shape=[M, N]`` from
     ``pl.load(..., valid_shapes=...)``) are trace-deduced details the
-    annotation syntax has no word for (historical
-    ``test_load_via_pl_load_with_valid_shapes`` declared-return over-fire).
-    Comparing those extras would flag every Vec-tile kernel as "the declared
-    ``->`` was a lie". Everything else compares structurally (auto-mapping
-    absorbs per-trace Var identity).
+    annotation syntax has no word for. Comparing those extras would flag
+    every Vec-tile kernel as "the declared ``->`` was a lie". Everything else
+    compares structurally (auto-mapping absorbs per-trace Var identity).
     """
     if isinstance(declared, ir.ShapedType) and isinstance(actual, ir.ShapedType):
         # A distributed tensor IS-A tensor: a declared ``-> pl.Tensor`` accepts

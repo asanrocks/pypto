@@ -37,9 +37,9 @@ from pypto.language.tracing.collector.driver import InstrumentedFunction, instru
 from pypto.language.tracing.execution import (
     adapt_captured_callees,
     adapt_global_callees,
+    pin_declared_returns,
     run_instrumented,
 )
-from pypto.language.tracing.return_contract import rebuild_with_return_types, same_return_types
 from pypto.language.tracing.semantics import PtoSema
 from pypto.pypto_core import ir
 
@@ -237,11 +237,7 @@ class TracedCallable:
             _with_callable_callees(self._preparation.live_function()), self._preparation.prefix, sema
         )
         run_instrumented(runner, sema, call_args, call_kwargs)
-        fn = sema.result()
-        declared = decl.explicit_returns
-        if declared and not same_return_types(fn.return_types, declared):
-            fn = rebuild_with_return_types(fn, declared)
-        return fn
+        return pin_declared_returns(sema.result(), decl.explicit_returns)
 
 
 def _with_callable_callees(live: types.FunctionType) -> types.FunctionType:

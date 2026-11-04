@@ -9,7 +9,7 @@
 
 """Compile-time parameter marker for PyPTO Language DSL."""
 
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 
 class ConstexprMarker:
@@ -66,6 +66,50 @@ class ConstexprMarker:
         )
 
 
+def constexpr_value_key(value: Any) -> tuple[Any, ...] | None:
+    """Canonical identity for a value a ``pl.constexpr`` slot accepts, or None.
+
+    The docstring above states the admissible value types; this function is
+    that statement made executable, so every frontend answers the same
+    question with the same rule. The tracer bakes the value into the body
+    directly (no source rendering), so unlike the parsing frontend it does
+    not need the value reachable as a ``pl.``/``pld.`` symbol — but the value
+    *set* is the one the contract documents, and a ``DataType`` or enum
+    member outside it is refused here rather than silently baked.
+
+    The return value doubles as a hashable variant key: two calls baking
+    different constants must never share a traced variant, and lists (legal
+    constexpr values, unhashable as-is) fold into nested tuples.
+
+    Args:
+        value: The call-site value bound to a constexpr parameter
+
+    Returns:
+        A canonical ``(kind, identity)`` tuple, or ``None`` when ``value`` is
+        outside the documented set
+    """
+    import enum  # noqa: PLC0415 — keep the stdlib dependency lazy like the dtype one below
+    from collections.abc import Sequence  # noqa: PLC0415
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return ("const", type(value).__name__, value)
+    if isinstance(value, enum.Enum):
+        return ("enum", f"{type(value).__module__}.{type(value).__qualname__}", value.name)
+    try:
+        from pypto.pypto_core import DataType  # noqa: PLC0415 — cycle-free laziness
+
+        if isinstance(value, DataType):
+            return ("dtype", str(value))
+    except ImportError:  # pragma: no cover — the extension is a hard runtime dep
+        return None
+    if isinstance(value, (list, tuple)):
+        parts: list[Any] = [constexpr_value_key(element) for element in cast("Sequence[Any]", value)]
+        if any(part is None for part in parts):
+            return None
+        return ("seq" if isinstance(value, list) else "tuple", tuple(parts))
+    return None
+
+
 if TYPE_CHECKING:
     # The marker is a value, so a type checker would reject ``BLOCK: pl.constexpr``
     # as "variable not allowed in type expression". Present it as the permissive
@@ -78,4 +122,4 @@ else:
     """Singleton ``ConstexprMarker`` — see the class docstring."""
 
 
-__all__ = ["ConstexprMarker", "constexpr"]
+__all__ = ["ConstexprMarker", "constexpr", "constexpr_value_key"]
