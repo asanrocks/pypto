@@ -742,15 +742,10 @@ class AuthoringSession:
 # -----------------------------------------------------------------------------------------------------------
 
 
-#: The active program assembly, if an entry build is running. Interim home:
-#: the channel's final owner is the jit envelope (the assembly type is the
-#: envelope's internal class); the envelope re-binds this hook to its own
-#: channel when it arrives.
-_ACTIVE_ASSEMBLY: contextvars.ContextVar[Any] = contextvars.ContextVar("pto_active_assembly", default=None)
-
-
 def _active_assembly() -> Any:
     """The active program assembly, if an entry build is running."""
+    from pypto.language.tracing.decorators.jit_trace import _ACTIVE_ASSEMBLY  # noqa: PLC0415 - the jit cycle
+
     return _ACTIVE_ASSEMBLY.get()
 
 

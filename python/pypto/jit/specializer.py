@@ -567,6 +567,7 @@ def _fold_const_names(
     py_globals: Mapping[str, Any],
     constexpr_values: Mapping[str, str] | None = None,
     annotation_renderer: Callable[[Any], ast.expr | None] | None = None,
+    keep_dynvar_alias: bool = False,
 ) -> ast.expr:
     """Replace ``Name`` nodes bound to renderable free values with their source form.
 
@@ -597,6 +598,15 @@ def _fold_const_names(
             if constexpr_values and node.id in constexpr_values:
                 return ast.copy_location(ast.parse(constexpr_values[node.id], mode="eval").body, node)
             value = py_globals.get(node.id, _UNBOUND)
+            if keep_dynvar_alias and isinstance(value, _LangDynVar):
+                # The specializer names a parameter's DynDim after the symbol
+                # the user wrote in the parameter annotation (the alias), and
+                # the generated module declares that name — so a return
+                # annotation reusing the alias must keep it, not the DynVar's
+                # own name. Marker-prefixed DynVars are the exception upstream
+                # of here: they are declared under their own names, so the
+                # marker paths keep the default (render the name).
+                return node
             folded = renderer(value)
             if folded is not None:
                 return ast.copy_location(folded, node)
@@ -1724,23 +1734,6 @@ def _infer_return_type(
             return None
         return f"tuple[{', '.join(elt_annotations)}]"
 
-    # A TASK_ID (or another explicit Scalar) has no TensorMeta entry. Preserve
-    # its declared type for any scalar expression so an inline helper can
-    # return a task ID, constant, or computed scalar to its caller rather than
-    # being treated as a void function.
-    if (
-        return_node is not None
-        and isinstance(func_def.returns, ast.Subscript)
-        and _is_scalar_annotation(func_def.returns.value)
-    ):
-        return ast.unparse(_fold_const_names(func_def.returns, py_globals or {}))
-
-    # `return f(...)`: the result type depends on f's declared return types,
-    # which we don't have here. Emit no annotation rather than wrongly assuming
-    # `out_params[0]` — the caller may be a multi-return function.
-    if return_node is not None and isinstance(return_node.value, ast.Call):
-        return None
-
     # `return name`: use that name's tensor type if known.
     if (
         return_node is not None
@@ -1749,6 +1742,17 @@ def _infer_return_type(
     ):
         name = return_node.value.id
         return _build_tensor_annotation(tensor_meta[name], is_out=False, is_distributed=name in dist_set)
+
+    # An explicit local/expression return has no metadata entry of its own, so a
+    # complete declaration is the only contract left: a TASK_ID scalar an inline
+    # helper hands back, or a tensor local the trace produced. Inferable returns
+    # were resolved above from runtime metadata, which wins over a stale
+    # annotation; falling back to an unrelated Out parameter would invent a
+    # shape instead.
+    if return_node is not None:
+        if isinstance(func_def.returns, ast.Subscript) and not _is_tuple_annotation(func_def.returns.value):
+            return ast.unparse(_fold_const_names(func_def.returns, py_globals or {}, keep_dynvar_alias=True))
+        return None
 
     # Fallback: first Out param's tensor type (legacy single-return convention).
     if out_params and out_params[0] in tensor_meta:

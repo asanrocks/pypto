@@ -309,6 +309,67 @@ storage failures can prepare private results. A restored result has
 The public cache policy, statistics and metadata-only warmup CLI are documented
 in [Persistent JIT Cache](../10-jit-cache.md).
 
+## The tracing frontend: `@pl.jit_trace`
+
+Two frontends can produce the IR of a JIT kernel, and the decorator selects
+one per definition. `@pl.jit` parses the body, as described above.
+`@pl.jit_trace` executes an instrumented copy of the body and records the
+operations that run. Importing `pypto.language` changes neither: a definition
+keeps the lane its own decorator names.
+
+```python
+@pl.jit_trace
+def scale_relu(
+    x: pl.Tensor,
+    scale: float,
+    out: pl.Out[pl.Tensor],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        tile = pl.load(x, [0, 0], [64, 64])
+        pl.store(pl.relu(pl.mul(tile, scale)), [0, 0], out)
+    return out
+```
+
+`@pl.jit_trace` shares its entry points with `@pl.jit` (`specialize`,
+`lower`, `compile`, and a host call with torch tensors). Of the family
+spellings it verifies `incore` and `inline` callees, plus the `host` and
+`graph` entries — each an alias of its parsing-lane spelling, keeping the same
+function kind, level, role and kwarg surface (see
+[Supported surface](#supported-surface) below). `opaque` and `extern` raise a
+`TypeError` at decoration: `@pl.jit.extern` is a declaration with no Python body
+to trace, and `opaque` admits bodies outside the tracer's vocabulary. A
+helper must be declared in the lane of the entry that calls it: a traced
+body that calls an AST-lane `@pl.jit` kernel raises instead of silently
+leaving the frontend, and the parser lane's loop spellings (`pl.while_`,
+`pl.cond`) raise inside a trace — the tracing dialect writes ordinary
+Python `while`.
+
+### Collection timing and reuse
+
+Decoration traces nothing. The first structural use — `.fn`, `.specialize()`,
+`.lower()`, `.compile()`, or a host call with torch tensors — runs the body
+once and keeps the record, and later compatible uses reuse it. A kernel whose
+annotations leave a shape unknown (a bare `pl.Tensor`) cannot be traced from
+the declaration alone, so it re-traces per call. Reading that shape in the
+body works from the first call: `x.shape` lowers like the parser frontend's
+`x.shape` — a static extent is its constant, a dynamic one is a runtime
+`pl.tensor.dim` read that names the parameter's declared extent symbol inside
+an orchestration body. A bare annotation therefore does not prevent
+shape-dependent bodies; it only removes the declaration-time trace.
+
+The dispatch cache is keyed on the artifact contract: tensor shape, dtype and
+layout, the host-knob values, and the compile identity (platform, strategy,
+distributed config, memory planner, dbC flag, runtime ABI, Buffer IR, source
+locations). Tensor *contents* and the *value* of a `pl.Scalar[...]` parameter
+are not in the key — the scalar stays a runtime parameter of the generated
+program, so one artifact serves every value.
+
+A `config=RunConfig(...)` call forwards the compile-side fields through the
+same `RunConfig.compile_kwargs()` mapping every jit lane uses. Requests that
+run the compiler — pass dumps, PTOAS dumps, compile profiling, an explicit
+output directory, or an outer `PassContext` with instruments — are never
+served from the cache: each one compiles fresh, and an ordinary compatible
+call afterwards still reuses the warm artifact.
 ## Functions
 
 ```python

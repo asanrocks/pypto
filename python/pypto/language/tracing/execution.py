@@ -17,11 +17,14 @@ the completed trace is checked against its declared returns before they are
 pinned onto the signature. This module is that lifecycle, stated once — the
 entrance foundation (:mod:`pypto.language.tracing.entry`), the decorator
 tier (``function_trace`` and the jit envelope), and the authoring session
-call it instead of carrying private copies that drift.
+all call it instead of carrying private copies that drift.
 
 The dependency direction is the layering: the policy tiers import this
 module, and this module imports only the tracer core — the collector
-driver, the language Sema, the return contract.
+driver, the language Sema, the return contract. The one lazy upward import
+is the jit envelope inside the callee adaptation: its per-call variant lane
+is policy *over* adaptation while ``jit_trace`` imports this module, so the
+cycle closes only at execution time, never at import time.
 """
 
 from __future__ import annotations
@@ -61,7 +64,6 @@ def adapt_captured_callees(
     callee was reached through a closure cell or a global name. The
     standalone ``pl.function`` build keeps the plain ``Marker`` — the
     parser-aligned verbatim lane the conformance oracle pins."""
-
     closure = kernel.__closure__
     if not closure:
         return kernel, []
@@ -71,9 +73,18 @@ def adapt_captured_callees(
     changed = False
     for cell in closure:
         value = cell.cell_contents
-        if isinstance(value, ir.Function):
+        from pypto.language.tracing.decorators import jit_trace as _jit  # noqa: PLC0415
+
+        if specialize and isinstance(value, ir.Function):
             captured.append(value)
-            cells.append(types.CellType(Marker._from_ir_function(value)))
+            cells.append(types.CellType(_jit._LazyGlobalFn(value, _jit._eager_trace_record(value))))
+            changed = True
+        elif not specialize and (frozen := _jit.parser_aligned_callee(value)) is not None:
+            # An eagerly traced jit object captured in a closure contributes
+            # its eager trace to the parser-aligned lane, which must see the
+            # frozen ``ir.Function`` rather than the jit envelope.
+            captured.append(frozen)
+            cells.append(types.CellType(Marker._from_ir_function(frozen)))
             changed = True
         else:
             cells.append(cell)
@@ -94,20 +105,57 @@ def adapt_captured_callees(
     return adapted, captured
 
 
-def adapt_global_callees(kernel: types.FunctionType) -> types.FunctionType:
-    """Make module-global standalone ``ir.Function`` callees callable.
+def adapt_global_callees(kernel: types.FunctionType, *, specialize: bool = False) -> types.FunctionType:
+    """Make module-global standalone ``ir.Function`` callees callable for one
+    traced execution.
 
     The parser frontend resolved a bare-name call through its closure-var
     registry; tracing has no ambient registry, so a module-global standalone
-    function reaches the traced body uncallable. This rebinds the kernel over
-    an execution copy of its globals with every ``ir.Function`` value wrapped
-    callable; the module's real globals are never touched.
+    function (an eager-traced ``ir.Function``) reaches the traced body
+    uncallable. This rebinds the kernel over an execution copy of its globals
+    with every ``ir.Function`` value wrapped callable; the module's real
+    globals are never touched, and a global the body never calls keeps the
+    cost at one dict copy.
+
+    ``specialize`` — the jit envelope's lanes: every ``ir.Function`` global
+    becomes the jit lazy wrapper, which routes a callee registered at eager
+    decoration through the per-call variant lane (re-trace with the
+    call-site argument types) and every other function through the
+    verbatim+registering lane. ``specialize=False`` (the standalone
+    function build) keeps the plain ``Marker`` — the parser frontend's
+    bare-name call is verbatim, and the conformance oracle pins that. The
+    jit dispatch lane pre-wraps globals
+    with the same lazy wrapper, so those values are no longer
+    ``ir.Function`` and pass through.
     """
+    if specialize:
+        from pypto.language.tracing.decorators import (  # noqa: PLC0415 — jit imports this module
+            jit_trace as _jit,
+        )
+
+        def _wrap(value: ir.Function) -> Any:
+            return _jit._LazyGlobalFn(value, _jit._eager_trace_record(value))
+
+        def _callee(value: Any) -> ir.Function | None:
+            return value if isinstance(value, ir.Function) else None
+
+    else:
+        from pypto.language.tracing.decorators import jit_trace as _jit  # noqa: PLC0415
+
+        def _wrap(value: ir.Function) -> Any:
+            # The parser-aligned lane's callee is the frozen function — an
+            # eagerly traced jit object unwraps to its decoration trace
+            # (no envelope policy: no world checks, no re-trace).
+            return Marker._from_ir_function(value)
+
+        _callee = _jit.parser_aligned_callee
+
     patched = False
     g = dict(kernel.__globals__)
     for name, value in g.items():
-        if isinstance(value, ir.Function):
-            g[name] = Marker._from_ir_function(value)
+        frozen = _callee(value)
+        if frozen is not None:
+            g[name] = _wrap(frozen)
             patched = True
     if not patched:
         return kernel
