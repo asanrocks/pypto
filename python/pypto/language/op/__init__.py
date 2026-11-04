@@ -22,6 +22,7 @@ namespaces remain available for cases where the caller wants to be explicit.
 
 """
 
+from ..storage import bind_storage
 from . import array_ops as array
 from . import prefetch_ops as prefetch
 from . import system_ops as system
@@ -201,6 +202,7 @@ from .unified_ops import (
 )
 
 __all__ = [
+    "bind_storage",
     "array",
     "prefetch",
     "tile",

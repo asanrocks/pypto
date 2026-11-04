@@ -101,6 +101,43 @@ tile: pl.Tile[[16, 16], pl.FP16, pl.MemRef(addr_expr, 512, 0), pl.Mem.Left]
 
 ### Declared Allocations (one-argument MemRef)
 
+#### Value-based storage binding
+
+In the tracing frontend, local annotations do not choose storage. Bind storage
+when constructing a producer instead:
+
+```python
+pool = pl.MemRef(slots=2)
+for i in pl.range(steps):
+    tile = pl.load(x, [0, 0], [64, 64], target_memory=pl.Mem.Vec,
+                   memref=pool[i % 2])
+    result = pl.bind_storage(pl.exp(tile), pl.MemRef("scratch"))
+```
+
+`load`, `move`, and `create_tile` accept the keyword-only `memref` shorthand.
+`pl.bind_storage(producer, reference)` is the general form for allocating Tile
+producers, including arithmetic, reductions, and matrix operations. Multiple
+results take a sequence with one reference per result; `None` leaves that
+result automatically placed. Bind before assigning or unpacking the producer.
+This is a construction operation, not a data copy or a way to relocate a value
+that has already been produced. Views, in-place updates, and stores inherit
+their destination storage and reject an independent binding.
+
+The producer infers shape, dtype, and view. Binding adds only the allocation
+reference to that produced type. A resolved memory space is required; specify
+`target_memory` for a load or creation whose space is otherwise deferred.
+The reference is recorded once in `Call.type`, not duplicated in opaque kwargs.
+Slot expressions embedded in the reference participate in IR substitution.
+Printed IR uses the lossless recorded-call spelling to preserve this type.
+
+Anonymous declarations acquire their local binding name. Inline named references
+share a base within the owning function; conflicting slot counts are rejected.
+Independent traces obtain independent allocation bases. Constant slot indices
+are bounds-checked; runtime indices must remain in range at execution time.
+The existing capacity, isolation, co-liveness, pipeline, and planner restrictions
+below apply equally to producer bindings. Slot programs remain on Tile IR when
+the Buffer representation cannot express their storage contract.
+
 A one-argument `pl.MemRef("name")` declares an allocation of your own, taking it out of
 the compiler's opportunistic reuse. Tiles referencing it share it; nothing else is ever
 packed in. Use it when the packer coalesces tiles you want to stay independent —

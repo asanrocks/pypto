@@ -31,6 +31,7 @@ from pypto.pypto_core.ir import (
     TileLayout,
 )
 
+from ..storage import bind_storage
 from ..typing import IntLike, Ptr, Scalar, Tensor, Tile, to_expr
 from ..typing._host import coerce_host_scalar, wrap_output_like
 from ._tile_common import _TensorT
@@ -94,12 +95,14 @@ def create(
     *,
     flat_layout: bool | None = None,
     compact: bool | None = None,
+    memref: _ir_core.MemRef | None = None,
 ) -> Tile:
     """Create a tile from a shape.
 
     Args:
         shape: Shape of the tile
         dtype: Data type of the tile
+        memref: Explicit allocation or slot for the result; requires target_memory.
         target_memory: Target memory space (MemorySpace.Vec, .Mat, .Left, .Right).
             ``None`` (the default) leaves the space unset for the compiler to place.
         transpose: When True, allocate the transposed Mat (ZN) fractal layout for a
@@ -131,7 +134,10 @@ def create(
         flat_layout=flat_layout,
         compact=compact,
     )
-    return Tile(expr=call_expr)
+    result = Tile(expr=call_expr)
+    if memref is not None:
+        return bind_storage(result, memref)
+    return result
 
 
 create_tile = create
@@ -187,6 +193,7 @@ def load(
     cache: CachePolicy | None = None,
     *,
     attrs: dict[str, Any] | None = None,
+    memref: _ir_core.MemRef | None = None,
 ) -> Tile:
     """Copy data from tensor to unified buffer (tile).
 
@@ -197,6 +204,7 @@ def load(
 
     Args:
         tensor: Source tensor
+        memref: Explicit allocation or slot for the result; requires target_memory.
         offsets: Offsets in each dimension. Always in the source tensor's
             coordinate system. Each element must be an integer scalar — a float
             (``n / 2`` rather than ``n // 2``) or a nested sequence is rejected.
@@ -258,7 +266,10 @@ def load(
     )
     if attrs:
         call_expr = _ir_core.set_call_attrs(call_expr, attrs)
-    return Tile(expr=call_expr)
+    result = Tile(expr=call_expr)
+    if memref is not None:
+        return bind_storage(result, memref)
+    return result
 
 
 def store(
@@ -516,11 +527,13 @@ def move(
     slayout: TileLayout | None = None,
     *,
     attrs: dict[str, Any] | None = None,
+    memref: _ir_core.MemRef | None = None,
 ) -> Tile:
     """Move tile between memory levels.
 
     Args:
         tile: Input tile
+        memref: Explicit allocation or slot for the result in target_memory.
         target_memory: Target memory space (MemorySpace.Vec, .Mat, .Left, .Right,
             .LeftScale, .RightScale)
         blayout: Optional block layout for the destination tile
@@ -540,7 +553,10 @@ def move(
     )
     if attrs:
         call_expr = _ir_core.set_call_attrs(call_expr, attrs)
-    return Tile(expr=call_expr)
+    result = Tile(expr=call_expr)
+    if memref is not None:
+        return bind_storage(result, memref)
+    return result
 
 
 def full(

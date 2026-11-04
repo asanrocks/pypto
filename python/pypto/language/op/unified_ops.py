@@ -2012,6 +2012,7 @@ def create_tile(
     transpose: bool | None = None,
     *,
     flat_layout: bool | None = None,
+    memref: _ir_core.MemRef | None = None,
 ) -> Tile:
     """Create a tile at specific memory space.
 
@@ -2020,7 +2021,7 @@ def create_tile(
     ``pypto.language.op.create_tile`` stay the same callable — the
     ``pl.create_tile(shape, dtype)`` default keeps working.
     """
-    return _tile.create(shape, dtype, target_memory, transpose, flat_layout=flat_layout)
+    return _tile.create(shape, dtype, target_memory, transpose, flat_layout=flat_layout, memref=memref)
 
 
 # ---------------------------------------------------------------------------

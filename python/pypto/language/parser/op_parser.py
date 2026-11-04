@@ -20,6 +20,7 @@ from pypto.language.op import reg_ops as _dsl_reg
 from pypto.language.op import system_ops as _dsl_system
 from pypto.language.op import tensor_ops as _dsl_tensor
 from pypto.language.op import tile_ops as _dsl_tile
+from pypto.language.storage import validate_result_storage
 from pypto.pypto_core import DataType, ir
 
 from ._dsl_invoker import invoke_dsl
@@ -430,6 +431,16 @@ class OpParser:
                     return -value
         return self.callbacks.expression(arg)
 
+    def resolve_storage_reference(self, node: ast.expr) -> ir.MemRef | None:
+        """Resolve storage syntax through the same declaration table as types."""
+        if isinstance(node, ast.Constant) and node.value is None:
+            return None
+        resolver = self.services.type_resolver
+        reference = resolver._resolve_memref_slot_ref(node)
+        if reference is None:
+            reference = resolver._resolve_memref_var_ref(node)
+        return reference if reference is not None else resolver.resolve_memref(node)
+
     def parse_op_kwargs(self, call: ast.Call) -> dict[str, Any]:
         """Parse keyword arguments for an operation call.
 
@@ -456,7 +467,9 @@ class OpParser:
                 continue
 
             # Handle dtype specially
-            if key == "dtype":
+            if key == "memref":
+                kwargs[key] = self.resolve_storage_reference(value)
+            elif key == "dtype":
                 kwargs[key] = self.services.type_resolver.resolve_dtype(value)
             elif isinstance(value, ast.Constant):
                 kwargs[key] = value.value
@@ -1095,6 +1108,26 @@ class OpParser:
         """
         import pypto.language.op as _pl_op  # noqa: PLC0415 (circular import — `pypto.language` re-exports parser)
 
+        if op_name == "bind_storage":
+            if len(call.args) == 2 and not call.keywords:
+                producer, storage = call.args
+            elif len(call.args) == 1 and len(call.keywords) == 1 and call.keywords[0].arg == "memref":
+                producer, storage = call.args[0], call.keywords[0].value
+            else:
+                raise ParserSyntaxError(
+                    "bind_storage requires a producer and memref",
+                    span=self.services.span_tracker.get_span(call),
+                )
+            nodes = list(storage.elts) if isinstance(storage, (ast.List, ast.Tuple)) else [storage]
+            destinations = [self.resolve_storage_reference(node) for node in nodes]
+            value = self.callbacks.expression(producer)
+            if not isinstance(value, ir.Call):
+                raise ParserTypeError(
+                    "bind_storage requires a detached producer call",
+                    span=self.services.span_tracker.get_span(call),
+                )
+            validate_result_storage(value, destinations)
+            return ir.bind_result_storage(value, destinations)
         op_func = getattr(_pl_op, op_name, None)
         if op_func is None or not callable(op_func):
             raise InvalidOperationError(
