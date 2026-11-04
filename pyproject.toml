@@ -96,6 +96,8 @@ fixable = ["ALL"]
 # `check_runtime_pin()` must run before the simpler imports it guards, so the
 # imports in these two modules are deliberately not at the top of the file.
 "python/pypto/runtime/task_interface.py" = ["E402"]
+# Snippet-corpus entries embed one-line kernel sources as \n-escaped strings.
+"tests/ut/language/tracing/collector/test_rewriter_snippets.py" = ["E501"]
 "python/pypto/runtime/kernel_compiler.py" = ["E402"]
 # Vendored boundary stubs: the nanobind-stubgen output interleaves the build
 # marker with imports and embeds unreflowed C++ docstrings.
@@ -199,3 +201,13 @@ reportCallIssue = false
 reportAssignmentType = false
 reportRedeclaration = false
 reportGeneralTypeIssues = false
+
+# The tracing tree validates caller-supplied values at its public boundaries:
+# declarations, invocations and expansions can be driven by generated or
+# otherwise untyped code, so an ``isinstance`` guard is the runtime contract
+# even where the annotation already states the expected type. That is the only
+# strict rule this tree switches off — everything else, including the
+# unknown-type family, is checked.
+[[tool.pyright.executionEnvironments]]
+root = "python/pypto/language/tracing"
+reportUnnecessaryIsInstance = false
