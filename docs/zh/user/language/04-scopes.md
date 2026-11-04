@@ -402,6 +402,39 @@ pl.system.sync_wait(0, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)    # 
 | **对端的信号计数器读到的值是应有值的两倍** | 两条 AIV lane 都执行了同一条 `pld.system.notify` —— **不会有诊断** | 按 `aiv_id` 分片该 notify，或用 `if aiv_id == 0:` 限定 |
 | **某个 rank 的 `pld.system.wait` 返回后读到过期数据** | 要么是上面的重复 notify，要么是 cube 与 vector 阶段之间的 cache 发布 / fence / barrier / 失效序列不完整 | 分片该 notify；补全 GM 交接序列 |
 
+## 编写你自己的 scope 构造
+
+当内置 scope 无法表达你的降低时，用 `@pl.authoring.construct` 自行编写构造 —— 一个生成器，`yield` 之前的代码
+打开区域（region），`yield` 把 handle 交给主体，之后的代码负责收尾。上下文参数是一个
+`pl.authoring.ConstructContext`；绑定到 `with` 的 `yield` 值是 `pl.authoring.ConstructHandle` 子类
+（staged 词汇无法表达的 host 结构）：
+
+```python
+@pl.authoring.construct
+def blocked_spmd(ctx, shape, tile, *, name_hint=""):
+    blocks = tuple((s + t - 1) // t for s, t in zip(shape, tile))
+    core_num = 1
+    for count in blocks:
+        core_num *= count
+    with ctx.region(pl.spmd(core_num, name_hint=name_hint)) as tid:
+        yield BlockGrid(blocks, tile, ctx.resolve_binding(tid))
+
+
+with blocked_spmd((tokens, heads), (1, HEAD_TILE)) as block:
+    q = block.region(query).load()
+```
+
+同一个生成器也服务 `for` 拼写（`for i in blocked_spmd(...)`，产出 `ctx.loop_var()`）。
+没有 builder、没有 tracer 内部 —— 能力表面（`ctx.open_scope`、`ctx.open_carrier`、
+`ctx.open_loop`、`ctx.bind`、`ctx.lower_deps`、`ctx.control`）就是全部。
+
+其下的通用层是 `pl.authoring.recipe`：一个组合追踪效果的函数 —— 在 `pl.authoring.FunctionContract`
+（其参数是 `pl.authoring.ParamSpec` 三元组）下压入函数、收集函数体、发出调用 —— 以及用于片段放置的
+`pl.authoring.body`（`.splice` / `.inline` / `.incore`）。两个协议的规范命名空间是 `pl.authoring`；
+完整契约与不变量见开发者页面
+（[构造配方](../../dev/language/06-construct-recipes.md)、
+[授权配方](../../dev/language/07-authoring-recipes.md)）。
+
 ## See Also
 
 - [函数与程序](01-functions.md) —— `pl.at` 的替代写法：独立的 `@pl.jit.incore` 函数。

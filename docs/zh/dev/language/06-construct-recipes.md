@@ -130,6 +130,58 @@ constructor surface）：`pl.at` 的 `level` 是 Frame 的 InCore 预提示读�
 pre-enter 事实，用于决定外层延迟 carrier 是吸收还是打开。错误调用在工厂处
 失败 —— 与手写构造 `__init__` 抛出的构造面 `TypeError` 一致。
 
+## 当前在该层上编写的内容
+
+所有 stdlib 的 `with` 构造都是配方：`pl.at`、`pl.scope`、
+`pl.manual_scope`、`pl.graph`、`pl.cluster`，以及 `pl.spmd`。每个构造的
+pre-yield 代码都是其原 `__trace_enter__` 主体按原顺序的等价物
+（attr 收集、TaskId 捕获、parser 一致性校验），没有 builder 访问。转换的
+验收是与手写形态的 **IR 等价** —— 对一个极简 `core_group` 配方直接断言其与
+`pl.at` 等价，并由完整的构造语料（tracer 与 parser 的 lane parity 套件）
+保证。
+
+三种形态覆盖全部：
+
+- **叶子作用域**（`pl.at`、`pl.scope`、`pl.manual_scope`、`pl.graph`、
+  `pl.cluster`）—— 每个构造一次 `ctx.open_scope`。`pl.at` 延迟（它接受
+  cache-policy 声明）；其余四个立即打开（`defer=False`），与原先完全一致，
+  因此它们对 cache-policy 的拒绝行为不变。
+- **Carrier**（`pl.spmd`）—— `ctx.open_carrier` 打开嵌在 dispatch 作用域内的
+  自动 outline InCore 区域，并标记 `primary=True`，因为 carrier —— 而非其外层
+  dispatch 作用域 —— 拥有由主体决定的打开时机。普通形式等待 per-block-index
+  读取；split 提示、cross-core slot，或带捕获的多语句主体在第一次发射处打开。
+- **立即打开的 for 区域**（`pl.split_aiv`）—— `ctx.open_scope(...,
+  defer=False, prologue=[(loop_var, lane_idx)])` 打开 SplitAiv 区域本身；
+  裸顶层形态另合成一个 InCore wrapper（前向 sticky dump 标记合并在它上面；
+  已在 InCore 内 —— 或在 InCore 类型函数体内 —— 的形态原位发射）。没有
+  任何延迟，因此该配方不需要结构面。
+
+两个 `for` 拼写都是同一层上的配方。`pl.spmd` 是**两种拼写共用**的一个配方：`with pl.spmd(...)` 与
+`for i in pl.spmd(...)`。with 臂保持原手写下降（捕获、wrap 决策、名字拆分决策）；
+for 臂不捕获、总是 wrap，并铸造绑定到 `pl.tile.get_block_idx()` 的循环变量
+作为 carrier 的延迟 prologue。此次转换从 `constructs/scopes.py` 删除了
+for 形式的独立描述符路径（其 `begin`/`__trace_exit__` 分支与 carrier 状态）——
+该类现在只是创建配方实例并转发的薄门面。验收是 IR 等价：for 形式与手写
+前任逐字节一致（plain、空主体、`deps=`、cache-policy、split/slot 与 cluster
+拒绝诸变体），tracer 与 parser 的 lane parity 通过 `spmd_loop_kernel` 参照覆盖它。
+`pl.split_aiv` 是立即打开的对应物：一个配方（`_split_aiv_scope`）只为裸顶层
+形态合成 InCore wrapper，RFC #1820 的函数级 split 拒绝读取
+`ctx.enclosing_user_split()` —— lane parity 通过 `split_aiv_loop_kernel` 参照覆盖它。
+
+`pl.range` / `parallel` / `unroll` / `pipeline` 有意保持手写：它们已共享一个
+干净的 `RangeIterator`，并携带 host 执行等价路径（同一源码的 host 迭代）——
+一种配方按设计拒绝的语义。该层的 `ForStmt` 原语是 `ctx.open_loop`：配方可以
+授权真实的循环 region（`counted` / `accumulate` 验收配方与它们替换的
+`pl.range` 形式追踪到相同 IR，含携带通道），但标准库条目本身保持框架拥有，
+使 `pl.range(n)` 保持其 host 行为。
+
+第一个外部编写的配方是 `blocked_spmd` —— 基于 `pl.spmd` 的块网格分发：一个代表
+性块，其坐标轴投影到张量上，并暴露调度 TaskId 用于 `deps=` 接线。它的验收
+测试断言 **IR 等价** —— 配方与它所替代的手写 `pl.spmd` 网格 trace 出结构
+完全一致的 IR —— 见 `tests/ut/language/tracing/test_recipe.py`；同处还有一个
+`grid_loop` 配方，证明 kernel 作者能自己编写 for 拼写（与
+`for i in pl.spmd(n)` IR 等价），且不 import `pypto.language` 以下的任何内容。
+
 ## 另请参阅
 
 - [授权配方](07-authoring-recipes.md) —— 之下的通用层：`pypto.language.authoring` 是两个协议的规范导入根。

@@ -10,28 +10,29 @@
 """The authoring tier — the shared surface between the stdlib and the tracer.
 
 Two protocols over one runtime (see
-``docs/en/dev/language/07-authoring-recipes.md``): ``@pl.authoring.construct``
-— the constrained region protocol, a generator whose single ``yield`` is a body
-boundary, serving both the ``with`` and the ``for`` statement spellings of one
-construct; and ``@pl.authoring.recipe`` — the unconstrained effect-composition
-form, a program over an authoring context (function units, body placement,
-dispatch, control), with ``@pl.authoring.body`` the prepared-body form awaiting
-an explicit placement. Both are views over the session that owns one
-invocation, its function units, and the dispatch effect.
+``docs/en/dev/language/07-authoring-recipes.md``):
 
-The stdlib's structural constructs (``pl.at``, ``pl.spmd``, ...) are this
-tier's reference clients — they are built on the same public capabilities an
-external framework author uses, never on tracer internals. Recipe code receives
-capability views (``ConstructContext`` / ``FunctionContext`` /
-``ControlContext``) only: no builder, no ``PtoFrame``, no interpreter.
+- ``@pl.authoring.construct`` — the constrained region protocol: a generator
+  whose single ``yield`` is a body boundary, serving both the ``with`` and
+  the ``for`` statement spellings of one construct.
+- ``@pl.authoring.recipe`` — the unconstrained effect-composition form: a
+  program over an authoring context (function units, body placement,
+  dispatch, control), with ``@pl.authoring.body`` the prepared-body form
+  awaiting an explicit placement.
+
+The stdlib's structural constructs (``pl.at``, ``pl.spmd``, ``pl.submit``,
+...) are this tier's reference clients — they are built on the same public
+capabilities an external framework author uses, never on tracer internals.
+Recipe code receives capability views (``ConstructContext`` /
+``RecipeContext``) only: no builder, no ``PtoFrame``, no interpreter.
 
 The package splits by responsibility: the contracts and artifacts
 (:mod:`.contracts`), the session and function-unit lifecycle
-(:mod:`.session`), the construct protocol (:mod:`.construct`), and the
-dispatch effect (:mod:`.dispatch`). This package is
-the tier's sole import root: nothing of the authoring surface is re-exported at
-the top-level ``pl`` namespace — the root stays the kernel author's, and
-framework authors import here.
+(:mod:`.session`), the construct protocol (:mod:`.construct`), the recipe
+and body protocols (:mod:`.recipe`), and the dispatch effect
+(:mod:`.dispatch`). This package is the tier's sole import root: nothing of
+the authoring surface is re-exported at the top-level ``pl`` namespace —
+the root stays the kernel author's, and framework authors import here.
 """
 
 from pypto.language.authoring.construct import (

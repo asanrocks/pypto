@@ -181,7 +181,7 @@ class Program:
 
                 # Missing iter_args tuple
                 for i in pl.range(5, init_values=(init,)):
-                    result = pl.yield_(i)  # type: ignore
+                    result = pl.yield_(i)
 
                 return result
 

@@ -148,6 +148,73 @@ deferred carrier absorbs instead of opening. A wrong call fails at the
 factory — the constructor-surface `TypeError` a hand-written construct's
 `__init__` raises.
 
+## What Is Authored on the Tier Today
+
+Every stdlib `with`-construct is a recipe: `pl.at`, `pl.scope`,
+`pl.manual_scope`, `pl.graph`, `pl.cluster`, and `pl.spmd`. Each
+one's pre-yield code is its original `__trace_enter__` body in the original
+order — attr collection, TaskId capture, the parser-parity validations — with
+no builder access. The conversions' acceptance is IR parity with the
+hand-written shapes: asserted directly for a minimal `core_group` recipe
+against `pl.at`, and by the full construct corpora (the tracer-vs-parser lane
+parity suites).
+
+Three shapes cover them:
+
+- **Leaf scope** (`pl.at`, `pl.scope`, `pl.manual_scope`, `pl.graph`,
+  `pl.cluster`) — one `ctx.open_scope` per construct. `pl.at` defers (it
+  accepts cache-policy declarations); the other four open immediately
+  (`defer=False`), exactly as before, so their cache-policy rejection is
+  unchanged.
+- **Carrier** (`pl.spmd`) — `ctx.open_carrier` for the auto-outlined InCore
+  region nested in the dispatch scope, marked `primary=True` because the
+  carrier — not the dispatch scope around it — owns the body-decided open.
+  The plain form waits for the per-block-index read; a split hint, a
+  cross-core slot, or a captured multi-statement body opens at the first
+  emission.
+- **Immediate-open for-region** (`pl.split_aiv`) — `ctx.open_scope(...,
+  defer=False, prologue=[(loop_var, lane_idx)])` for the SplitAiv region
+  itself, plus a synthesized InCore wrapper for the bare top-level form
+  (the forward-sticky dump tags merge onto it; a form already inside InCore
+  — or inside an InCore-typed function body — emits in place). Nothing is
+  deferred, so the recipe needs no structural surface.
+
+The two `for` spellings are recipes on the same tier. `pl.spmd` is one
+recipe for **both spellings**: `with pl.spmd(...)` and
+`for i in pl.spmd(...)`. The with-arm keeps the original hand-written
+lowering (capture, wrap decision, name-split decision); the for-arm captures
+nothing, always wraps, and mints the loop variable bound to
+`pl.tile.get_block_idx()` as the carrier's deferred prologue. The conversion
+deleted the for-form's separate descriptor path (its `begin`/`__trace_exit__`
+arms and carrier state) from `constructs/scopes.py` — the class is a thin
+façade that creates the recipe instance and forwards. Acceptance is IR parity:
+the for-form traces byte-identically to its hand-written predecessor (plain,
+empty, `deps=`, cache-policy, split/slot, and cluster-rejection variants), and
+the tracer-vs-parser lane parity covers it through the `spmd_loop_kernel`
+reference. `pl.split_aiv` is the immediate-open counterpart: one recipe
+(`_split_aiv_scope`) synthesizing the InCore wrapper only for the bare
+top-level form, with the RFC #1820 function-level-split rejection reading
+`ctx.enclosing_user_split()` — and the lane parity covers it through the
+`split_aiv_loop_kernel` reference.
+
+`pl.range` / `parallel` / `unroll` / `pipeline` stay hand-written on purpose:
+they already share one clean `RangeIterator`, and they carry host-execution
+parity (host iteration of the same source) — a semantics a recipe rejects by
+design. The tier's `ForStmt` primitive is `ctx.open_loop`: a recipe can
+author a real loop region (the `counted` / `accumulate` acceptance recipes
+trace IR-identical to the `pl.range` forms they replace, carried channels
+included), but the stdlib entries themselves remain framework-owned so
+`pl.range(n)` keeps its host behavior.
+
+The first externally authored recipe is `blocked_spmd` — a block-grid
+dispatch over `pl.spmd`: one representative block whose axes project onto
+tensors, with the dispatch TaskId exposed for `deps=` wiring. Its acceptance
+tests assert **IR parity** — the recipe and the
+hand-written `pl.spmd` grid it replaces trace to structurally identical IR —
+in `tests/ut/language/tracing/test_recipe.py`, alongside a `grid_loop`
+recipe proving a kernel author can write the `for` spelling itself (IR-equal
+to `for i in pl.spmd(n)`), with no import below `pypto.language`.
+
 ## See Also
 
 - [Authoring Recipes](07-authoring-recipes.md) — the general tier beneath: `pypto.language.authoring` is the canonical import root for both protocols.

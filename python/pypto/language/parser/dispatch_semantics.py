@@ -14,7 +14,7 @@ import copy
 from typing import Any, cast
 
 from pypto.ir.printer import python_print
-from pypto.language.dsl_api import RangeIterator as _DslRangeIterator
+from pypto.language.constructs.loops import RangeIterator as _DslRangeIterator
 from pypto.pypto_core import DataType, ir
 
 from .diagnostics import (

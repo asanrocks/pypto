@@ -14,11 +14,16 @@
 first-class ``Submit.core_num`` / ``Submit.sync_start`` fields, while keeping the
 same ``(result, task_id)`` surface and ``deps=[...]`` wiring.
 """
+# Traced/DSL test bodies and helpers: the unified facade returns
+# `Tensor | Scalar` (and `Tuple` for multi-value returns), which a body cannot
+# narrow, and the tracing decorators' attribute forms are untyped. The rules
+# below are the resulting test-shape noise, not a bug signal.
+# pyright: reportArgumentType=false
 
 import pypto.language as pl
 import pytest
 from pypto import DataType, ir
-from pypto.language.diagnostics import ParserSyntaxError, ParserTypeError
+from pypto.language.parser.diagnostics import ParserSyntaxError, ParserTypeError
 
 
 def _flatten(stmt):

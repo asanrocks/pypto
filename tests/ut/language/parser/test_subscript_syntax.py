@@ -8,7 +8,6 @@
 # -----------------------------------------------------------------------------------------------------------
 
 """Unit tests for subscript syntax on Tensor and Tile types."""
-
 # Traced/DSL test bodies and helpers: the unified facade returns
 # `Tensor | Scalar` (and `Tuple` for multi-value returns), which a body cannot
 # narrow, and the tracing decorators' attribute forms are untyped. The rules
@@ -21,8 +20,7 @@ from typing import cast
 import pypto.language as pl
 import pytest
 from pypto import ir
-from pypto.language.diagnostics import UnsupportedFeatureError
-from pypto.language.parser.diagnostics import ParserTypeError
+from pypto.language.parser.diagnostics import ParserTypeError, UnsupportedFeatureError
 
 _OP_TILE_SLICE = ir.get_op("tile.slice").name
 

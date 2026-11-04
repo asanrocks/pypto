@@ -455,6 +455,44 @@ pl.system.sync_wait(0, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)    # 
 | **A peer's signal counter reads twice what it should** | Both AIV lanes ran the same `pld.system.notify` — **not diagnosed** | Shard the notify by `aiv_id`, or guard it with `if aiv_id == 0:` |
 | **A rank reads stale data after its `pld.system.wait` returns** | Either the double-notify above, or an incomplete cache-publication/fence/barrier/invalidation sequence between the cube and vector phases | Shard the notify; add the full GM handoff sequence |
 
+## Writing your own scope construct
+
+When the built-in scopes do not spell your lowering, author the construct
+yourself with `@pl.authoring.construct` — a generator whose code before the `yield`
+opens the regions, whose `yield` hands the body its handle, and whose code
+after it finalizes. The context argument is a `pl.authoring.ConstructContext`; the
+`yield` value for a bound `with` is a `pl.authoring.ConstructHandle` subclass (host
+structure the staged vocabulary cannot spell):
+
+```python
+@pl.authoring.construct
+def blocked_spmd(ctx, shape, tile, *, name_hint=""):
+    blocks = tuple((s + t - 1) // t for s, t in zip(shape, tile))
+    core_num = 1
+    for count in blocks:
+        core_num *= count
+    with ctx.region(pl.spmd(core_num, name_hint=name_hint)) as tid:
+        yield BlockGrid(blocks, tile, ctx.resolve_binding(tid))
+
+
+with blocked_spmd((tokens, heads), (1, HEAD_TILE)) as block:
+    q = block.region(query).load()
+```
+
+The same generator serves the `for` spelling (`for i in blocked_spmd(...)`,)
+yielding `ctx.loop_var()`. No builder, no tracer internals — the capability
+surface (`ctx.open_scope`, `ctx.open_carrier`, `ctx.open_loop`, `ctx.bind`,
+`ctx.lower_deps`, `ctx.control`) is the whole reach.
+
+The general tier beneath it is `pl.authoring.recipe`: a function composing tracing
+effects — pushing a function under a `pl.authoring.FunctionContract` (its parameters
+are `pl.authoring.ParamSpec` triples), collecting a body, emitting the call — and
+`pl.authoring.body` for snippet placement (`.splice` / `.inline` / `.incore`). The
+canonical namespace for both protocols is `pl.authoring`; the full contract
+and its invariants are the developer pages
+([Construct Recipes](../../dev/language/06-construct-recipes.md),
+[Authoring Recipes](../../dev/language/07-authoring-recipes.md)).
+
 ## See Also
 
 - [Functions and Programs](01-functions.md) — the alternative to `pl.at`: a separate `@pl.jit.incore` function.

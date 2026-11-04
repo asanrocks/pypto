@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from pypto.ir.printer import python_print
+from pypto.language.constructs.loops import infer_loop_var_dtype
 from pypto.language.typing.type_utils import _const_int_value  # noqa: PLC2701 — the shared syntax-level seam
 from pypto.pypto_core import DataType, ir
 
@@ -342,20 +343,9 @@ class ControlFlowParser:
         # Infer loop var dtype from range bounds to preserve roundtrip fidelity.
         # Bare Python ints still map to INDEX, but explicitly typed INT64 bounds
         # should rebuild an INT64 loop var when the printer emitted them that way.
-        _loop_var_dtype = DataType.INDEX
-        saw_index_bound = False
-        saw_int64_bound = False
-        for _bound in (range_args.get("start"), range_args.get("stop"), range_args.get("step")):
-            if isinstance(_bound, ir.ConstInt):
-                if _bound.dtype == DataType.INDEX:
-                    saw_index_bound = True
-                elif _bound.dtype == DataType.INT64:
-                    saw_int64_bound = True
-                else:
-                    _loop_var_dtype = _bound.dtype
-                    break
-        if _loop_var_dtype == DataType.INDEX and saw_int64_bound and not saw_index_bound:
-            _loop_var_dtype = DataType.INT64
+        _loop_var_dtype = infer_loop_var_dtype(
+            range_args.get("start"), range_args.get("stop"), range_args.get("step")
+        )
         loop_var = self.services.builder.var(loop_var_name, ir.ScalarType(_loop_var_dtype))
         span = self.services.span_tracker.get_span(stmt)
         loop_output_vars: list[str] = []
