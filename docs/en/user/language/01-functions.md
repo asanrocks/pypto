@@ -186,15 +186,14 @@ raise at decoration. An external kernel is a declaration with no Python body to
 trace: call a `@pl.jit.extern` stub from a traced body and it joins the entry's
 assembly.
 
-### Shared snippets: `pl.authoring.body(...).splice(...)`
+### Shared snippets: `@pl.jit_trace.body`
 
-`pl.authoring.body` prepares a snippet you want pasted into its caller rather than
-called; `.splice(...)` places it at every occurrence. Its statements join the
-caller's IR — no function, no call — so it needs no parameter or result
-annotations at all:
+`@pl.jit_trace.body` declares a reusable **statement fragment** and calls it
+like a function: the fragment's statements are pasted where it is called —
+no function, no call — so it needs no parameter or result annotations at all:
 
 ```python
-@pl.authoring.body
+@pl.jit_trace.body
 def twice(x):
     return pl.add(x, x)
 
@@ -202,18 +201,24 @@ def twice(x):
 def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile = pl.load(a, [0, 0], [64, 64])
-        pl.store(twice.splice(tile), [0, 0], out)   # a Tile here ...
-        out[:, :] = twice.splice(a)                 # ... a Tensor there
+        pl.store(twice(tile), [0, 0], out)      # a Tile here ...
+        out[:, :] = twice(a)                    # ... a Tensor there
     return out
 ```
 
 Use it when a helper is a snippet rather than a contract: it skips the IR
-signature, so one body serves several argument types, and a value it creates can
-be returned without a parameter backing it. Two rules still apply — it only runs
-inside a trace (a host call is refused), and staged typing still governs the
-body's interior, exactly as it does in the caller. Reach for
-`@pl.jit_trace.inline` when you want the body collected once and its signature
-declared; reach for `pl.authoring.body(...).splice(...)` when there is nothing to declare.
+signature, so one fragment serves several argument types, and a value it
+creates can be returned without a parameter backing it. Two rules still
+apply — it only runs inside a trace (a host call is refused), and staged
+typing still governs the fragment's interior, exactly as it does in the
+caller. Reach for `@pl.jit_trace.inline` when you want the body collected
+once and its signature declared; reach for `@pl.jit_trace.body` when there
+is nothing to declare.
+
+The framework-author spelling keeps the placement explicit:
+`pl.authoring.body(...).splice(...)` / `.inline(...)` / `.incore(...)` is the
+same lowering with the placement chosen per occurrence rather than at the
+declaration (see [Authoring Recipes](../../dev/language/07-authoring-recipes.md)).
 
 ### What a sub-function hands back keeps its shape and dtype
 

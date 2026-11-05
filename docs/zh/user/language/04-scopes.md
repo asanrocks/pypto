@@ -430,7 +430,8 @@ with blocked_spmd((tokens, heads), (1, HEAD_TILE)) as block:
 
 其下的通用层是 `pl.authoring.recipe`：一个组合追踪效果的函数 —— 在 `pl.authoring.FunctionContract`
 （其参数是 `pl.authoring.ParamSpec` 三元组）下压入函数、收集函数体、发出调用 —— 以及用于片段放置的
-`pl.authoring.body`（`.splice` / `.inline` / `.incore`）。两个协议的规范命名空间是 `pl.authoring`；
+`pl.authoring.body`（`.splice` / `.inline` / `.incore`），其 kernel 侧拼写是
+`@pl.jit_trace.body`（见[函数与程序](01-functions.md)）。两个协议的规范命名空间是 `pl.authoring`；
 完整契约与不变量见开发者页面
 （[构造配方](../../dev/language/06-construct-recipes.md)、
 [授权配方](../../dev/language/07-authoring-recipes.md)）。

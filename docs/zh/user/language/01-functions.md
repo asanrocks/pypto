@@ -152,13 +152,13 @@ host knob 在 staged 循环内部是只读的：函数体只追踪一次，所�
 （`opaque`、`extern`）在装饰时报错。外部 kernel 没有可追踪的 Python 函数体，
 它是一种声明：在追踪函数体内调用 `@pl.jit.extern` 桩函数，它会并入入口的 assembly。
 
-### 共享片段：`pl.authoring.body(...).splice(...)`
+### 共享片段：`@pl.jit_trace.body`
 
-`pl.authoring.body` 预备一个你想“粘贴”进调用方、而不是被调用的片段；`.splice(...)` 在每次出现时
-放置它。它的语句直接加入调用方的 IR —— 没有函数、没有调用 —— 因此完全不需要参数或结果注解：
+`@pl.jit_trace.body` 声明一个可复用的**语句片段**，并像函数一样调用它：片段的语句被粘贴到调用处
+—— 没有函数、没有调用 —— 因此完全不需要参数或结果注解：
 
 ```python
-@pl.authoring.body
+@pl.jit_trace.body
 def twice(x):
     return pl.add(x, x)
 
@@ -166,16 +166,21 @@ def twice(x):
 def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile = pl.load(a, [0, 0], [64, 64])
-        pl.store(twice.splice(tile), [0, 0], out)   # 此处是 Tile ……
-        out[:, :] = twice.splice(a)                 # …… 此处是 Tensor
+        pl.store(twice(tile), [0, 0], out)      # 此处是 Tile ……
+        out[:, :] = twice(a)                    # …… 此处是 Tensor
     return out
 ```
 
-当 helper 是一段片段而非一项契约时用它：它跳过 IR 签名，因此一个函数体可服务多种参数
+当 helper 是一段片段而非一项契约时用它：它跳过 IR 签名，因此一个片段可服务多种参数
 类型，它创建的值也可以在没有参数背书的情况下返回。仍有两项规则：它只在 trace 内运行
-（host 调用会被拒绝），且函数体**内部**仍受 staged 类型规则约束，与调用方完全一致。
+（host 调用会被拒绝），且片段**内部**仍受 staged 类型规则约束，与调用方完全一致。
 需要“收集一次 + 声明签名”时用 `@pl.jit_trace.inline`，没有东西可声明时用
-`pl.authoring.body(...).splice(...)`。
+`@pl.jit_trace.body`。
+
+框架作者侧的拼写保持放置动作显式可见：
+`pl.authoring.body(...).splice(...)` / `.inline(...)` / `.incore(...)` 是同一个
+降低，但放置在每次出现时选择，而不是在声明处选择（见
+[授权配方](../../dev/language/07-authoring-recipes.md)）。
 
 ### 子函数返回的张量会保留 shape 和 dtype
 

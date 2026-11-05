@@ -487,7 +487,9 @@ surface (`ctx.open_scope`, `ctx.open_carrier`, `ctx.open_loop`, `ctx.bind`,
 The general tier beneath it is `pl.authoring.recipe`: a function composing tracing
 effects — pushing a function under a `pl.authoring.FunctionContract` (its parameters
 are `pl.authoring.ParamSpec` triples), collecting a body, emitting the call — and
-`pl.authoring.body` for snippet placement (`.splice` / `.inline` / `.incore`). The
+`pl.authoring.body` for snippet placement (`.splice` / `.inline` / `.incore`), the
+kernel-facing spelling of which is `@pl.jit_trace.body`
+([Functions and Programs](01-functions.md)). The
 canonical namespace for both protocols is `pl.authoring`; the full contract
 and its invariants are the developer pages
 ([Construct Recipes](../../dev/language/06-construct-recipes.md),

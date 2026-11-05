@@ -2155,10 +2155,115 @@ def _unsupported_family_form(name: str) -> TypeError:
     """
     return TypeError(
         f"@pl.jit_trace.{name} is not part of the verified tracing surface "
-        "(this wave: @pl.jit_trace, @pl.jit_trace.incore, @pl.jit_trace.inline, "
-        "@pl.jit_trace.host, @pl.jit_trace.graph). "
+        "(this wave: @pl.jit_trace, @pl.jit_trace.body, @pl.jit_trace.incore, "
+        "@pl.jit_trace.inline, @pl.jit_trace.host, @pl.jit_trace.graph). "
         f"Declare the kernel on the parsing frontend (@pl.jit.{name}) instead."
     )
+
+
+# ---- the reusable-statement-fragment spelling --------------------------------
+
+
+class _TracedBody:
+    """A reusable statement fragment, called like a function.
+
+    The kernel-author spelling of the splice placement: ``@pl.jit_trace.body``
+    prepares the fragment once, and each call expands its statements at the
+    call site — no function, no declaration, no ``ir.Call``, nothing for a
+    later pass to inline. A body therefore owns a *statement boundary*, not a
+    signature: the arguments are the call's staged values, and a value the
+    body returns crosses back into the caller's expression position.
+
+    This is one policy over the authoring tier, not a private path into the
+    tracer: the wrapper is ``@pl.authoring.recipe`` over ``ctx.splice_body``,
+    so a framework outside this repository can build the same spelling from
+    the public ``pl.authoring`` surface. ``@pl.authoring.body`` stays the
+    framework-author spelling because it keeps the placement choice explicit
+    (``.splice`` / ``.inline`` / ``.incore``); a kernel author declaring one
+    meaning at the definition site is the narrower, readable form.
+
+    Distinct from ``@pl.jit_trace.inline``, which declares a typed ``Inline``
+    function *and* a call to it, for the inlining pass to erase.
+
+    One body cannot call another: the tier admits one splice at a time (the
+    spliced body's parameters are the caller's own names), so reuse between
+    fragments is expressed by writing the statements in the body, or by
+    declaring a ``@pl.jit_trace.inline`` callee.
+    """
+
+    def __init__(self, kernel: types.FunctionType, *, auto_scope: bool | None) -> None:
+        # Deferred: ``pypto.language.authoring`` imports the tracing entry, so
+        # importing it at module scope would close the cycle.
+        from pypto.language.authoring import body as prepare_body  # noqa: PLC0415
+        from pypto.language.authoring import recipe as authoring_recipe  # noqa: PLC0415
+
+        prepared = prepare_body(kernel)
+
+        @authoring_recipe
+        def expand(ctx: Any, *args: Any, **kwargs: Any) -> Any:
+            if "auto_scope" in kwargs:
+                raise TypeError(
+                    f"{kernel.__name__}: auto_scope is declared on the body, not passed at the call site"
+                )
+            return ctx.splice_body(prepared, *args, auto_scope=auto_scope, **kwargs)
+
+        self._kernel = kernel
+        self._expand = expand
+        # The body's own metadata, not the wrapper's: a trace, a diagnostic and
+        # a stack trace should all name the fragment the author wrote.
+        self.__name__ = kernel.__name__
+        self.__qualname__ = kernel.__qualname__
+        self.__doc__ = kernel.__doc__
+        self.__module__ = kernel.__module__
+        self.__wrapped__ = kernel
+
+    def __repr__(self) -> str:
+        return f"<traceable body {self.__name__}>"
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Expand the body's statements into the active trace."""
+        frame = active_frame()
+        if frame is None:
+            raise TypeError(
+                f"{self.__name__} is a body declared with @pl.jit_trace.body — it expands statements "
+                "at a call site inside a traced kernel, so it cannot run as a host call"
+            )
+        # The tier admits one splice at a time (a splice's parameters are the
+        # caller's own names), so a body cannot call another body. Say that in
+        # the vocabulary the kernel author wrote, not in "splice" terms.
+        if frame.sema.splice_parent is not None:
+            raise TypeError(
+                f"{self.__name__} is a @pl.jit_trace.body and cannot be called from inside another body — "
+                "a body expands into its caller, so the statements it reuses have to be written "
+                "in the body that calls them (or declared as a @pl.jit_trace.inline callee)"
+            )
+        return self._expand(*args, **kwargs)
+
+
+class _BodyDecorator:
+    """``pl.jit_trace.body`` — declare one reusable statement fragment.
+
+    The fragment is placed when it is called, so the spelling reads as a
+    function call (``scale_block(a, out, row0, k)``) rather than as a
+    placement method. Deliberately not a ``@pl.jit.*`` alias: those declare a
+    function of their own, while a body is expanded into its caller.
+    """
+
+    def __call__(
+        self, kernel: types.FunctionType | None = None, *, auto_scope: Any = _AUTO_SCOPE_UNSET
+    ) -> Any:
+        # ``Any``, like ``_JitAlias.__call__``: a decorator's return type is the
+        # decorated name's type, and a union would make every call site of the
+        # body a static error while saying nothing about the staged values the
+        # body actually takes.
+        # ``auto_scope`` is the splice's own knob, so it belongs to the
+        # declaration (one meaning per fragment), not to each call site.
+        resolved = None if auto_scope is _AUTO_SCOPE_UNSET else bool(auto_scope)
+        if kernel is None:  # the parenthesized form: @pl.jit_trace.body(auto_scope=False)
+            return functools.partial(self, auto_scope=resolved)
+        if not isinstance(kernel, types.FunctionType):
+            raise TypeError(f"@pl.jit_trace.body expects a plain function, got {kernel!r}")
+        return _TracedBody(kernel, auto_scope=resolved)
 
 
 class _JitDecorator:
@@ -2171,6 +2276,10 @@ class _JitDecorator:
     twins. ``opaque`` and ``extern`` stay on the parsing frontend:
     ``@pl.jit.extern`` is a declaration with no Python body to trace, and
     ``opaque`` admits bodies the tracer's vocabulary does not cover.
+
+    ``.body`` is the one member of this surface with no ``@pl.jit.*`` twin: it
+    declares a statement fragment that expands at its call site, so it belongs
+    to the tracing frontend alone (see :class:`_TracedBody`).
     """
 
     def __init__(self) -> None:
@@ -2192,6 +2301,9 @@ class _JitDecorator:
         # A recordable orchestration fragment: outline_graph_scopes and the
         # host_build_graph runtime consume it as a Graph function.
         self.graph = _JitAlias("graph", function_type=ir.FunctionType.Graph, allow_auto_scope=False)
+        # The kernel-author spelling of a reusable statement fragment. Not an
+        # alias: a body has no function of its own to declare.
+        self.body = _BodyDecorator()
 
     @property
     def opaque(self) -> NoReturn:
