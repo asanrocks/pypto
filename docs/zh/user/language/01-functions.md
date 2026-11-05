@@ -6,9 +6,25 @@
 
 ## Concept
 
-装饰器不是包装你的函数 —— 它**解析你的源码**。函数体从不作为 Python 执行。这一个事实解释了后面大部分内容：闭包变量为什么是那样的行为、`pl.yield_` 为什么只有写在被装饰函数里才有意义、以及 kernel 体里的错误为什么在解析期带行号报出来，而不是调用时给你一条 traceback。
+装饰器把你的函数变成一个 IR 函数，而达成这一点有两种前端：
 
-**写 PyPTO kernel 就用 `@pl.jit`。** 类型来自首次调用时的实参，函数随之特化，子函数自动被发现 —— 你按名字调用，装饰器负责找到它们。`examples/` 用的是这种写法，本手册其余部分也一律用它。
+| 前端 | 函数体如何变成 IR | 何时选它 |
+| ---- | ----------------- | -------- |
+| `@pl.jit`（**parse**） | 装饰器**解析源码**；函数体从不作为 Python 运行 | kernel 能用解析器认得的语法写出来，且你需要它的 parse 期报错与完整 IR 词汇 |
+| `@pl.jit_trace`（**trace**） | 装饰器**执行插桩后的副本**；收集 IR 是运行它的副作用 | 需要普通 Python —— host 循环、dataclass、helper 函数 —— 来**组织** staged 计算 |
+
+两者产出同一批类别的 IR 函数，并走同一条 lowering 流水线，所以一个仓库 —— 甚至一个程序 —— 可以同时持有两者；选择是按定义进行的。它们共享的是 staged 操作的含义；不同的是它**何时**产生，因此也不同在注解的含义：
+
+```python
+def scale_parsed(x: pl.Tensor, k: pl.Scalar[pl.FP32], out: pl.Out[pl.Tensor]): ...
+def scale_traced(x: pl.Tensor, k: float, out: pl.Out[pl.Tensor]): ...
+#                两种前端下第一个参数都是 staged tensor，
+#                但上面的 k 是运行期参数，下面的 k 是一个被烘焙的旋钮
+```
+
+这个差别就是[值与暂存](07-staging.md)的全部内容：哪些值在构建 kernel 时就已决定，以及谓词或可迭代对象所属的域又如何决定程序里有什么。本页讲装饰器本身、复用形式，以及如何在两个前端之间迁移一个 kernel；下面各节会说明自己讲的是哪一个。
+
+**本手册其余部分用 `@pl.jit` 写 kernel。** 类型来自首次调用时的实参，函数随之特化，子函数自动被发现 —— 你按名字调用，装饰器负责找到它们。本页陈述的规则就是它的规则；凡 tracing 前端有差别之处，正文会说明。
 
 你还会遇到 `@pl.program` 里的 `@pl.function`：一个类，每个方法是一个 IR 函数，函数间调用写成 `self.other(...)`。那种形式是 IR 的一比一转写，主要用于**编写编译器测试用例** —— 测试需要在不运行的前提下把程序的确切形状写出来。作为用户你不需要它，[下面那一节](#plfunction-与-plprogram)是为你读编译器测试或读 printed IR 时准备的。
 
@@ -109,15 +125,17 @@ def host_orch(
 
 `@pl.jit.host` 拒绝 `level=`（HOST 是隐含的）。
 
-### 选择追踪前端
+### 追踪前端：`@pl.jit_trace`
 
 `@pl.jit` 解析函数体源码；`@pl.jit_trace` 则执行插桩后的函数体并记录操作。
 选择是按定义进行的，因此两者可以共存于同一程序；但跨调用时不行：helper
-必须与调用它的入口使用同一套装饰器。
+必须与调用它的入口使用同一套装饰器。两个值世界意味着什么见
+[值与暂存](07-staging.md)；本节讲装饰器以及它构建出的 artifact。
 
 可观察的差别在于注解的含义。在 `@pl.jit_trace` 下，普通 Python 注解
 （`scale: float`）是烘焙进 kernel 的编译期旋钮，而 `pl.Scalar[dtype]` 是
-运行时参数，其取值在分发时到达：
+运行时参数，其取值在分发时到达（规则及其守护 —— 包括循环试图推进烘焙值时会怎样 ——
+见 [值与暂存](07-staging.md)）：
 
 ```python
 @pl.jit_trace
@@ -152,13 +170,166 @@ host knob 在 staged 循环内部是只读的：函数体只追踪一次，所�
 （`opaque`、`extern`）在装饰时报错。外部 kernel 没有可追踪的 Python 函数体，
 它是一种声明：在追踪函数体内调用 `@pl.jit.extern` 桩函数，它会并入入口的 assembly。
 
-### 共享片段：`@pl.jit_trace.body`
+### 把 kernel 迁移到 tracing 前端
 
-`@pl.jit_trace.body` 声明一个可复用的**语句片段**，并像函数一样调用它：片段的语句被粘贴到调用处
-—— 没有函数、没有调用 —— 因此完全不需要参数或结果注解：
+移植换的是前端，不是 kernel。两条通道经过同一条流水线、停在同一个地方 —— parser 通道的 `.lower(*args)`
+与 tracing 通道的 `compile_for_test(*args)` —— 因此移植后 kernel 的程序可以在生成任何东西之前与原来的程序
+比较。`examples/tracing/advanced/08_migration.py` 正是对同一个 kernel 做这件事，并把相等性打印出来。
+
+移植时通常变化的只是 tracing 方言要求的拼写：
+
+| Parser 通道 | Tracing 通道 |
+| ----------- | ------------ |
+| `vlen: pl.INDEX`、`scale: pl.FP32` | `pl.Scalar[pl.INDEX]`、`pl.Scalar[pl.FP32]` —— 裸 dtype 不命名任何世界 |
+| `for i, (acc,) in pl.range(n, init_values=(acc0,)):` + `pl.yield_` | 在循环前绑定 `acc = acc0`，在函数体内重新绑定；trace 会推导携带关系 |
+| `pl.while_` / `pl.cond` | staged 条件上的普通 `while` |
+| `.inline` 辅助函数参数上的 `pl.Out[pl.Tensor]` | 裸 `pl.Tensor` —— 辅助函数被拼接进调用方，因此该参数已经是别名 |
+
+第四项是被循环携带的 host 字面量：用 `pl.const(...)` 声明它（见 [值与暂存](07-staging.md)）。
+其余部分 —— 作用域、tile 算子、任务依赖、`pl.split`、有效 shape —— 原样保留，这正是这次清理可以增量进行的
+原因：移植一个 kernel、比较它的程序、让两条通道共存于同一个程序。
+
+该边界上的相等并不是关于代码生成、运行期数值或缓存身份的主张；每一份证据度量的是什么，见开发者页面
+[（Tracing 前端边界）](../../dev/language/08-tracing-frontends.md)。
+
+### 在 traced kernel 里复用代码
+
+四种形式都可以复用代码，区别在于程序里最终留下什么。按复用的**本质**选择，而不是按调用点读起来是否顺眼：
+
+| 你想要 | 写法 | 程序里得到什么 |
+| ------ | ---- | -------------- |
+| 一个表达式 —— 计算 staged 值的辅助函数 | 返回 `pl.*` 结果的普通 Python 函数 | 就地展开的算子；辅助函数本身不留痕迹 |
+| 想当函数调用的语句 | `@pl.jit_trace.body` | 调用点处的语句 —— 没有函数、没有 `GlobalVar`、没有 `ir.Call` |
+| 由内联 pass 抹掉的带类型辅助函数 | `@pl.jit_trace.inline` | 一个调用，`InlineFunctions` 会删掉它并留下语句 |
+| 留在程序里的设备 kernel | `@pl.jit_trace.incore` | 一个调用，加上程序里的一个 AIV/AIC 函数 |
+
+最容易踩的是第二行与第一行的对比：**发出语句的普通函数不是 body**。它返回值没问题（那是表达式），
+但其中的 `pl.store` 无处落地 —— kernel 会编译、会运行，却什么也没写：
+
+<!-- doctest: setup -->
+```python
+import pypto.language as pl
+import torch
+from pypto import ir
+from pypto.runtime import RunConfig
+
+CFG = RunConfig(platform="__PLATFORM__")
+ROWS = COLS = 64
+TILE_ROWS = 16
+
+
+def loads(kernel, *args) -> int:
+    """Load ops in the lowered program: the evidence a statement landed."""
+    text = ir.python_print(kernel.compile_for_test(*args))
+    return sum(1 for line in text.splitlines() if ".load" in line)
+```
+
+<!-- doctest: run -->
+```python
+def emit_block(a, out, row0, k):            # a plain function: an expression helper
+    pl.store(pl.mul(pl.load(a, [row0, 0], [TILE_ROWS, COLS]), k), [row0, 0], out)
+
+
+@pl.jit_trace.body
+def body_block(a, out, row0, k):            # a declared statement fragment
+    pl.store(pl.mul(pl.load(a, [row0, 0], [TILE_ROWS, COLS]), k), [row0, 0], out)
+
+
+@pl.jit_trace
+def via_plain(
+    a: pl.Tensor[[ROWS, COLS], pl.FP32],
+    k: pl.Scalar[pl.FP32],
+    out: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP32]],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        for chunk in pl.range(ROWS // TILE_ROWS):
+            emit_block(a, out, chunk * TILE_ROWS, k)
+    return out
+
+
+@pl.jit_trace
+def via_body(
+    a: pl.Tensor[[ROWS, COLS], pl.FP32],
+    k: pl.Scalar[pl.FP32],
+    out: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP32]],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        for chunk in pl.range(ROWS // TILE_ROWS):
+            body_block(a, out, chunk * TILE_ROWS, k)
+    return out
+
+
+a = torch.ones(ROWS, COLS, dtype=torch.float32)
+z = torch.zeros(ROWS, COLS, dtype=torch.float32)
+
+# The plain helper contributes nothing — no load, no store — and nothing raises.
+plain_program = ir.python_print(via_plain.compile_for_test(a, 2.0, z))
+assert loads(via_plain, a, 2.0, z) == 0
+assert ".store" not in plain_program
+via_plain(a, 2.0, z, config=CFG)          # runs; the output is simply never written
+
+# The declared body contributes its statements, and the kernel computes.
+assert loads(via_body, a, 2.0, z) == 1
+out = torch.zeros_like(a)
+via_body(a, 2.0, out, config=CFG)
+assert torch.allclose(out, a * 2.0)
+```
+
+`@pl.jit_trace.body` 把这个边界显式写出来。body 只预备一次，在调用处展开，因此片段不需要参数或结果注解 ——
+实参就是调用点的 staged 值，它返回的值会回到调用方的表达式位置：
 
 ```python
 @pl.jit_trace.body
+def scale_block(a, out, row0, k):
+    pl.store(pl.mul(pl.load(a, [row0, 0], [TILE_ROWS, COLS]), k), [row0, 0], out)
+
+@pl.jit_trace
+def entry(a: pl.Tensor, k: pl.Scalar[pl.FP32], out: pl.Out[pl.Tensor]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        for chunk in pl.range(4):
+            scale_block(a, out, chunk * TILE_ROWS, k)   # a call, not a callee
+    return out
+```
+
+“body 是被展开而不是被调用”带来三条规则。它只能在 trace 内运行（host 调用会说明展开规则并拒绝）；
+它不能调用另一个 body —— body 的参数**就是**调用方的名字，所以片段之间的复用要么写在发起调用的 body 里，
+要么用 `@pl.jit_trace.inline` 被调函数表达；它的放置策略由声明决定而不是调用时传入 ——
+`@pl.jit_trace.body(auto_scope=False)` 用于自己保留 `pl.at` 作用域的片段，而在调用点传 `auto_scope=` 会被拒绝。
+
+`.inline` 辅助函数是复用语句的另一条路：它声明一个带类型的 `Inline` 函数**和**一个调用，随后由内联 pass
+抹掉该函数。关键在于内联之后还剩什么 —— 内联辅助函数的函数体会落到调用方，所以 tile 工作必须自带
+`with pl.at(...)`；它的输出参数是调用方的别名（裸 `pl.Tensor`，不是 `pl.Out[...]`），因为已经没有被调方签名
+可以声明方向。`.incore` 辅助函数按定义保留自己的放置，因此留在程序里。
+
+### 组织 staged 值的对象
+
+因为函数体会运行，“常量与参数太多”这件事可以用普通 Python 的答案：把它们放进对象。字段是 host 数据的
+dataclass 是配置；*携带* staged tile 的 dataclass 是记录 —— 对象属于 Python，会消失；它持有的 staged 值
+才是 IR。两者都不是参数：bundle 在调用点展开（`kernel(a, *expand(plan), out=out)`），配合 frozen dataclass
+与按声明顺序遍历的 `fields()`，这次展开就是 kernel 的扁平参数表。
+
+```python
+@dataclass(frozen=True)
+class Plan:
+    tile_rows: int = TILE_ROWS
+    k: float = 2.0
+
+def expand(plan: Plan) -> tuple[object, ...]:
+    return tuple(getattr(plan, f.name) for f in fields(plan))
+
+entry(a, *expand(Plan(tile_rows=32, k=3.0)), out=out)   # two baked host knobs
+```
+
+把对象**当作实参**传进去会被拒绝 —— 边界只接受 tensor、facade 和 host 标量 —— 所以上面的写法要先展开它。
+如果希望字段留在签名里而不是被固化，就把它们声明为 `pl.Scalar[...]`，展开方式完全相同。
+
+### 共享片段：`pl.authoring.body(...).splice(...)`
+
+`pl.authoring.body` 预备一个你想“粘贴”进调用方、而不是被调用的片段；`.splice(...)` 在每次出现时
+放置它。它的语句直接加入调用方的 IR —— 没有函数、没有调用 —— 因此完全不需要参数或结果注解：
+
+```python
+@pl.authoring.body
 def twice(x):
     return pl.add(x, x)
 
@@ -166,21 +337,16 @@ def twice(x):
 def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile = pl.load(a, [0, 0], [64, 64])
-        pl.store(twice(tile), [0, 0], out)      # 此处是 Tile ……
-        out[:, :] = twice(a)                    # …… 此处是 Tensor
+        pl.store(twice.splice(tile), [0, 0], out)   # 此处是 Tile ……
+        out[:, :] = twice.splice(a)                 # …… 此处是 Tensor
     return out
 ```
 
-当 helper 是一段片段而非一项契约时用它：它跳过 IR 签名，因此一个片段可服务多种参数
+当 helper 是一段片段而非一项契约时用它：它跳过 IR 签名，因此一个函数体可服务多种参数
 类型，它创建的值也可以在没有参数背书的情况下返回。仍有两项规则：它只在 trace 内运行
-（host 调用会被拒绝），且片段**内部**仍受 staged 类型规则约束，与调用方完全一致。
+（host 调用会被拒绝），且函数体**内部**仍受 staged 类型规则约束，与调用方完全一致。
 需要“收集一次 + 声明签名”时用 `@pl.jit_trace.inline`，没有东西可声明时用
-`@pl.jit_trace.body`。
-
-框架作者侧的拼写保持放置动作显式可见：
-`pl.authoring.body(...).splice(...)` / `.inline(...)` / `.incore(...)` 是同一个
-降低，但放置在每次出现时选择，而不是在声明处选择（见
-[授权配方](../../dev/language/07-authoring-recipes.md)）。
+`pl.authoring.body(...).splice(...)`。
 
 ### 子函数返回的张量会保留 shape 和 dtype
 
@@ -408,6 +574,12 @@ ir.compile(program, output_dir="build/out", backend_type=BackendType.Ascend910)
 
 | 症状 | 可能原因 | 修复 |
 | ---- | -------- | ---- |
+| **通过普通辅助函数发语句的 kernel 什么也没写** | 普通函数是表达式辅助函数，不是 body：它的 `pl.store` 无处落地，且不会报错 | 把片段声明为 `@pl.jit_trace.body` 再调用 |
+| **`... cannot be called from inside another body`** | 一个 body 调用了另一个 body，或调用了自己 | 把语句写在发起调用的 body 里，或声明 `@pl.jit_trace.inline` 被调函数 |
+| **`... cannot run as a host call`** | 在 trace 之外调用了 `@pl.jit_trace.body` | 从 traced kernel 内部调用它 |
+| **`auto_scope is declared on the body, not passed at the call site`** | 在调用点传了策略 | 把 `auto_scope=` 移到 `@pl.jit_trace.body(...)` 声明上 |
+| **`The tile '...' lives in a Orchestration function`** | `.inline` 辅助函数做 tile 工作但没有自己的 `pl.at` | 在辅助函数内放置：`with pl.at(level=pl.Level.CORE_GROUP):` |
+| **`argument 'plan' (...) is not a tensor, facade, or host scalar`** | 把 host 对象当 kernel 参数传入 | 在调用点展开（`*expand(plan)`），或传它的字段 |
 | **`Misplaced tensor op ... should be inside InCore block`** | 算子直接写在 `@pl.jit` 体内 | 包进 `with pl.at(level=pl.Level.CORE_GROUP):` 或移入 `@pl.jit.incore` |
 | **`AttributeError: 'JITFunction' object has no attribute 'as_python'`** | 在 IR 尚不存在时打印它 | 用 `f.lower(*args)`，或 `f.compile(*args)` 后取 `compiled.program.as_python()` |
 | **`lower()` 通过但 `compile()` 失败** | `lower()` 不执行代码生成 | 预期行为 —— 代码生成检查用 `compile()` |
@@ -423,9 +595,16 @@ ir.compile(program, output_dir="build/out", backend_type=BackendType.Ascend910)
 `examples/utils/cross_function_calls.py` —— `@pl.jit.inline` 辅助函数被自动发现为 `@pl.jit`
 入口的依赖，并在调用点展开。
 
+| 示例 | 展示 |
+| ---- | ---- |
+| `examples/tracing/03_host_objects.py` | 配置、携带 staged tile 的记录，以及展开成参数表的 bundle |
+| `examples/tracing/04_body_placement.py` | 把 `@pl.jit_trace.body` 当函数调用、它的返回值形式，以及同样的语句直接粘贴 |
+| `examples/tracing/advanced/07_diagnostics.py` | 普通辅助函数静默丢语句的陷阱与声明式修复 |
+
 ## See Also
 
 - [控制流](02-control-flow.md) —— 这些函数体里的循环与条件。
+- [值与暂存](07-staging.md) —— host 值与 staged 值，以及各自产生什么样的控制流。
 - [作用域与放置](04-scopes.md) —— `pl.at` 与其余放置作用域。
 - [快速上手](../02-quickstart.md) —— 同样的装饰器在一个完整例子里的用法。
 - [InlineFunctions](../../dev/passes/01-inline_functions.md) —— `Inline` 体如何被拼接。

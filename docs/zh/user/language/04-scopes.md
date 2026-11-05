@@ -402,6 +402,24 @@ pl.system.sync_wait(0, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)    # 
 | **对端的信号计数器读到的值是应有值的两倍** | 两条 AIV lane 都执行了同一条 `pld.system.notify` —— **不会有诊断** | 按 `aiv_id` 分片该 notify，或用 `if aiv_id == 0:` 限定 |
 | **某个 rank 的 `pld.system.wait` 返回后读到过期数据** | 要么是上面的重复 notify，要么是 cube 与 vector 阶段之间的 cache 发布 / fence / barrier / 失效序列不完整 | 分片该 notify；补全 GM 交接序列 |
 
+## 使用别人写好的构造
+
+大多数 kernel 是**消费**放置策略，而不是定义它。库构造就是一个 `with`（或 `for`）块，其区域由 recipe
+代你打开：你给出策略的输入，读它的 handle，然后写主体。
+
+```python
+with row_blocks(ROWS, TILE_ROWS, name_hint="scale") as grid:
+    row0 = grid.row_offset                       # this block's rows, from the policy
+    tile = pl.load(a, [row0, 0], [grid.tile_rows, COLS])
+    pl.store(pl.mul(tile, 2.0), [row0, 0], out)
+```
+
+handle 是普通 Python 对象，不是 staged 值：它可以携带 host 字段（`grid.tile_rows`），也可以带构造
+staged 操作数的属性（`grid.row_offset` 读取 block index）。这里完全不需要 `pl.authoring` ——
+那个命名空间是写给策略作者用的。`examples/tracing/05_block_recipe.py` 把两侧都走了一遍：两个
+手写 grid 的 kernel、三个只声明一次 grid 的 kernel，然后是 recipe 本身。策略自带的校验会在你的调用点触发，
+所以行数无法整除的 grid 在降低之前就会报错。
+
 ## 编写你自己的 scope 构造
 
 当内置 scope 无法表达你的降低时，用 `@pl.authoring.construct` 自行编写构造 —— 一个生成器，`yield` 之前的代码
@@ -423,6 +441,10 @@ def blocked_spmd(ctx, shape, tile, *, name_hint=""):
 with blocked_spmd((tokens, heads), (1, HEAD_TILE)) as block:
     q = block.region(query).load()
 ```
+
+`BlockGrid` 是这个 recipe 自己的 handle：一个 `pl.authoring.ConstructHandle` 子类，负责解码本 block 的坐标
+并提供它的区域。可运行的版本见 `examples/tracing/05_block_recipe.py` 里的 `row_blocks`（单轴，先给消费者的
+视角）和 `tests/ut/language/tracing/test_recipe.py` 里的 `blocked_spmd`（shape/tile 轴，并带 IR 等价断言）。
 
 同一个生成器也服务 `for` 拼写（`for i in blocked_spmd(...)`，产出 `ctx.loop_var()`）。
 没有 builder、没有 tracer 内部 —— 能力表面（`ctx.open_scope`、`ctx.open_carrier`、

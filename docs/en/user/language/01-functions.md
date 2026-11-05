@@ -7,15 +7,36 @@ functions call each other.
 
 ## Concept
 
-A decorator does not wrap your function — it **parses its source**. The body never
-executes as Python. That single fact explains most of what follows: why closure variables
-behave the way they do, why `pl.yield_` is meaningful only inside one, and why an error in a kernel body is reported at parse time with a line number
-rather than at call time with a traceback.
+A decorator turns your function into an IR function, and there are two frontends that get
+there differently:
 
-**`@pl.jit` is how you write PyPTO kernels.** Types come from the arguments at the first
-call, the function specializes, and sub-functions are discovered automatically — you call
-them by name and the decorator finds them. It is what `examples/` uses and what the rest
-of this manual uses.
+| Frontend | How the body becomes IR | Reach for it when |
+| -------- | ----------------------- | ----------------- |
+| `@pl.jit` (**parsing**) | the decorator **parses the source**; the body never runs as Python | the kernel is expressible as syntax the parser understands, and you want its parse-time errors and its full IR vocabulary |
+| `@pl.jit_trace` (**tracing**) | the decorator **executes an instrumented copy**; collecting IR is a side effect of running it | ordinary Python — host loops, dataclasses, helper functions — has to *organize* the staged computation |
+
+Both produce IR functions of the same kinds and lower through the same pipeline, so one
+repository — or one program — may hold both; the choice is per definition. What they share
+is what a staged operation means; what differs is when it is produced, and therefore what
+an annotation means:
+
+```python
+def scale_parsed(x: pl.Tensor, k: pl.Scalar[pl.FP32], out: pl.Out[pl.Tensor]): ...
+def scale_traced(x: pl.Tensor, k: float, out: pl.Out[pl.Tensor]): ...
+#                the same first parameter is a staged tensor in both frontends,
+#                but `k` is a runtime parameter above and a baked knob below
+```
+
+That difference is the whole of [Values and Staging](07-staging.md): which values are
+decided while the kernel is built, and how the domain of a predicate or iterable then
+decides what the program contains. This page covers the decorators themselves, the
+reuse forms, and how to move a kernel between the frontends; the sections below say which
+one they describe.
+
+**`@pl.jit` is how the rest of this manual writes kernels.** Types come from the arguments
+at the first call, the function specializes, and sub-functions are discovered
+automatically — you call them by name and the decorator finds them. Its rules are the ones
+stated on this page; where the tracing frontend differs, the section says so.
 
 You will also meet `@pl.function` inside `@pl.program`: a class where each method is one
 IR function and calls between them are written `self.other(...)`. That form is a
@@ -138,17 +159,20 @@ silently folding into one program.
 
 `@pl.jit.host` rejects `level=` (HOST is implicit).
 
-### Opting into the tracing frontend
+### The tracing frontend: `@pl.jit_trace`
 
-`@pl.jit` parses a kernel body. `@pl.jit_trace` records it by executing an
+`@pl.jit` parses a kernel body; `@pl.jit_trace` records it by executing an
 instrumented copy instead. The choice is per definition, so both can coexist in
 a program -- but not across a call: a helper must use the same decorator family
-as the entry that calls it.
+as the entry that calls it. What the value worlds mean is
+[Values and Staging](07-staging.md); this section is the decorator and the
+artifact it builds.
 
 The observable difference is what an annotation means. Under `@pl.jit_trace`, a
 plain Python annotation (`scale: float`) is a compile-time knob baked into the
 kernel, while `pl.Scalar[dtype]` is a runtime parameter whose value arrives at
-dispatch:
+dispatch ([Values and Staging](07-staging.md) covers the rule and its guards,
+including what happens when a loop tries to advance a baked value):
 
 ```python
 @pl.jit_trace
@@ -186,14 +210,185 @@ raise at decoration. An external kernel is a declaration with no Python body to
 trace: call a `@pl.jit.extern` stub from a traced body and it joins the entry's
 assembly.
 
-### Shared snippets: `@pl.jit_trace.body`
+### Moving a kernel to the tracing frontend
 
-`@pl.jit_trace.body` declares a reusable **statement fragment** and calls it
-like a function: the fragment's statements are pasted where it is called —
-no function, no call — so it needs no parameter or result annotations at all:
+A port changes the frontend, not the kernel. Both lanes lower through the same pipeline and
+stop at the same place — `.lower(*args)` on the parsing lane, `compile_for_test(*args)` on
+the tracing lane — so the ported kernel's program can be compared against the original's
+before anything is generated. `examples/tracing/advanced/08_migration.py` does exactly that
+for one kernel and prints the equality.
+
+What usually changes at the port are the spellings the tracing dialect requires:
+
+| Parsing lane | Tracing lane |
+| ------------ | ------------ |
+| `vlen: pl.INDEX`, `scale: pl.FP32` | `pl.Scalar[pl.INDEX]`, `pl.Scalar[pl.FP32]` — a bare dtype names no world |
+| `for i, (acc,) in pl.range(n, init_values=(acc0,)):` + `pl.yield_` | bind `acc = acc0` before the loop, rebind in the body; the trace derives the carry |
+| `pl.while_` / `pl.cond` | an ordinary `while` over a staged condition |
+| `pl.Out[pl.Tensor]` on an `.inline` helper parameter | a bare `pl.Tensor` — the helper is spliced into the caller, so the parameter is already an alias |
+
+A host literal used as loop-carried state is the fourth: declare it with `pl.const(...)`
+([Values and Staging](07-staging.md)). Everything else — scopes, tile ops, task dependencies,
+`pl.split`, valid shapes — carries over unchanged, which is why the sweep can be
+incremental: port one kernel, compare its program, keep both lanes in the same program.
+
+Equality at that boundary is not a claim about code generation, runtime numerics, or cache
+identity; the developer page
+([Tracing Frontend Boundaries](../../dev/language/08-tracing-frontends.md)) states what each
+piece of evidence measures.
+
+### Reusing code in a traced kernel
+
+Four forms reuse code, and they differ in what the program ends up holding. Pick by
+what the reuse *is*, not by what reads best at the call site:
+
+| You want | Write | What the program gets |
+| -------- | ----- | --------------------- |
+| an expression — a helper that computes a staged value | a plain Python function returning `pl.*` results | the ops, in place; the helper itself leaves nothing |
+| statements you call like a function | `@pl.jit_trace.body` | the statements at the call site — no function, no `GlobalVar`, no `ir.Call` |
+| a typed helper the inlining pass erases | `@pl.jit_trace.inline` | a call that `InlineFunctions` removes, leaving its statements |
+| a device kernel that stays a function | `@pl.jit_trace.incore` | a call plus an AIV/AIC function in the program |
+
+The distinction that bites is the second row against the first: a **plain function that
+emits statements is not a body**. Its value return is fine (it is an expression), but a
+`pl.store` inside it lands nowhere — the kernel compiles, runs, and writes nothing:
+
+<!-- doctest: setup -->
+```python
+import pypto.language as pl
+import torch
+from pypto import ir
+from pypto.runtime import RunConfig
+
+CFG = RunConfig(platform="__PLATFORM__")
+ROWS = COLS = 64
+TILE_ROWS = 16
+
+
+def loads(kernel, *args) -> int:
+    """Load ops in the lowered program: the evidence a statement landed."""
+    text = ir.python_print(kernel.compile_for_test(*args))
+    return sum(1 for line in text.splitlines() if ".load" in line)
+```
+
+<!-- doctest: run -->
+```python
+def emit_block(a, out, row0, k):            # a plain function: an expression helper
+    pl.store(pl.mul(pl.load(a, [row0, 0], [TILE_ROWS, COLS]), k), [row0, 0], out)
+
+
+@pl.jit_trace.body
+def body_block(a, out, row0, k):            # a declared statement fragment
+    pl.store(pl.mul(pl.load(a, [row0, 0], [TILE_ROWS, COLS]), k), [row0, 0], out)
+
+
+@pl.jit_trace
+def via_plain(
+    a: pl.Tensor[[ROWS, COLS], pl.FP32],
+    k: pl.Scalar[pl.FP32],
+    out: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP32]],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        for chunk in pl.range(ROWS // TILE_ROWS):
+            emit_block(a, out, chunk * TILE_ROWS, k)
+    return out
+
+
+@pl.jit_trace
+def via_body(
+    a: pl.Tensor[[ROWS, COLS], pl.FP32],
+    k: pl.Scalar[pl.FP32],
+    out: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP32]],
+):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        for chunk in pl.range(ROWS // TILE_ROWS):
+            body_block(a, out, chunk * TILE_ROWS, k)
+    return out
+
+
+a = torch.ones(ROWS, COLS, dtype=torch.float32)
+z = torch.zeros(ROWS, COLS, dtype=torch.float32)
+
+# The plain helper contributes nothing — no load, no store — and nothing raises.
+plain_program = ir.python_print(via_plain.compile_for_test(a, 2.0, z))
+assert loads(via_plain, a, 2.0, z) == 0
+assert ".store" not in plain_program
+via_plain(a, 2.0, z, config=CFG)          # runs; the output is simply never written
+
+# The declared body contributes its statements, and the kernel computes.
+assert loads(via_body, a, 2.0, z) == 1
+out = torch.zeros_like(a)
+via_body(a, 2.0, out, config=CFG)
+assert torch.allclose(out, a * 2.0)
+```
+
+`@pl.jit_trace.body` states the boundary. A body is prepared once and expanded where it is
+called, so the fragment needs no parameter or result annotations — the arguments are the
+call's staged values, and a value it returns crosses back into the caller's expression
+position:
 
 ```python
 @pl.jit_trace.body
+def scale_block(a, out, row0, k):
+    pl.store(pl.mul(pl.load(a, [row0, 0], [TILE_ROWS, COLS]), k), [row0, 0], out)
+
+@pl.jit_trace
+def entry(a: pl.Tensor, k: pl.Scalar[pl.FP32], out: pl.Out[pl.Tensor]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        for chunk in pl.range(4):
+            scale_block(a, out, chunk * TILE_ROWS, k)   # a call, not a callee
+    return out
+```
+
+Three rules follow from "a body is expanded, not called". It runs only inside a trace (a
+host call names the expansion rule and refuses); it cannot call another body — a body's
+parameters *are* the caller's names, so reuse between fragments is written in the calling
+body, or expressed as a `@pl.jit_trace.inline` callee; and its placement policy is
+declared, not passed — `@pl.jit_trace.body(auto_scope=False)` for a fragment that keeps
+its own `pl.at` scopes, while `auto_scope=` at a call site is refused.
+
+An `.inline` helper is the other way to reuse statements: it declares a typed `Inline`
+function *and* a call, and the inlining pass then erases the function. The catch is what
+survives inlining — an inline helper's body lands in its caller, so tile work needs its
+own `with pl.at(...)`, and its output parameter is the caller's alias (a bare
+`pl.Tensor`, not `pl.Out[...]`), since there is no callee signature to declare directions
+on. An `.incore` helper keeps its own placement by definition and stays in the program.
+
+### Objects that organize staged values
+
+Because the body runs, the ordinary Python answer to "too many constants and arguments"
+works: put them in an object. A dataclass whose fields are host data is configuration; a
+dataclass that *carries* a staged tile is a record — the object is Python and disappears,
+the staged value it holds is IR. Neither is a parameter: a bundle is expanded at the call
+site (`kernel(a, *expand(plan), out=out)`), and with a frozen dataclass and `fields()` in
+declaration order that expansion is the kernel's flat parameter list.
+
+```python
+@dataclass(frozen=True)
+class Plan:
+    tile_rows: int = TILE_ROWS
+    k: float = 2.0
+
+def expand(plan: Plan) -> tuple[object, ...]:
+    return tuple(getattr(plan, f.name) for f in fields(plan))
+
+entry(a, *expand(Plan(tile_rows=32, k=3.0)), out=out)   # two baked host knobs
+```
+
+An object passed *as* an argument is refused — the boundary accepts tensors, facades and
+host scalars — which is why the spelling above expands it first. When the fields should
+survive into the signature instead of baking, make them `pl.Scalar[...]` and expand
+exactly the same way.
+
+### Shared snippets: `pl.authoring.body(...).splice(...)`
+
+`pl.authoring.body` prepares a snippet you want pasted into its caller rather than
+called; `.splice(...)` places it at every occurrence. Its statements join the
+caller's IR — no function, no call — so it needs no parameter or result
+annotations at all:
+
+```python
+@pl.authoring.body
 def twice(x):
     return pl.add(x, x)
 
@@ -201,24 +396,18 @@ def twice(x):
 def entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile = pl.load(a, [0, 0], [64, 64])
-        pl.store(twice(tile), [0, 0], out)      # a Tile here ...
-        out[:, :] = twice(a)                    # ... a Tensor there
+        pl.store(twice.splice(tile), [0, 0], out)   # a Tile here ...
+        out[:, :] = twice.splice(a)                 # ... a Tensor there
     return out
 ```
 
 Use it when a helper is a snippet rather than a contract: it skips the IR
-signature, so one fragment serves several argument types, and a value it
-creates can be returned without a parameter backing it. Two rules still
-apply — it only runs inside a trace (a host call is refused), and staged
-typing still governs the fragment's interior, exactly as it does in the
-caller. Reach for `@pl.jit_trace.inline` when you want the body collected
-once and its signature declared; reach for `@pl.jit_trace.body` when there
-is nothing to declare.
-
-The framework-author spelling keeps the placement explicit:
-`pl.authoring.body(...).splice(...)` / `.inline(...)` / `.incore(...)` is the
-same lowering with the placement chosen per occurrence rather than at the
-declaration (see [Authoring Recipes](../../dev/language/07-authoring-recipes.md)).
+signature, so one body serves several argument types, and a value it creates can
+be returned without a parameter backing it. Two rules still apply — it only runs
+inside a trace (a host call is refused), and staged typing still governs the
+body's interior, exactly as it does in the caller. Reach for
+`@pl.jit_trace.inline` when you want the body collected once and its signature
+declared; reach for `pl.authoring.body(...).splice(...)` when there is nothing to declare.
 
 ### What a sub-function hands back keeps its shape and dtype
 
@@ -509,6 +698,12 @@ A hand-written C++ kernel can be called like any other function. See
 
 | Symptom | Likely cause | Fix |
 | ------- | ------------ | --- |
+| **A kernel that emits statements through a plain helper writes nothing** | A plain function is an expression helper, not a body: its `pl.store` lands nowhere and nothing raises | Declare the fragment `@pl.jit_trace.body` and call it |
+| **`... cannot be called from inside another body`** | A body calls another body, or a body calls itself | Write the statements in the calling body, or declare a `@pl.jit_trace.inline` callee |
+| **`... cannot run as a host call`** | A `@pl.jit_trace.body` was called outside a trace | Call it from inside a traced kernel |
+| **`auto_scope is declared on the body, not passed at the call site`** | The policy was passed at a call | Move `auto_scope=` to the `@pl.jit_trace.body(...)` declaration |
+| **`The tile '...' lives in a Orchestration function`** | An `.inline` helper did tile work without its own `pl.at` | Place the work: `with pl.at(level=pl.Level.CORE_GROUP):` inside the helper |
+| **`argument 'plan' (...) is not a tensor, facade, or host scalar`** | A host object was passed as a kernel parameter | Expand it at the call site (`*expand(plan)`), or pass its fields |
 | **`Misplaced tensor op ... should be inside InCore block`** | Operators directly in a `@pl.jit` body | Wrap in `with pl.at(level=pl.Level.CORE_GROUP):` or move to `@pl.jit.incore` |
 | **`AttributeError: 'JITFunction' object has no attribute 'as_python'`** | Printing IR that does not exist yet | `f.lower(*args)`, or `f.compile(*args)` then `compiled.program.as_python()` |
 | **`lower()` passes but `compile()` fails** | `lower()` runs no code generation | Expected — use `compile()` to check codegen |
@@ -524,9 +719,16 @@ A hand-written C++ kernel can be called like any other function. See
 `examples/utils/cross_function_calls.py` — `@pl.jit.inline` helpers auto-discovered as
 deps of a `@pl.jit` entry and spliced at the call site.
 
+| Example | Shows |
+| ------- | ----- |
+| `examples/tracing/03_host_objects.py` | Configuration, a record carrying a staged tile, and a bundle expanded into the parameter list |
+| `examples/tracing/04_body_placement.py` | `@pl.jit_trace.body` as a call, its value-return form, and the same statements pasted |
+| `examples/tracing/advanced/07_diagnostics.py` | The silent plain-helper trap and the declared repair |
+
 ## See Also
 
 - [Control Flow](02-control-flow.md) — loops and conditionals inside these bodies.
+- [Values and Staging](07-staging.md) — host versus staged values, and which control flow each produces.
 - [Scopes and Placement](04-scopes.md) — `pl.at` and the other placement scopes.
 - [Quickstart](../02-quickstart.md) — the same decorators in a worked example.
 - [InlineFunctions](../../dev/passes/01-inline_functions.md) — how `Inline` bodies are spliced.

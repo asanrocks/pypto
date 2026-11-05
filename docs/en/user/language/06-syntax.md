@@ -7,16 +7,22 @@ from the enclosing scope.
 
 ## Concept
 
-A decorator parses your source; it never runs it as Python. So the familiar syntax in a
-kernel body is **rewritten into IR operations**, not executed:
+`@pl.jit` **parses** your source: the body never runs as Python. So the familiar syntax in
+a kernel body is **rewritten into IR operations**, not executed:
 
 - A subscript is not an index operation — it becomes a slice, a read, or an assemble.
 - An operator is not Python's `+` — it becomes an IR op chosen from the operand types.
 - A name from the enclosing scope is resolved by the parser at parse time, not captured by
   a closure at call time.
 
-The practical consequence is that these constructs fail — or refuse to compile — at parse
-time with a line number, rather than surprising you at run time.
+`@pl.jit_trace` runs an instrumented copy of the body instead, so there an operator is an
+ordinary Python call on a staged value, and a name from the enclosing scope is an ordinary
+closure read. What both frontends share is the meaning of the staged operations; what
+differs is when they are produced. [Values and Staging](07-staging.md) covers the traced
+side; the rest of this page describes the parsing frontend.
+
+The practical consequence for a parsed kernel is that these constructs fail — or refuse to
+compile — at parse time with a line number, rather than surprising you at run time.
 
 ## Quickstart: the same slice, two ways
 
@@ -69,7 +75,8 @@ A scalar on either side is detected and dispatched to the scalar-operand form
 The decorator parses source, so a name from the enclosing Python scope is resolved by the
 parser, not captured by a closure at call time. Integer constants and constant arithmetic
 fold into the IR. A captured value that cannot be folded is an error at parse time, not a
-surprise at run time.
+surprise at run time. (In a traced kernel the same name is an ordinary closure read — see
+[Values and Staging](07-staging.md).)
 
 One consequence worth knowing: an expression like `pl.system.available_cluster_count()`
 should be written **inline** at the call site rather than bound to a name first. Binding it

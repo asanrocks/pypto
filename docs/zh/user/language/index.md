@@ -8,13 +8,14 @@
 
 一份按**能力**组织的指南（guide）—— 每页覆盖语言的一个部分及其边界情况。它不是教程：没有任何一页从头到尾搭出一个完整 kernel。它也不是 API 参考：要看签名去 [API 参考](../../api/index.md)，按名字查则从[算子目录](../ops/01-catalog.md)进。
 
-约定 `import pypto.language as pl` —— 本章所有名字都通过这个别名访问。
+约定 `import pypto.language as pl` —— 本章所有名字都通过这个别名访问。凡是分前端的规则 —— parser 前端的或 tracing 前端的 —— 页面会在该规则出现处说明；两种前端共享的值模型由[值与暂存](07-staging.md)负责陈述。
 
 ## 目录
 
 | 页面 | 覆盖内容 |
 | ---- | -------- |
 | [类型](00-types.md) | dtype、`Tensor` / `Tile` / `Scalar` / `Array` / `Tuple`、布局、动态 shape、参数方向 |
+| [值与暂存](07-staging.md) | host 值与 staged 值，以及谓词或可迭代对象的域如何决定程序里有什么 |
 | [函数与程序](01-functions.md) | `@pl.jit` 家族、`@pl.function`、`@pl.program`、`@pl.inline`、跨函数调用、外部 kernel |
 | [控制流](02-control-flow.md) | `pl.range` / `parallel` / `unroll` / `pipeline` / `while_`、循环携带值、`yield_`、`cond`、SSA |
 | [内存与数据搬运](03-memory.md) | 内存空间、`load` / `store` / `move`、`valid_shape` 与 `fillpad`、片上常驻 |
@@ -24,13 +25,15 @@
 
 ## 阅读顺序
 
-先读 [类型](00-types.md) 和 [函数与程序](01-functions.md) —— 其余每页都以这两页为前提。之后各页彼此独立：
+先读 [类型](00-types.md)、[值与暂存](07-staging.md) 和 [函数与程序](01-functions.md)
+—— 其余每页都以它们为前提。暂存那一页讲 traced kernel 体如何对待每个值；只有当你的
+kernel 全部留在 parser 前端时才可以跳过。之后各页彼此独立：
 
 ```text
-00-types ──► 01-functions ──┬─► 02-control-flow
-                            ├─► 03-memory
-                            ├─► 04-scopes   ← 如果你此前只写过单 kernel，
-                            └─► 05-directives           这一页的缺口最大
+00-types ──► 07-staging ──► 01-functions ──┬─► 02-control-flow
+                                           ├─► 03-memory
+                                           ├─► 04-scopes   ← 如果你此前只写过单 kernel，
+                                           └─► 05-directives           这一页的缺口最大
 ```
 
 [作用域与放置](04-scopes.md) 是多数读者在别处找不到对应材料的一页：它讲工作如何被放置到核上，以及运行时真正执行的那张任务图是怎么成形的。

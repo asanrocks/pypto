@@ -25,6 +25,15 @@ plus `yield_` is the same thing spelled out, and it is mandatory only for `pl.wh
 branch that produces a value, on the other hand, must always yield from both arms.
 Everything else on this page is a variation on those rules.
 
+One scope note, because the rule is frontend-specific: this page describes the **parsing**
+frontend, where a loop is *syntax* and the parser has to re-derive the carry from it. A
+`@pl.jit_trace` kernel is executed instead, so whether a statement is a loop, a branch or
+neither follows from the domain of its subject — see
+[Values and Staging § control flow](07-staging.md#control-flow-follows-the-subject). The
+loop *forms* below (`pl.range` and friends) are unchanged in a traced kernel; what changes
+is how the carry reaches the IR, covered in the
+[tracing subsection](#traced-kernels-the-subject-decides-the-control-flow).
+
 Four loop constructs share one syntax and differ only in what the compiler is told:
 
 ```text
@@ -157,6 +166,19 @@ for i, (prev,) in pl.range(4, init_values=(init,)):
 
 If one branch yields, the other must too. A branch with no value to produce yields
 nothing in either arm.
+
+### Traced kernels: the subject decides the control flow
+
+A traced kernel keeps these loop forms and drops the carry *bookkeeping*: bind staged state
+before the loop (or with `pl.const(...)`) and rebind it in the body — the trace derives the
+carry, so `init_values=` / `pl.yield_` are never written. Whether a given `for` / `if` /
+`while` is a staged construct at all is decided by its **subject**, and that rule — with
+the guards that make a wrong guess loud — is owned by
+[Values and Staging](07-staging.md#control-flow-follows-the-subject).
+
+Two spellings do not carry over. `pl.while_` and `pl.cond` are parse-time syntax and raise
+inside a trace; an ordinary `while` over a staged condition is the tracing spelling, and it
+records one `WhileStmt` with the carried values rebound in the body.
 
 ### SSA, and when you have to think about it
 
