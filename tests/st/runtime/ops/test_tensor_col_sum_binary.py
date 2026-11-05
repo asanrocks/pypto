@@ -18,7 +18,7 @@ from harness import st
 def _case(rows, cols, is_binary, dtype=pl.FP32):
     torch_dtype = torch.float32 if dtype == pl.FP32 else torch.int32
 
-    @pl.jit
+    @pl.jit_trace
     def kernel(
         x: pl.Tensor[[rows, cols], dtype],
         out: pl.Out[pl.Tensor[[1, cols], dtype]],

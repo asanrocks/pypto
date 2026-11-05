@@ -47,7 +47,7 @@ class TestOrchestrationLowering:
         program = example_orch.lower(a, b, output)
 
         # Verify post-pass IR shape: the example_orch entry composes three
-        # @pl.jit.incore helpers (kernel_add_16, kernel_add_scalar_16,
+        # @pl.jit_trace.incore helpers (kernel_add_16, kernel_add_scalar_16,
         # kernel_mul_16); after OutlineIncoreScopes / pass pipeline the program
         # should hold exactly one Orchestration function plus three on-chip
         # (AIV) functions outlined from the incore scopes.

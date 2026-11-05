@@ -23,13 +23,13 @@ from harness import st
 from harness.core import test_runner as tr
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _copy_kernel(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     value = pl.load(a, [0, 0], [16, 32])
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _copy_entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     out = _copy_kernel(a, out)
     return out

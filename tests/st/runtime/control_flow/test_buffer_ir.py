@@ -19,7 +19,7 @@ _ROWS, _COLS, _BAND, _CASES = 16, 32, 32, 4
 _PLANNERS = (passes.MemoryPlanner.PYPTO, passes.MemoryPlanner.DSA_RP, passes.MemoryPlanner.PTOAS)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _branch_kernel(
     a: pl.Tensor,
     b: pl.Tensor,
@@ -30,24 +30,28 @@ def _branch_kernel(
 ):
     lhs = pl.load(a, [0, 0], [_ROWS, _COLS])
     rhs = pl.load(b, [0, 0], [_ROWS, _COLS])
+    # The store column is branch-selected, so it must be a *staged* value on both
+    # sides: a host literal that differs per branch cannot cross the join.
     if flag > 0:
-        value, column = pl.yield_(pl.add(lhs, rhs), 1)
+        value = pl.add(lhs, rhs)
+        column = pl.const(1, pl.INT64)
     else:
-        value, column = pl.yield_(pl.mul(lhs, rhs), 3)
+        value = pl.mul(lhs, rhs)
+        column = pl.const(3, pl.INT64)
     stored = pl.store(value, [base, column], out)
     preserved = pl.store(lhs, [base, 0], saved)
-    return stored, preserved
+    return pl.Tuple(stored, preserved)
 
 
-@pl.jit
+@pl.jit_trace
 def _branch_entry(
     a: pl.Tensor, b: pl.Tensor, config: pl.Tensor, out: pl.InOut[pl.Tensor], saved: pl.InOut[pl.Tensor]
 ):
     for case_index in pl.range(_CASES):
         flag = pl.tensor.read(config, [case_index, 1])
-        base = case_index * _BAND
+        base = pl.cast(case_index * _BAND, pl.INT64)
         out, saved = _branch_kernel(a, b, out, saved, flag, base)
-    return out, saved
+    return pl.Tuple(out, saved)
 
 
 @pl.jit.incore

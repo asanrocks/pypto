@@ -42,7 +42,7 @@ ROW_TILE = 16
 M = 64  # concrete token dim: M // ROW_TILE = 4 fused cube→vec blocks
 
 
-@pl.jit
+@pl.jit_trace
 def fused_matmul_epilogue_dyn(
     a: pl.Tensor[[M_DYN, K], pl.FP32],
     b: pl.Tensor[[K, N], pl.FP32],

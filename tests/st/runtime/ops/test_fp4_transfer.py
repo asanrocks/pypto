@@ -18,7 +18,7 @@ from pypto.pypto_core.passes import MemoryPlanner
 
 
 def _transfer_entry(dtype: pl.DataType, dn: bool):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def entry(
         src: pl.Tensor[[32, 64], dtype],
         out: pl.InOut[pl.Tensor[[32, 64], dtype]],
@@ -96,7 +96,7 @@ def _fillpad_entry(dtype, operation, pad_value):
     expand = operation == "expand"
     inplace = operation == "inplace"
 
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def entry(src: pl.Tensor[[32, 64], dtype], out: pl.Out[pl.Tensor[[32, 64], dtype]]):
         with pl.spmd(1):
             row = pl.tile.get_block_idx() * 32
@@ -150,7 +150,7 @@ def test_packed_fp4_fillpad_carriers(case_run):
 
 
 def _int8_extract_entry(dtype):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def entry(src: pl.Tensor[[32, 64], dtype], out: pl.Out[pl.Tensor[[16, 32], dtype]]):
         with pl.spmd(1):
             block = pl.tile.get_block_idx()
@@ -166,7 +166,7 @@ def _int8_extract_entry(dtype):
 
 
 def _byte_assemble_entry(dtype):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def entry(src: pl.Tensor[[16, 32], dtype], out: pl.InOut[pl.Tensor[[32, 64], dtype]]):
         with pl.spmd(1):
             block = pl.tile.get_block_idx()

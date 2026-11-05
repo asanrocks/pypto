@@ -36,7 +36,7 @@ from harness import st
 M, K, N = 64, 256, 128
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _bypass_load_kernel(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[N, K], pl.FP16],
@@ -48,7 +48,7 @@ def _bypass_load_kernel(
     return pl.store(pl.matmul(xt, pl.tile.transpose_view(wt)), [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def bypass_load(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[N, K], pl.FP16],
@@ -57,7 +57,7 @@ def bypass_load(
     return _bypass_load_kernel(x, w, out)
 
 
-@pl.jit
+@pl.jit_trace
 def bypass_scope(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[K, N], pl.FP16],

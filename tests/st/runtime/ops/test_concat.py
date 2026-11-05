@@ -7,7 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Runtime tests for tile.concat (column-wise concatenation) using @pl.jit."""
+"""Runtime tests for tile.concat (column-wise concatenation) using @pl.jit_trace."""
 
 import pytest
 import torch

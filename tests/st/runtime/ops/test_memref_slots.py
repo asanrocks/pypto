@@ -56,7 +56,7 @@ TR, TC = 64, 64
 ROWS = TR * NT
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_slot_pingpong(
     a: pl.Tensor[[M, K], pl.FP32],
     a2: pl.Tensor[[M, K], pl.FP32],
@@ -85,7 +85,7 @@ def matmul_slot_pingpong(
             pl.store(other, [0, i * TN], out2)
 
 
-@pl.jit
+@pl.jit_trace
 def vector_slot_pingpong(
     a: pl.Tensor[[ROWS, TC], pl.FP32],
     b: pl.Tensor[[ROWS, TC], pl.FP32],

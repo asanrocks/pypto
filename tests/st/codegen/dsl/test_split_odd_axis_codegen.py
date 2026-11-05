@@ -55,7 +55,7 @@ ODD_BOX_ROWS = 17  # an odd source extent; its Acc box is 32, so lanes hold 16 a
 ODD_BOX_HALF = (ODD_BOX_ROWS + 1) // 2
 
 
-@pl.jit
+@pl.jit_trace
 def odd_rows(
     a: pl.Tensor[[ODD_VALID_M, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],
@@ -73,7 +73,7 @@ def odd_rows(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def deep_tail_rows(
     a: pl.Tensor[[DEEP_TAIL_VALID_M, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],
@@ -91,7 +91,7 @@ def deep_tail_rows(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def deep_tail_with_independent_value(
     a: pl.Tensor[[DEEP_TAIL_VALID_M, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],
@@ -117,7 +117,7 @@ def deep_tail_with_independent_value(
     return out, out2
 
 
-@pl.jit
+@pl.jit_trace
 def explicit_region_odd_box(
     a: pl.Tensor[[ODD_BOX_ROWS, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],
@@ -137,7 +137,7 @@ def explicit_region_odd_box(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def runtime_tail_rows(
     a: pl.Tensor[[ROWS, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],
@@ -162,7 +162,7 @@ def runtime_tail_rows(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def runtime_tail_fillpad_first(
     a: pl.Tensor[[ROWS, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],
@@ -181,7 +181,7 @@ def runtime_tail_fillpad_first(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def runtime_tail_store_first(
     a: pl.Tensor[[ROWS, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],

@@ -1061,7 +1061,7 @@ class TestGatherCompare:
         assert result.passed, f"Test failed: {result.error}"
 
 
-@pl.jit
+@pl.jit_trace
 def _flat_gather_gm(src: pl.Tensor, idx: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         indices = pl.add(idx, 1)
@@ -1069,7 +1069,7 @@ def _flat_gather_gm(src: pl.Tensor, idx: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def _flat_gather_local(src: pl.Tensor, idx: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         local = pl.add(src, 1)
@@ -1077,7 +1077,7 @@ def _flat_gather_local(src: pl.Tensor, idx: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def _flat_gather_strided_local(src: pl.Tensor, idx: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         local = pl.add(src, 1)
@@ -1086,7 +1086,7 @@ def _flat_gather_strided_local(src: pl.Tensor, idx: pl.Tensor, out: pl.Out[pl.Te
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def _flat_gather_strided_valid(src: pl.Tensor, idx: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         local = pl.add(src, 1)
@@ -1154,7 +1154,7 @@ def test_flat_gather(case_run):
 
 
 def _flat_gather_partial_case(local_source):
-    @pl.jit
+    @pl.jit_trace
     def partial_gather(src: pl.Tensor, idx: pl.Tensor, out: pl.InOut[pl.Tensor]):
         with pl.at(level=pl.Level.CORE_GROUP):
             if local_source:
@@ -1198,7 +1198,7 @@ def _flat_gather_narrow_case(valid_shape, dtype, computed_index):
     shape = (2, (valid_cols + alignment - 1) // alignment * alignment)
     rows, cols = shape
 
-    @pl.jit
+    @pl.jit_trace
     def narrow_gather(src: pl.Tensor, idx: pl.Tensor, out: pl.InOut[pl.Tensor]):
         with pl.at(level=pl.Level.CORE_GROUP):
             if computed_index:

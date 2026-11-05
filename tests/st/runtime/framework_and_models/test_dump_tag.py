@@ -72,7 +72,7 @@ _REQUIRED_FIELDS: dict[str, type | tuple[type, ...]] = {
 }
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def add_inline(a: pl.Tensor, c: pl.Tensor):
     """c = a + 1.0. Inline-scope dump_tag — desugars to ``dump_vars`` on the
     inline body's kernel call; after inlining, the mutator substitutes the
@@ -87,7 +87,7 @@ def add_inline(a: pl.Tensor, c: pl.Tensor):
     return c
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def mul_inline(a: pl.Tensor, c: pl.Tensor):
     """c = a * 2.0. No dump_tag here — its bindings should be filtered out."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -97,7 +97,7 @@ def mul_inline(a: pl.Tensor, c: pl.Tensor):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def add_mul_with_dump_tags(a: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Entry: c = (a + 1) * 2 with mixed-scope dump_tag markers."""
     intermediate = pl.create_tensor([128, 128], dtype=pl.FP32)

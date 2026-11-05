@@ -36,7 +36,7 @@ from harness import st
 # ---------------------------------------------------------------------------
 
 
-@pl.jit
+@pl.jit_trace
 def atomic_add_store_fp32(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``out += x`` via a single atomic-add store of the loaded tile."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -45,7 +45,7 @@ def atomic_add_store_fp32(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def atomic_add_store_int32(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """INT32 variant of :func:`atomic_add_store_fp32` (atomic-add accumulation)."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -54,7 +54,7 @@ def atomic_add_store_int32(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def atomic_add_store_bf16(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """BF16 variant of :func:`atomic_add_store_fp32` — a VECTOR-unit UB->GM atomic-add.
 
@@ -68,7 +68,7 @@ def atomic_add_store_bf16(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def atomic_add_store_fp16(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """FP16 VECTOR-unit UB->GM atomic-add (set_atomic_f16)."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -77,7 +77,7 @@ def atomic_add_store_fp16(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def atomic_add_store_int16(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """INT16 VECTOR-unit UB->GM atomic-add (set_atomic_s16)."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -86,7 +86,7 @@ def atomic_add_store_int16(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def atomic_add_store_int8(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """INT8 VECTOR-unit UB->GM atomic-add (set_atomic_s8).
 
@@ -110,7 +110,7 @@ _SPLIT_K_SPLITS = 4
 _SPLIT_K_KS = _SPLIT_K_K // _SPLIT_K_SPLITS
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_split_k_atomic(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """Split-K matmul: K split across ``_SPLIT_K_SPLITS`` parallel cores.
 
@@ -130,7 +130,7 @@ def matmul_split_k_atomic(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_split_k_atomic_bf16(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """BF16 split-K matmul — CUBE fix-pipe atomic-add straight into bf16 GM.
 
@@ -152,7 +152,7 @@ def matmul_split_k_atomic_bf16(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor])
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_split_k_atomic_int32(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """INT32 split-K matmul — CUBE int32 atomic-add (int8 x int8 -> int32 Acc).
 
@@ -172,7 +172,7 @@ def matmul_split_k_atomic_int32(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_split_k_atomic_fp16(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
     """FP16 split-K matmul — CUBE fix-pipe atomic-add straight into fp16 GM.
 

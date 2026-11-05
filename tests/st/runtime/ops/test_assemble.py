@@ -130,7 +130,7 @@ def test_tile_assemble(case_run):
 def _vec_columns_case(dtype, rows, row_offset, col_offset, valid_rows, valid_cols):
     """Distinct source rows expose pitch errors; nonzero targets expose clobbers."""
 
-    @pl.jit
+    @pl.jit_trace
     def insert_columns(x: pl.Tensor, initial: pl.Tensor, out: pl.Out[pl.Tensor]):
         with pl.at(level=pl.Level.CORE_GROUP):
             source = pl.load(x, [0, 0], [16, 128], valid_shape=[valid_rows, valid_cols])

@@ -107,7 +107,7 @@ _BIAS_INT_K = 512
 _BIAS_INT_N = 512
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_acc_mn_issue_2232(
     a: pl.Tensor[[_ACC_M, _ACC_K], pl.INT8],
     b: pl.Tensor[[_ACC_K, _ACC_N_TOTAL], pl.INT8],
@@ -129,7 +129,7 @@ def matmul_acc_mn_issue_2232(
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_acc_mn_boundaries(
     a: pl.Tensor[[_BOUNDARY_M, _BOUNDARY_K], pl.INT8],
     b: pl.Tensor[[_BOUNDARY_K, _BOUNDARY_N], pl.INT8],
@@ -150,7 +150,7 @@ def matmul_acc_mn_boundaries(
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_acc_n_boundary_retiles_k(
     a: pl.Tensor[[_BOUNDARY_M, _COMPOSE_K], pl.INT8],
     b: pl.Tensor[[_COMPOSE_K, _BOUNDARY_N], pl.INT8],
@@ -171,7 +171,7 @@ def matmul_acc_n_boundary_retiles_k(
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_bias_mn_k_direct(
     a: pl.Tensor[[_BIAS_M, _BIAS_K], pl.BF16],
     b: pl.Tensor[[_BIAS_K, _BIAS_N], pl.BF16],
@@ -188,7 +188,7 @@ def matmul_bias_mn_k_direct(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_bias_mn_k_scratch(
     a: pl.Tensor[[_BIAS_SCRATCH_M, _BIAS_SCRATCH_K], pl.BF16],
     b: pl.Tensor[[_BIAS_SCRATCH_K, _BIAS_SCRATCH_N], pl.BF16],
@@ -209,7 +209,7 @@ def matmul_bias_mn_k_scratch(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_bias_mn_boundary_direct(
     a: pl.Tensor[[_BIAS_BOUNDARY_M, _BIAS_BOUNDARY_K], pl.BF16],
     b: pl.Tensor[[_BIAS_BOUNDARY_K, _BIAS_BOUNDARY_N], pl.BF16],
@@ -226,7 +226,7 @@ def matmul_bias_mn_boundary_direct(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_bias_nondivisor_k_tail(
     a: pl.Tensor[[_BIAS_PEEL_M, _BIAS_PEEL_K], pl.BF16],
     b: pl.Tensor[[_BIAS_PEEL_K, _BIAS_PEEL_N], pl.BF16],
@@ -243,7 +243,7 @@ def matmul_bias_nondivisor_k_tail(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_bias_m_only_bias_resident(
     a: pl.Tensor[[_BIAS_M_ONLY_M, _BIAS_M_ONLY_K], pl.BF16],
     b: pl.Tensor[[_BIAS_M_ONLY_K, _BIAS_M_ONLY_N], pl.BF16],
@@ -261,7 +261,7 @@ def matmul_bias_m_only_bias_resident(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_bias_a2a3_int_direct(
     a: pl.Tensor[[_BIAS_INT_M, _BIAS_INT_K], pl.INT8],
     b: pl.Tensor[[_BIAS_INT_K, _BIAS_INT_N], pl.INT8],

@@ -44,7 +44,7 @@ DUMP_DIR = Path(__file__).resolve().parents[4] / "build_output" / "batch_matmul_
 _MAT_TO_MAT_TMOV = re.compile(r"pto\.tmov\s+ins\([^)]*loc=mat[^)]*\)\s*outs\([^)]*loc=mat[^)]*\)", re.DOTALL)
 
 
-@pl.jit
+@pl.jit_trace
 def batch_matmul_pipeline_repro(
     x: pl.Tensor[[1, T, K], pl.INT8],
     w: pl.Tensor[[1, N, K], pl.INT8],

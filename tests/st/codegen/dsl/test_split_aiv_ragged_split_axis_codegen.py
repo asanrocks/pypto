@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pypto.language as pl
 import pytest
-from pypto.language.parser.diagnostics import ParserSyntaxError
+from pypto.language.diagnostics import ParserError
 
 torch = pytest.importorskip("torch")
 
@@ -48,7 +48,7 @@ VALID_M = 5  # real accumulator rows: reaches lane 0 only
 VALID_N = 32  # real accumulator columns
 
 
-@pl.jit
+@pl.jit_trace
 def ragged_rows(
     a: pl.Tensor[[VALID_M, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],
@@ -64,7 +64,7 @@ def ragged_rows(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def ragged_cols_left_right(
     a: pl.Tensor[[ROWS, K], pl.BF16],
     w: pl.Tensor[[VALID_N, K], pl.BF16],
@@ -80,7 +80,7 @@ def ragged_cols_left_right(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def ragged_rows_and_cols(
     a: pl.Tensor[[VALID_M, K], pl.BF16],
     w: pl.Tensor[[VALID_N, K], pl.BF16],
@@ -97,7 +97,7 @@ def ragged_rows_and_cols(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def ragged_rows_nested(
     a: pl.Tensor[[VALID_M, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],
@@ -120,7 +120,7 @@ def ragged_rows_nested(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def ragged_rows_with_compute(
     a: pl.Tensor[[VALID_M, K], pl.BF16],
     w: pl.Tensor[[COLS, K], pl.BF16],
@@ -137,7 +137,7 @@ def ragged_rows_with_compute(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def hand_authored_partial_gather(
     x: pl.Tensor[[ROWS, K], pl.BF16],
     q: pl.Tensor[[ROWS, K], pl.BF16],
@@ -307,7 +307,7 @@ def test_hand_authored_partial_gather_is_rejected_where_the_lanes_are_known():
 
 def test_left_right_ragged_columns_are_rejected_with_a_dsl_fix():
     """The column field is pinned by the transport, so a per-lane column has no carrier."""
-    with pytest.raises(ParserSyntaxError) as exc:
+    with pytest.raises(ParserError) as exc:
         ragged_cols_left_right.lower(config=RunConfig(platform="a2a3"))
 
     # Valid M/N now reaches this check during parsing rather than lowering.
@@ -322,7 +322,7 @@ def test_left_right_ragged_columns_are_rejected_with_a_dsl_fix():
 
 def test_ragged_rows_with_narrowed_columns_are_rejected():
     """treshape restores the column extent statically and would clobber the per-lane row."""
-    with pytest.raises(ParserSyntaxError) as exc:
+    with pytest.raises(ParserError) as exc:
         ragged_rows_and_cols.lower(config=RunConfig(platform="a2a3"))
 
     # Valid M/N now reaches this check during parsing rather than lowering.

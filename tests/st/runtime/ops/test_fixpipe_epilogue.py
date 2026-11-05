@@ -70,7 +70,7 @@ FP16_MAX = 65504.0
 # ---------------------------------------------------------------------------
 
 
-@pl.jit
+@pl.jit_trace
 def score_dequant_relu_to_gm(k: pl.Tensor, q: pl.Tensor, out: pl.Out[pl.Tensor]):
     """The same epilogue on the direct-to-GM writeback."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -84,7 +84,7 @@ def score_dequant_relu_to_gm(k: pl.Tensor, q: pl.Tensor, out: pl.Out[pl.Tensor])
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def score_negative_scale_to_gm(k: pl.Tensor, q: pl.Tensor, out: pl.Out[pl.Tensor]):
     """A **negative** scale: the case that pins ReLU-before-scale.
 
@@ -104,7 +104,7 @@ def score_negative_scale_to_gm(k: pl.Tensor, q: pl.Tensor, out: pl.Out[pl.Tensor
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def score_inexact_scale_no_relu_to_gm(k: pl.Tensor, q: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``pre_quant`` with no activation, and a scale that is not a power of two.
 
@@ -123,7 +123,7 @@ def score_inexact_scale_no_relu_to_gm(k: pl.Tensor, q: pl.Tensor, out: pl.Out[pl
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def score_dequant_saturates_to_gm(k: pl.Tensor, q: pl.Tensor, out: pl.Out[pl.Tensor]):
     """A scale large enough that the dequantized value leaves the FP16 range.
 
@@ -146,7 +146,7 @@ def score_dequant_saturates_to_gm(k: pl.Tensor, q: pl.Tensor, out: pl.Out[pl.Ten
 # ---------------------------------------------------------------------------
 
 
-@pl.jit
+@pl.jit_trace
 def score_dequant_relu_to_mat(k: pl.Tensor, q: pl.Tensor, w: pl.Tensor, out: pl.Out[pl.Tensor]):
     """Scaled/ReLU INT32 L0C -> FP16 L1, followed by an FP16 matmul."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -167,7 +167,7 @@ def score_dequant_relu_to_mat(k: pl.Tensor, q: pl.Tensor, w: pl.Tensor, out: pl.
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_relu_to_mat(a: pl.Tensor, b: pl.Tensor, e: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``relu(a @ b) @ e`` with the ReLU on the cube and no scale at all.
 

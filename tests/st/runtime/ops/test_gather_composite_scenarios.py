@@ -32,7 +32,7 @@ def _conv_kernel(shape: tuple[int, ...], kernel_depth: int, stride: int, padding
     reduction = channels * kernel_depth * 3 * 3
     temporal_mask = 0.0 if replicate_past else 1.0
 
-    @pl.jit
+    @pl.jit_trace
     def convolution(
         src: pl.Tensor,
         weight: pl.Tensor,
@@ -179,7 +179,7 @@ def _grid_kernel(align_corners: bool, border: bool):
     upper_x = float(width - 1) if border else float(width)
     upper_y = float(height - 1) if border else float(height)
 
-    @pl.jit
+    @pl.jit_trace
     def grid_sample(src: pl.Tensor, grid: pl.Tensor, out: pl.Out[pl.Tensor]):
         _, _, points = grid.shape
         for batch in pl.range(batches):

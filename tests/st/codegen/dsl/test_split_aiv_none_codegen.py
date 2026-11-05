@@ -38,7 +38,7 @@ T, N = 128, 128
 DUMP_DIR = Path(__file__).resolve().parents[4] / "build_output" / "split_aiv_none_codegen"
 
 
-@pl.jit
+@pl.jit_trace
 def split_aiv_none_pipe(
     a: pl.Tensor[[T, N], pl.FP32],
     c: pl.Out[pl.Tensor[[T, N], pl.FP32]],

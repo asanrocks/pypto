@@ -72,7 +72,7 @@ def _tile(values: list[float]) -> torch.Tensor:
 def _make_program(saturation_mode: str | None):
     """One FP16 -> INT8 kernel per requested mode; ``None`` omits the kwarg entirely."""
 
-    @pl.jit.incore
+    @pl.jit_trace.incore
     def cast_kernel(
         src: pl.Tensor[[1, N], pl.FP16],
         out: pl.InOut[pl.Tensor[[1, N], pl.INT8]],
@@ -81,7 +81,7 @@ def _make_program(saturation_mode: str | None):
         quantized = pl.cast(tile, pl.INT8, mode="trunc", saturation_mode=saturation_mode)
         return pl.store(quantized, [0, 0], out)
 
-    @pl.jit
+    @pl.jit_trace
     def cast_program(
         src: pl.Tensor[[1, N], pl.FP16],
         out: pl.InOut[pl.Tensor[[1, N], pl.INT8]],
@@ -95,7 +95,7 @@ def _make_program(saturation_mode: str | None):
 # width; [1, 128] resolves to 256 bytes (see TcvtScratchCapacityBytes). Passing
 # it explicitly alongside ON exercises the level-3 two-operand tcvt form, which
 # the compiler never generates for a saturating cast on its own.
-@pl.jit.incore
+@pl.jit_trace.incore
 def _cast_on_explicit_tmp_kernel(
     src: pl.Tensor[[1, N], pl.FP16],
     out: pl.InOut[pl.Tensor[[1, N], pl.INT8]],
@@ -110,7 +110,7 @@ def _cast_on_explicit_tmp_kernel(
 
 # FP32 -> INT8 is not a native A2/A3 tcvt; LegalizeTileCast expands it to
 # FP32 -> FP16 -> INT8 and puts the requested saturation on the final hop.
-@pl.jit.incore
+@pl.jit_trace.incore
 def _cast_multihop_on_kernel(
     src: pl.Tensor[[1, N], pl.FP32],
     out: pl.InOut[pl.Tensor[[1, N], pl.INT8]],
@@ -120,7 +120,7 @@ def _cast_multihop_on_kernel(
     return pl.store(quantized, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _cast_on_explicit_tmp_program(
     src: pl.Tensor[[1, N], pl.FP16],
     out: pl.InOut[pl.Tensor[[1, N], pl.INT8]],
@@ -128,7 +128,7 @@ def _cast_on_explicit_tmp_program(
     return _cast_on_explicit_tmp_kernel(src, out)
 
 
-@pl.jit
+@pl.jit_trace
 def _cast_multihop_on_program(
     src: pl.Tensor[[1, N], pl.FP32],
     out: pl.InOut[pl.Tensor[[1, N], pl.INT8]],
@@ -187,7 +187,7 @@ def test_cast_saturation(case_run):
 
 
 def _make_planner_cast(dst_dtype, rows, valid_rows, valid_cols, cols=N, saturation_mode="off"):
-    @pl.jit
+    @pl.jit_trace
     def cast_program(src: pl.Tensor, out: pl.InOut[pl.Tensor]):
         with pl.at(level=pl.Level.CORE_GROUP):
             tile = pl.load(src, [0, 0], [rows, cols], valid_shape=[valid_rows, valid_cols])

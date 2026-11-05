@@ -670,7 +670,7 @@ def test_split_aiv_fused_mixed_codegen_vs_golden(
 # ---------------------------------------------------------------------------
 
 
-@pl.jit
+@pl.jit_trace
 def TensorSplitAivQkPvProgram(  # noqa: N802 — mirrors the sibling @pl.program class name
     q: pl.Tensor,
     k: pl.Tensor,

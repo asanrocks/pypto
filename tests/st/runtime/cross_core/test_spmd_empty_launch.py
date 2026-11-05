@@ -16,7 +16,7 @@ from harness.core.harness import PLATFORMS, DataType, PTOTestCase, TensorSpec
 from pypto import ir, passes
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def empty_spmd_initialize(
     a: pl.Out[pl.Tensor[[8, 128], pl.FP32]], b: pl.Out[pl.Tensor[[8, 128], pl.FP32]]
 ) -> tuple[pl.Tensor[[8, 128], pl.FP32], pl.Tensor[[8, 128], pl.FP32]]:
@@ -27,7 +27,7 @@ def empty_spmd_initialize(
     return a, b
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def empty_spmd_producer(
     a: pl.Out[pl.Tensor[[8, 128], pl.FP32]], b: pl.Out[pl.Tensor[[8, 128], pl.FP32]]
 ) -> tuple[pl.Tensor[[8, 128], pl.FP32], pl.Tensor[[8, 128], pl.FP32]]:
@@ -39,7 +39,7 @@ def empty_spmd_producer(
     return b, a
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def empty_spmd_consumer(
     a: pl.Tensor[[8, 128], pl.FP32],
     b: pl.Tensor[[8, 128], pl.FP32],
@@ -50,7 +50,7 @@ def empty_spmd_consumer(
     return pl.store(pl.tile.sub(ta, tb), [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def empty_spmd_main(
     ctrl: pl.Tensor[[3], pl.INT32],
     a: pl.Tensor[[8, 128], pl.FP32],

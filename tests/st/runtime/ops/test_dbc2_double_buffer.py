@@ -115,7 +115,7 @@ class _DbcDirectStore(PTOTestCase):
     def get_program(self) -> Any:
         M, K, N = self.M, self.K, self.N
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def kernel(
             a: pl.Tensor[[M, K], pl.FP32],
             b: pl.Tensor[[K, N], pl.FP32],
@@ -131,7 +131,7 @@ class _DbcDirectStore(PTOTestCase):
             out = pl.store(c, [0, 0], out)
             return out
 
-        @pl.jit
+        @pl.jit_trace
         def orchestrator(
             a: pl.Tensor[[M, K], pl.FP32],
             b: pl.Tensor[[K, N], pl.FP32],
@@ -202,7 +202,7 @@ class _DbcMatScratch(PTOTestCase):
     def get_program(self) -> Any:
         M, K, N, P = self.M, self.K, self.N, self.P
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def kernel(
             a: pl.Tensor[[M, K], pl.BF16],
             b: pl.Tensor[[K, N], pl.BF16],
@@ -215,7 +215,7 @@ class _DbcMatScratch(PTOTestCase):
             out = pl.assemble(out, d, [0, 0])
             return out
 
-        @pl.jit
+        @pl.jit_trace
         def orchestrator(
             a: pl.Tensor[[M, K], pl.BF16],
             b: pl.Tensor[[K, N], pl.BF16],

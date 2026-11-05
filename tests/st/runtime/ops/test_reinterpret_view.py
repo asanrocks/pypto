@@ -160,7 +160,7 @@ class TestReinterpretView:
 def make_fp4_byte_decode_region(row_start: int, column_start: int):
     """Decode two tiles through one UB allocation, retaining GM byte offsets."""
 
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def decode(
         packed: pl.Tensor[[128, 320], pl.UINT8],
         output: pl.InOut[pl.Tensor[[128, 640], pl.BF16]],
@@ -234,7 +234,7 @@ def test_fp4_byte_decode_offsets_and_reuse_are_bit_exact(test_config, planner, r
         )
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _packed_fp4_alias_kernel(
     data: pl.Tensor[[16, 64], pl.FP4E2M1X2],
     output: pl.Out[pl.Tensor[[8, 256], pl.BF16]],
@@ -256,7 +256,7 @@ def _packed_fp4_alias_kernel(
     return result
 
 
-@pl.jit
+@pl.jit_trace
 def _packed_fp4_alias_entry(
     data: pl.Tensor[[16, 64], pl.FP4E2M1X2],
     output: pl.Out[pl.Tensor[[8, 256], pl.BF16]],
