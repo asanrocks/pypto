@@ -36,21 +36,18 @@ from pypto.language.typing.tensor import Tensor, TensorMeta
 class DistributedTensorMeta(TensorMeta):
     """Metaclass enabling ``pld.DistributedTensor[...]`` syntax.
 
-    Accepts the legacy ``"window_buffer=<name>"`` informational marker used by
-    older EXPLICIT dumps. New lossless dumps use ``pl._dump.window_ref`` in
-    annotations; the AST type resolver binds those references to scope slots.
+    Inherits :class:`TensorMeta`'s subscript dispatch, except it drops a trailing
+    ``"window_buffer=<name>"`` debug marker before delegating. ``PassDumpLevel.
+    EXPLICIT`` dumps append that marker as an extra subscript element to surface a
+    distributed tensor's window-buffer back-reference (issue #2088); it is
+    informational only — the real reference re-derives from ``pld.tensor.window``
+    — so ignoring it on parse keeps EXPLICIT pass dumps reparseable, which
+    ``validate_ir`` relies on (it reloads every dump via ``pl.loads``).
     """
 
-    def __getitem__(cls, item: Any) -> "DistributedTensor":
-        # isinstance narrows Any to tuple[Unknown, ...]; rebind the narrowed
-        # container through a cast so element access stays fully typed.
-        if isinstance(item, tuple):
-            args = cast("tuple[Any, ...]", item)
-            if args:
-                last = args[-1]
-                if isinstance(last, str) and last.startswith("window_buffer="):
-                    args = args[:-1]
-            item = args
+    def __getitem__(cls, item: tuple[Any, ...]) -> "DistributedTensor":
+        if item and isinstance(item[-1], str) and item[-1].startswith("window_buffer="):
+            item = item[:-1]
         return cast("DistributedTensor", super().__getitem__(item))
 
 
@@ -67,7 +64,13 @@ class DistributedTensor(Tensor, metaclass=DistributedTensorMeta):
 
     @classmethod
     def __class_getitem__(cls, item: tuple[Sequence[Any], Any]) -> "DistributedTensor":
-        return DistributedTensorMeta.__getitem__(cls, item)
+        """The static-checker hook for ``DistributedTensor[...]`` syntax.
+
+        Runtime never calls this — the ``DistributedTensorMeta.__getitem__``
+        subscript protocol takes precedence — but pyright resolves class
+        subscripts through this signature (the ``Tensor`` precedent).
+        """
+        raise NotImplementedError
 
 
 __all__ = ["DistributedTensor"]

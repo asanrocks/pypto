@@ -14,7 +14,7 @@ matching IR builder in :mod:`pypto.ir.op.distributed.tile_ops`.
 """
 
 from collections.abc import Sequence
-from typing import TypeGuard
+from typing import Any, TypeGuard
 
 from pypto.ir.op.distributed import tile_ops as _ir_tile
 from pypto.language.typing import IntLike, Tile
@@ -94,6 +94,11 @@ def remote_load(
         )
         raise TypeError(f"pld.tile.remote_load expects a DistributedTensor target (window-bound); got {got}")
 
+    if not isinstance(offsets, (list, tuple)):
+        raise TypeError(
+            f"pld.tile.remote_load: offsets must be a list of indices, got {offsets!r} "
+            f"({type(offsets).__name__})"
+        )
     normalized_valid_shape = None if valid_shape is None else _normalize_intlike(valid_shape)
     call = _ir_tile.remote_load(
         target_expr,
@@ -105,10 +110,6 @@ def remote_load(
     return Tile(expr=call)
 
 
-# Reparse target for the printer's ``pld.tile._remote_load_with_physical_tail_padding``
-# spelling (python_printer.cpp emits it when a remote_load carries physical tail
-# padding); the parser resolves printed ``pld.tile.*`` names by attribute lookup,
-# which pyright's unused analysis cannot see.
 def _remote_load_with_physical_tail_padding(  # pyright: ignore[reportUnusedFunction]
     target: DistributedTensor,
     peer: IntLike,
@@ -208,7 +209,7 @@ def put(
     peer: IntLike,
     src: DistributedTensor | Tensor,
     stage: Tile,
-    stage2: Tile | Sequence[IntLike] | None = None,
+    stage2: Tile | None = None,
     dst_offsets: Sequence[IntLike] | None = None,
     src_offsets: Sequence[IntLike] | None = None,
     shape: Sequence[IntLike] | None = None,
@@ -267,7 +268,7 @@ def get(
     peer: IntLike,
     src: DistributedTensor,
     stage: Tile,
-    stage2: Tile | Sequence[IntLike] | None = None,
+    stage2: Tile | None = None,
     dst_offsets: Sequence[IntLike] | None = None,
     src_offsets: Sequence[IntLike] | None = None,
     shape: Sequence[IntLike] | None = None,
@@ -315,3 +316,24 @@ def get(
 
 
 __all__ = ["get", "remote_load", "remote_store", "put"]
+
+
+def __getattr__(name: str) -> Any:
+    """Loud unknown-op error at the 3-segment dispatch surface.
+
+    The traced frontend resolves ``pld.tile.<op>(...)`` by plain attribute
+    access (calls pass through); an unknown subop would otherwise
+    surface as a bare module AttributeError whose message lacks the
+    ``pld.tile.`` namespace the AST parser's dispatch errors carry. Raising
+    a named AttributeError here keeps ``hasattr`` (the AST parser's own
+    dispatch probe) returning False while giving the traced path a message
+    the parser tests' ``match="pld..."`` pins accept.
+    """
+    raise AttributeError(f"pld.tile.{name} is not a known distributed operation")
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see language/op/_validation.py).
+from pypto.language.op._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

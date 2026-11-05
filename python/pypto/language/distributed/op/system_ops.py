@@ -35,9 +35,11 @@ Typical use sites for ``world_size``:
 """
 
 from collections.abc import Sequence
+from typing import Any
 
 from pypto.ir.op.distributed import system_ops as _ir_system
 from pypto.language.typing import IntLike, Scalar
+from pypto.pypto_core import ir
 from pypto.pypto_core.ir import Call, NotifyOp, WaitCmp
 
 from ..typing.comm_ctx import CommCtx
@@ -48,17 +50,29 @@ from ._utils import _normalize_intlike, _unwrap
 def world_size() -> Scalar:
     """Return the distributed world size as an ``INT64`` :class:`Scalar`.
 
-    Parser context (host-only, not inside a nested device-side scope) is
-    validated by the parser before this wrapper is invoked. The DSL-side
-    return wrapping lets call sites compose naturally with Python operators
-    (``pld.world_size() * 4``, ``pl.range(pld.world_size())``), which the
-    parser's ``invoke_dsl`` unwraps back to the underlying Call.
+    **BAND-AID host-only guard (collect-time, lexical-scope):** a
+    ``world_size`` call inside a device ``InCore`` / ``Spmd`` scope is
+    not lowerable (device code cannot query the host's comm-domain
+    size). This guard pings the ambient Sema through ``active_frame()``
+    (→ ``PtoFrame.is_inside_device_scope``) and raises
+    at collect time. It is a **lowerability invariant that belongs in
+    the IR verifier** (post-``OutlineIncoreScopes``): this check sees
+    only the trace-time lexical scope, which diverges from the lowered
+    scope under outlining passes, and it does not catch a device-level
+    function with no ``pl.at`` wrapper. Retire
+    when the C++ verifier owns the invariant (issue TBD). Outside a
+    trace (``ctx is None``) the call is inert (no collect, no guard).
+
+    The DSL-side return wrapping lets call sites compose naturally with
+    Python operators (``pld.world_size() * 4``, ``pl.range(pld.world_size())``),
+    which the parser's ``invoke_dsl`` unwraps back to the underlying Call.
 
     .. warning::
 
        This function is callable **only** inside HOST-level orchestration
        (``level=pl.Level.HOST, role=pl.Role.Orchestrator``). Calling it
-       inside InCore (``type=pl.FunctionType.InCore``) raises a parser error.
+       inside InCore (``type=pl.FunctionType.InCore``) raises at collect
+       time.
 
     .. seealso::
 
@@ -66,6 +80,14 @@ def world_size() -> Scalar:
        kernels, called on a :class:`CommCtx` obtained via
        :func:`get_comm_ctx`.
     """
+    from pypto.language.ambient import active_frame  # noqa: PLC0415
+
+    frame = active_frame()
+    if frame is not None and frame.is_inside_device_scope():
+        raise TypeError(
+            "pld.world_size() can only be called in HOST orchestration context "
+            "(not inside InCore / SPMD scopes); the call is not lowerable in device code"
+        )
     return Scalar(expr=_ir_system.world_size())
 
 
@@ -128,6 +150,7 @@ def notify(
     value: IntLike,
     *,
     op: NotifyOp,
+    attrs: dict[str, object] | None = None,
 ) -> Call:
     """Cross-rank notify: deposit ``value`` at the peer rank's slot of ``target``.
 
@@ -153,8 +176,16 @@ def notify(
         value: Scalar payload to deposit at the peer slot.
         op: :class:`pld.NotifyOp` selecting atomic-add vs set semantics
             (keyword-only).
+        attrs: Machine-only call attrs round-tripped through the printer
+            (e.g. ``core_placement``) — re-attached to the Call via
+            ``ir.set_call_attrs`` (the AST parser's ``_attach_op_attrs``
+            accepts it on every op call; the facade states it where the
+            printer emits it).
     """
-    return _ir_system.notify(_unwrap(target), _unwrap(peer), _normalize_intlike(offsets), _unwrap(value), op)
+    call = _ir_system.notify(_unwrap(target), _unwrap(peer), _normalize_intlike(offsets), _unwrap(value), op)
+    if attrs:
+        call = ir.set_call_attrs(call, attrs)
+    return call
 
 
 def wait(
@@ -208,3 +239,24 @@ def defer_wait(
 
 
 __all__ = ["defer_wait", "get_comm_ctx", "notify", "nranks", "rank", "wait", "world_size"]
+
+
+def __getattr__(name: str) -> Any:
+    """Loud unknown-op error at the 3-segment dispatch surface.
+
+    The traced frontend resolves ``pld.system.<op>(...)`` by plain attribute
+    access (calls pass through); an unknown subop would otherwise
+    surface as a bare module AttributeError whose message lacks the
+    ``pld.system.`` namespace the AST parser's dispatch errors carry. Raising
+    a named AttributeError here keeps ``hasattr`` (the AST parser's own
+    dispatch probe) returning False while giving the traced path a message
+    the parser tests' ``match="pld..."`` pins accept.
+    """
+    raise AttributeError(f"pld.system.{name} is not a known distributed operation")
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see language/op/_validation.py).
+from pypto.language.op._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)
