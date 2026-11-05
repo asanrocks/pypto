@@ -123,6 +123,16 @@ def read_receipt(receipt: Path) -> list[dict[str, Any]]:
 
 def compile_entry(lib: Path, entry: str, platform: str, receipt: Path, argv: list[str] | None = None) -> None:
     """Force every golden.run call through its real compile-only pipeline."""
+    # A scikit-build-core editable install fronts every package it owns with a
+    # meta-path finder bound to its own checkout, and a meta-path finder outranks
+    # sys.path. The library paths below are this harness's whole shadowing
+    # mechanism, so with an editable install the model would import the checkout's
+    # ``pypto`` instead of the library's. CI installs a wheel, which has no such
+    # finder; dropping them makes both layouts behave the same.
+    for finder in list(sys.meta_path):
+        module_name = type(finder).__module__
+        if module_name.startswith("_editable_skbc") or "ScikitBuild" in type(finder).__name__:
+            sys.meta_path.remove(finder)
     sys.path[:0] = [str(lib), str((lib / entry).parent)]
     golden: Any = importlib.import_module("golden")
     runner: Any = importlib.import_module("golden.runner")
