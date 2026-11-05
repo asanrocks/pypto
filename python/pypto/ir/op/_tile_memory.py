@@ -965,7 +965,12 @@ def reinterpret_view(
 
 
 def _normalize_axis_const(axis: object, span: Span, name: str) -> ConstInt:
-    """Normalize an axis argument (int or ConstInt) into a ConstInt(INDEX) expression."""
+    """Normalize an axis argument (int or ConstInt) into a ConstInt(INDEX) expression.
+
+    The axis arrives from dynamic callers (op-wrapper boundaries), so the
+    parameter is honestly ``object`` and the isinstance chain is the contract —
+    anything but int/ConstInt is loud.
+    """
     if isinstance(axis, ConstInt):
         return axis
     if isinstance(axis, int):

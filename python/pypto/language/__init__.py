@@ -73,13 +73,13 @@ if TYPE_CHECKING:
     from .parser.decorator import InlineFunction, function, inline, program
     from .parser.text_parser import loads, loads_program, parse, parse_program
 
+from .compat.diagnostics import static_assert, static_print
 from .constructs import optimizations as optimizations
 from .constructs.optimizations import cross_core_slot, split
 from .dsl_api import (
     at,
     cluster,
     cond,
-    const,
     func_attr,
     graph,
     hardware_loop,
@@ -88,8 +88,6 @@ from .dsl_api import (
     range,
     split_aiv,
     spmd,
-    static_assert,
-    static_print,
     unroll,
     while_,
     yield_,
@@ -146,7 +144,6 @@ from .op.tile_ops import (
     aic_gather,
     aiv_shard,
     cmps,
-    create_tile,
     gatherb,
     gemv,
     gemv_acc,
@@ -204,6 +201,7 @@ from .op.unified_ops import (
     col_sum,
     concat,
     cos,
+    create_tile,
     div,
     exp,
     expands,
@@ -285,8 +283,10 @@ from .typing import (
     Tuple,
     constexpr,
     dynamic,
+    runtime,
 )
 from .typing import arg_direction as adir
+from .typing.const import const
 
 # Short alias for MemorySpace (pl.Mem.Vec instead of pl.MemorySpace.Vec)
 Mem = MemorySpace
@@ -390,6 +390,7 @@ __all__ = [
     "Out",
     "RUNTIME",
     "dynamic",
+    "runtime",
     "const",
     "hardware_loop",
     "range",

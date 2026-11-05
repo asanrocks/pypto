@@ -120,18 +120,18 @@ _MGATHER_COALESCE = {"row": 0, "elem": 1}
 _MGATHER_GATHER_OOB = {"undefined": 0, "clamp": 1, "wrap": 2, "zero": 3}
 
 
-def _resolve_mgather_coalesce(coalesce: object) -> int:
+def _resolve_mgather_coalesce(coalesce: str | int) -> int:
     if isinstance(coalesce, str):
         try:
             return _MGATHER_COALESCE[coalesce]
         except KeyError as e:
             raise ValueError(f"mgather coalesce must be 'row', 'elem', 0, or 1, got {coalesce!r}") from e
-    if isinstance(coalesce, int) and not isinstance(coalesce, bool) and coalesce in (0, 1):
+    if not isinstance(coalesce, bool) and coalesce in (0, 1):
         return coalesce
     raise ValueError(f"mgather coalesce must be 'row', 'elem', 0, or 1, got {coalesce!r}")
 
 
-def _resolve_mgather_gather_oob(gather_oob: object) -> int:
+def _resolve_mgather_gather_oob(gather_oob: str | int) -> int:
     if isinstance(gather_oob, str):
         try:
             return _MGATHER_GATHER_OOB[gather_oob]
@@ -140,7 +140,7 @@ def _resolve_mgather_gather_oob(gather_oob: object) -> int:
                 "mgather gather_oob must be 'undefined', 'clamp', 'wrap', 'zero', or int 0-3, "
                 f"got {gather_oob!r}"
             ) from e
-    if isinstance(gather_oob, int) and not isinstance(gather_oob, bool) and gather_oob in range(4):
+    if not isinstance(gather_oob, bool) and gather_oob in range(4):
         return gather_oob
     raise ValueError(
         f"mgather gather_oob must be 'undefined', 'clamp', 'wrap', 'zero', or int 0-3, got {gather_oob!r}"
@@ -299,12 +299,18 @@ def gather_mask(
 _GATHER_COMPARE_CMP_MODES = ("eq", "ne", "lt", "le", "gt", "ge")
 
 
-def resolve_gather_compare_cmp_mode(cmp_mode: object) -> int:
+def resolve_gather_compare_cmp_mode(cmp_mode: str | int) -> int:
     """Normalize a gather_compare cmp_mode to its integer enum value.
 
     Accepts either a string in ``{"eq", "ne", "lt", "le", "gt", "ge"}`` or
     an int in ``[0, 5]``. Raises ``ValueError`` on anything else.
     """
+    if not isinstance(cmp_mode, bool) and isinstance(cmp_mode, int):
+        if 0 <= cmp_mode < len(_GATHER_COMPARE_CMP_MODES):
+            return cmp_mode
+        raise ValueError(
+            f"Invalid cmp_mode {cmp_mode}: int must be in [0, {len(_GATHER_COMPARE_CMP_MODES) - 1}]"
+        )
     if isinstance(cmp_mode, str):
         try:
             return _GATHER_COMPARE_CMP_MODES.index(cmp_mode)
@@ -312,12 +318,6 @@ def resolve_gather_compare_cmp_mode(cmp_mode: object) -> int:
             raise ValueError(
                 f"Invalid cmp_mode {cmp_mode!r}: expected one of {list(_GATHER_COMPARE_CMP_MODES)} or int 0-5"
             ) from e
-    if isinstance(cmp_mode, int) and not isinstance(cmp_mode, bool):
-        if 0 <= cmp_mode < len(_GATHER_COMPARE_CMP_MODES):
-            return cmp_mode
-        raise ValueError(
-            f"Invalid cmp_mode {cmp_mode}: int must be in [0, {len(_GATHER_COMPARE_CMP_MODES) - 1}]"
-        )
     raise ValueError(f"Invalid cmp_mode {cmp_mode!r}: expected str or int 0-5")
 
 

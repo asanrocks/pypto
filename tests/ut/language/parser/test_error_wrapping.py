@@ -277,7 +277,10 @@ class TestProgramCatchAll:
 
 
 class TestTypeMismatchReassignment:
-    """Tests for rejecting reassignment with a different type (#642)."""
+    """Tests for rejecting reassignment with a different type (#642).
+
+    The relaxed fresh-let rule is the tracing frontend's behavior; the parsing
+    frontend keeps its upstream contract and rejects the rebind."""
 
     def test_reassign_same_type_succeeds(self):
         """Reassigning with the same type is allowed."""
