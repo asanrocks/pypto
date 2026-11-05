@@ -299,7 +299,7 @@ class TestNarrowedAccEpilogue:
 def _auto_split_epilogue(mode: pl.SplitMode, valid_rows: int):
     """A ``pl.split`` scope over an accumulator narrowed through its left operand."""
 
-    @pl.jit
+    @pl.jit_trace
     def narrowed_acc_auto_split(
         x: pl.Tensor[[M_TILE, K_ONE_BLOCK], pl.INT8],
         w: pl.Tensor[[N_TILE, K_ONE_BLOCK], pl.INT8],
@@ -314,7 +314,7 @@ def _auto_split_epilogue(mode: pl.SplitMode, valid_rows: int):
     return narrowed_acc_auto_split
 
 
-@pl.jit
+@pl.jit_trace
 def narrowed_acc_explicit_split(
     x: pl.Tensor[[M_TILE, K_ONE_BLOCK], pl.INT8],
     w: pl.Tensor[[N_TILE, K_ONE_BLOCK], pl.INT8],
@@ -331,7 +331,7 @@ def narrowed_acc_explicit_split(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def narrowed_acc_auto_runtime(
     x: pl.Tensor[[M_TILE, K_ONE_BLOCK], pl.INT8],
     w: pl.Tensor[[N_TILE, K_ONE_BLOCK], pl.INT8],
@@ -351,7 +351,7 @@ def narrowed_acc_auto_runtime(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def narrowed_acc_region_runtime(
     x: pl.Tensor[[M_TILE, K_ONE_BLOCK], pl.INT8],
     w: pl.Tensor[[N_TILE, K_ONE_BLOCK], pl.INT8],
@@ -370,7 +370,7 @@ def narrowed_acc_region_runtime(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def narrowed_acc_auto_runtime_row_sum(
     x: pl.Tensor[[M_TILE, K_ONE_BLOCK], pl.INT8],
     w: pl.Tensor[[N_TILE, K_ONE_BLOCK], pl.INT8],
@@ -390,7 +390,7 @@ def narrowed_acc_auto_runtime_row_sum(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def narrowed_acc_auto_runtime_two_stores(
     x: pl.Tensor[[M_TILE, K_ONE_BLOCK], pl.INT8],
     w: pl.Tensor[[N_TILE, K_ONE_BLOCK], pl.INT8],

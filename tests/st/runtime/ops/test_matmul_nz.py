@@ -121,7 +121,7 @@ def _unpack_nz(packed: torch.Tensor) -> torch.Tensor:
 # ============================================================================
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _nz_matmul_kernel(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[N, K], pl.FP16, pl.NZ],
@@ -133,7 +133,7 @@ def _nz_matmul_kernel(
     return pl.store(pl.matmul(xt, pl.tile.transpose_view(wt)), [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def nz_matmul(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[N, K], pl.FP16, pl.NZ],
@@ -142,7 +142,7 @@ def nz_matmul(
     return _nz_matmul_kernel(x, w, out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _nz_matmul_n_sliced_kernel(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[N, K], pl.FP16, pl.NZ],
@@ -163,7 +163,7 @@ def _nz_matmul_n_sliced_kernel(
     return pl.store(pl.matmul(xt, pl.tile.transpose_view(hi)), [0, N_TILE], out)
 
 
-@pl.jit
+@pl.jit_trace
 def nz_matmul_n_sliced(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[N, K], pl.FP16, pl.NZ],
@@ -172,7 +172,7 @@ def nz_matmul_n_sliced(
     return _nz_matmul_n_sliced_kernel(x, w, out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _nz_matmul_k_sliced_kernel(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[N, K], pl.FP16, pl.NZ],
@@ -189,7 +189,7 @@ def _nz_matmul_k_sliced_kernel(
     return pl.store(pl.matmul(xt, pl.tile.transpose_view(wt)), [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def nz_matmul_k_sliced(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[N, K], pl.FP16, pl.NZ],
@@ -198,7 +198,7 @@ def nz_matmul_k_sliced(
     return _nz_matmul_k_sliced_kernel(x, w, out)
 
 
-@pl.jit.inline(auto_scope=False)
+@pl.jit_trace.inline(auto_scope=False)
 def _nz_matmul_layer_body(
     x: pl.Tensor[[M, K], pl.FP16],
     w_layer: pl.Tensor[[1, N, K], pl.FP16, pl.NZ],
@@ -225,7 +225,7 @@ def _nz_matmul_layer_body(
         out[:, n0 : n0 + N_TILE] = pl.reshape(acc, [M, N_TILE])
 
 
-@pl.jit(auto_scope=False)
+@pl.jit_trace(auto_scope=False)
 def nz_matmul_layer_sliced(
     x: pl.Tensor[[M, K], pl.FP16],
     w: pl.Tensor[[LAYERS, N, K], pl.FP16, pl.NZ],

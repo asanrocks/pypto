@@ -62,7 +62,7 @@ MM_K = 128
 MM_N = 32
 
 
-@pl.jit
+@pl.jit_trace
 def split_none_reshape(
     x: pl.Tensor[[T, C], pl.BF16],
     y: pl.Out[pl.Tensor[[T, C], pl.BF16]],
@@ -82,7 +82,7 @@ def split_none_reshape(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def split_updown_reshape(
     x: pl.Tensor[[T, C], pl.BF16],
     y: pl.Out[pl.Tensor[[T, C], pl.BF16]],
@@ -102,7 +102,7 @@ def split_updown_reshape(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def split_none_direct(
     x: pl.Tensor[[T, C], pl.BF16],
     y: pl.Out[pl.Tensor[[T, C], pl.BF16]],
@@ -119,7 +119,7 @@ def split_none_direct(
     return y
 
 
-@pl.jit
+@pl.jit_trace
 def split_updown_direct(
     x: pl.Tensor[[T, C], pl.BF16],
     y: pl.Out[pl.Tensor[[T, C], pl.BF16]],

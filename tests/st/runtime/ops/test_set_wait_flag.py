@@ -25,7 +25,7 @@ ROWS = 1
 COLS = 256
 
 
-@pl.jit
+@pl.jit_trace
 def explicit_flags_double(
     x: pl.Tensor[[ROWS, COLS], pl.FP32],
     out: pl.Out[pl.Tensor[[ROWS, COLS], pl.FP32]],

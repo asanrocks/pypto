@@ -20,7 +20,7 @@ is the user's choice (it strongly affects performance).
 ``FlattenTileNdTo2D`` then only needs to lower the per-chunk ``[1, CHUNK, 512]``
 tile to ``[CHUNK, 512]`` while **preserving the dynamic ``valid_shape``**
 (``ComputeMergedValidShape``) so the runtime tail survives. This test pins that
-the full ``@pl.jit`` lowering pipeline accepts such a kernel.
+the full ``@pl.jit_trace`` lowering pipeline accepts such a kernel.
 """
 
 # DSL function bodies are parsed as AST, not executed — suppress pyright errors
@@ -39,7 +39,7 @@ S_DYN = pl.dynamic("S_DYN")
 CHUNK = 16
 
 
-@pl.jit
+@pl.jit_trace
 def cast_3d_dynamic(
     x: pl.Tensor[[B_DYN, S_DYN, 512], pl.BF16],
     out: pl.Out[pl.Tensor[[B_DYN, S_DYN, 512], pl.FP32]],
@@ -55,16 +55,14 @@ def cast_3d_dynamic(
     s_dim = pl.tensor.dim(x, 1)
     for b in pl.parallel(0, b_dim):
         with pl.at(level=pl.Level.CORE_GROUP, name_hint="inner"):
-            # User-written chunk loop over the dynamic S dim, carrying the output
-            # tensor through ``init_values`` so each chunk's store threads forward.
-            # A loop with init_values requires the assignment form of pl.yield_
-            # (the LHS supplies the post-loop binding); bare pl.yield_ is rejected.
-            for c, (o,) in pl.range(0, s_dim, CHUNK, init_values=(out,)):
+            # User-written chunk loop over the dynamic S dim: rebinding ``out``
+            # makes it the loop-carried channel, so each chunk's store threads
+            # forward (the tracing spelling of the carried loop).
+            for c in pl.range(0, s_dim, CHUNK):
                 valid = pl.min(CHUNK, s_dim - c)
                 t = pl.load(x, [b, c, 0], [1, CHUNK, 512], valid_shape=[1, valid, 512])
                 t = pl.cast(t, target_type=pl.FP32)
-                o = pl.store(t, [b, c, 0], o)
-                chunk_out = pl.yield_(o)  # noqa: F841 — parser requires the yield-LHS binding
+                out = pl.store(t, [b, c, 0], out)
     return out
 
 

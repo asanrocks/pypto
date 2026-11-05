@@ -14,7 +14,7 @@ import pytest
 from pypto import passes
 
 
-@pl.jit
+@pl.jit_trace
 def add_scalar(x: pl.Tensor[[16, 16], pl.FP32], out: pl.Out[pl.Tensor[[16, 16], pl.FP32]]):
     """Add a scalar through the DSL to exercise real program binary generation."""
     with pl.at(level=pl.Level.CORE_GROUP):

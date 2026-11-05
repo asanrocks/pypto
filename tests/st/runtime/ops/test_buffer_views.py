@@ -20,7 +20,7 @@ from pypto import ir, passes
 _PLANNERS = (passes.MemoryPlanner.PYPTO, passes.MemoryPlanner.DSA_RP, passes.MemoryPlanner.PTOAS)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _view_kernel(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     loaded = pl.load(source, [0, 0], [16, 32])
     first = pl.reshape(loaded, [8, 64])
@@ -31,7 +31,7 @@ def _view_kernel(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def _view_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     out = _view_kernel(source, out)
     return out
@@ -93,7 +93,7 @@ def test_public_buffer_views(case_run, request):
         assert (" addr = " in text) == (case_run.case.memory_planner != passes.MemoryPlanner.PTOAS)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _static_windows_kernel(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     whole = pl.load(source, [0, 0], [64, 64])
     outer = pl.tile.slice(whole, [32, 48], [16, 16])
@@ -106,12 +106,12 @@ def _static_windows_kernel(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def _static_windows_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     return _static_windows_kernel(source, out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _overlapping_assemble_kernel(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     whole = pl.load(source, [0, 0], [32, 64])
     window = pl.tile.slice(whole, [32, 32], [0, 0])
@@ -119,12 +119,12 @@ def _overlapping_assemble_kernel(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(placed, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _overlapping_assemble_entry(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     return _overlapping_assemble_kernel(source, out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _disjoint_assemble_kernel(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     whole = pl.load(source, [0, 0], [128, 256])
     outer = pl.tile.slice(whole, [96, 256], [0, 0])
@@ -133,12 +133,12 @@ def _disjoint_assemble_kernel(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(placed, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _disjoint_assemble_entry(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     return _disjoint_assemble_kernel(source, out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _chained_disjoint_assemble_kernel(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     whole = pl.load(source, [0, 0], [128, 256])
     window = pl.tile.slice(whole, [32, 256], [0, 0])
@@ -149,12 +149,12 @@ def _chained_disjoint_assemble_kernel(source: pl.Tensor, out: pl.Out[pl.Tensor])
     return pl.store(third, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _chained_disjoint_assemble_entry(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     return _chained_disjoint_assemble_kernel(source, out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _reinterpret_window_kernel(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     whole = pl.load(source, [0, 0], [32, 64])
     window = pl.tile.slice(whole, [16, 64], [16, 0])
@@ -162,7 +162,7 @@ def _reinterpret_window_kernel(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(bits, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _reinterpret_window_entry(source: pl.Tensor, out: pl.Out[pl.Tensor]):
     return _reinterpret_window_kernel(source, out)
 
@@ -284,7 +284,7 @@ def test_default_static_buffer_windows(case_run, request):
             assert sources[0].read_text().count("pto.alloc_tile") == 1
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _dynamic_nested_kernel(
     source: pl.Tensor,
     out: pl.InOut[pl.Tensor],
@@ -302,7 +302,7 @@ def _dynamic_nested_kernel(
     return pl.store(value, [base, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _dynamic_nested_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     # All invocations share one kernel artifact; empty -> partial -> full ->
     # empty catches metadata left over from a preceding nonempty invocation.
@@ -310,29 +310,29 @@ def _dynamic_nested_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
         row = index * 5
         col = index % 2
         if index == 1:
-            rows = 1
-            cols = 1
+            rows = pl.const(1, pl.INDEX)
+            cols = pl.const(1, pl.INDEX)
         elif index == 2:
-            rows = 7
-            cols = 13
+            rows = pl.const(7, pl.INDEX)
+            cols = pl.const(13, pl.INDEX)
         elif index == 3:
-            rows = 16
-            cols = 32
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         elif index == 4:
-            rows = 16
-            cols = 0
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         elif index == 5:
-            rows = 0
-            cols = 0
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         else:
-            rows = 0
-            cols = 32
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         base = index * 64
         out = _dynamic_nested_kernel(source, out, row, col, rows, cols, base)
     return out
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _dynamic_assemble_kernel(
     source: pl.Tensor,
     out: pl.InOut[pl.Tensor],
@@ -349,7 +349,7 @@ def _dynamic_assemble_kernel(
     return pl.store(value, [base, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _dynamic_assemble_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     # All invocations share one kernel artifact; empty -> partial -> full ->
     # empty catches metadata left over from a preceding nonempty invocation.
@@ -357,29 +357,29 @@ def _dynamic_assemble_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
         row = index * 5
         col = index % 2
         if index == 1:
-            rows = 1
-            cols = 1
+            rows = pl.const(1, pl.INDEX)
+            cols = pl.const(1, pl.INDEX)
         elif index == 2:
-            rows = 7
-            cols = 13
+            rows = pl.const(7, pl.INDEX)
+            cols = pl.const(13, pl.INDEX)
         elif index == 3:
-            rows = 16
-            cols = 32
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         elif index == 4:
-            rows = 16
-            cols = 0
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         elif index == 5:
-            rows = 0
-            cols = 0
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         else:
-            rows = 0
-            cols = 32
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         base = index * 64
         out = _dynamic_assemble_kernel(source, out, row, col, rows, cols, base)
     return out
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _dynamic_valid_load_kernel(
     source: pl.Tensor,
     out: pl.InOut[pl.Tensor],
@@ -394,7 +394,7 @@ def _dynamic_valid_load_kernel(
     return pl.store(value, [base, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _dynamic_valid_load_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     # All invocations share one kernel artifact; empty -> partial -> full ->
     # empty catches metadata left over from a preceding nonempty invocation.
@@ -402,29 +402,29 @@ def _dynamic_valid_load_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
         row = index * 5
         col = index % 2
         if index == 1:
-            rows = 1
-            cols = 1
+            rows = pl.const(1, pl.INDEX)
+            cols = pl.const(1, pl.INDEX)
         elif index == 2:
-            rows = 7
-            cols = 13
+            rows = pl.const(7, pl.INDEX)
+            cols = pl.const(13, pl.INDEX)
         elif index == 3:
-            rows = 16
-            cols = 32
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         elif index == 4:
-            rows = 16
-            cols = 0
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         elif index == 5:
-            rows = 0
-            cols = 0
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         else:
-            rows = 0
-            cols = 32
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         base = index * 64
         out = _dynamic_valid_load_kernel(source, out, row, col, rows, cols, base)
     return out
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _dynamic_valid_setter_kernel(
     source: pl.Tensor,
     out: pl.InOut[pl.Tensor],
@@ -440,7 +440,7 @@ def _dynamic_valid_setter_kernel(
     return pl.store(value, [base, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _dynamic_valid_setter_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     # All invocations share one kernel artifact; empty -> partial -> full ->
     # empty catches metadata left over from a preceding nonempty invocation.
@@ -448,29 +448,29 @@ def _dynamic_valid_setter_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
         row = index * 5
         col = index % 2
         if index == 1:
-            rows = 1
-            cols = 1
+            rows = pl.const(1, pl.INDEX)
+            cols = pl.const(1, pl.INDEX)
         elif index == 2:
-            rows = 7
-            cols = 13
+            rows = pl.const(7, pl.INDEX)
+            cols = pl.const(13, pl.INDEX)
         elif index == 3:
-            rows = 16
-            cols = 32
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         elif index == 4:
-            rows = 16
-            cols = 0
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         elif index == 5:
-            rows = 0
-            cols = 0
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         else:
-            rows = 0
-            cols = 32
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         base = index * 64
         out = _dynamic_valid_setter_kernel(source, out, row, col, rows, cols, base)
     return out
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _dynamic_valid_mixed_kernel(
     source: pl.Tensor,
     out: pl.InOut[pl.Tensor],
@@ -487,7 +487,7 @@ def _dynamic_valid_mixed_kernel(
     return pl.store(value, [base, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _dynamic_valid_mixed_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
     # All invocations share one kernel artifact; empty -> partial -> full ->
     # empty catches metadata left over from a preceding nonempty invocation.
@@ -495,23 +495,23 @@ def _dynamic_valid_mixed_entry(source: pl.Tensor, out: pl.InOut[pl.Tensor]):
         row = index * 5
         col = index % 2
         if index == 1:
-            rows = 1
-            cols = 1
+            rows = pl.const(1, pl.INDEX)
+            cols = pl.const(1, pl.INDEX)
         elif index == 2:
-            rows = 7
-            cols = 13
+            rows = pl.const(7, pl.INDEX)
+            cols = pl.const(13, pl.INDEX)
         elif index == 3:
-            rows = 16
-            cols = 32
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         elif index == 4:
-            rows = 16
-            cols = 0
+            rows = pl.const(16, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         elif index == 5:
-            rows = 0
-            cols = 0
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(0, pl.INDEX)
         else:
-            rows = 0
-            cols = 32
+            rows = pl.const(0, pl.INDEX)
+            cols = pl.const(32, pl.INDEX)
         base = index * 64
         out = _dynamic_valid_mixed_kernel(source, out, row, col, rows, cols, base)
     return out

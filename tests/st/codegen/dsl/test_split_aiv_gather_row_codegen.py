@@ -47,7 +47,7 @@ ROWS, HALF, Q_ROWS = 128, 64, 16
 DUMP_DIR = Path(__file__).resolve().parents[4] / "build_output" / "split_aiv_gather_row_codegen"
 
 
-@pl.jit
+@pl.jit_trace
 def sparse_kv_qk(
     pool: pl.Tensor[[POOL_ROWS, HEAD_DIM], pl.BF16],
     idx: pl.Tensor[[ROWS], pl.INT32],
@@ -129,7 +129,7 @@ def test_per_lane_gather_row_compiles_to_pto():
     )
 
 
-@pl.jit
+@pl.jit_trace
 def _deep_ring_kv_qk(
     pool: pl.Tensor[[POOL_ROWS, HEAD_DIM], pl.BF16],
     idx: pl.Tensor[[ROWS], pl.INT32],

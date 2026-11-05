@@ -25,7 +25,7 @@ from pypto.pypto_core.passes import MemoryPlanner
 from pypto.runtime.tensor_spec import ScalarSpec
 
 
-@pl.jit
+@pl.jit_trace
 def fillpad_inplace_zero(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """Fill the invalid rows with zero and store the full tile."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -35,7 +35,7 @@ def fillpad_inplace_zero(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def fillpad_inplace_max(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """Fill the invalid rows with positive infinity and store the full tile."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -45,7 +45,7 @@ def fillpad_inplace_max(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def fillpad_inplace_min(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """Fill the invalid rows with negative infinity and store the full tile."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -79,7 +79,7 @@ def test_fillpad_inplace(case_run):
     case_run.assert_passed()
 
 
-@pl.jit
+@pl.jit_trace
 def fillpad_then_narrow_static(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """A post-padding validity update must mutate the original padded handle."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -91,7 +91,7 @@ def fillpad_then_narrow_static(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def fillpad_then_narrow_dynamic(
     x: pl.Tensor, out: pl.Out[pl.Tensor], rows: pl.Scalar[pl.INDEX], cols: pl.Scalar[pl.INDEX]
 ):
@@ -105,7 +105,7 @@ def fillpad_then_narrow_dynamic(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def fillpad_then_narrow_same_mode(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """Repeating zero padding must restore validity without widening the source."""
     with pl.at(level=pl.Level.CORE_GROUP):
@@ -117,7 +117,7 @@ def fillpad_then_narrow_same_mode(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def fillpad_branch_then_narrow(
     x: pl.Tensor, out: pl.Out[pl.Tensor], rows: pl.Scalar[pl.INDEX], cols: pl.Scalar[pl.INDEX]
 ):

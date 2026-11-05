@@ -183,7 +183,7 @@ ROWS = 16
 
 
 def _tail_cast_case(width: int, memory_planner=None):
-    @pl.jit
+    @pl.jit_trace
     def cast_store(
         x: pl.Tensor[[ROWS, width], pl.FP32],
         y: pl.Out[pl.Tensor[[ROWS, width], pl.INT8]],
@@ -223,7 +223,7 @@ def test_issue_2973(case_run):
 
 
 def _tail_cast_single_step_case(source_dtype, target_dtype, width: int, keep_source: bool, planner):
-    @pl.jit.incore
+    @pl.jit_trace.incore
     def cast_kernel(
         x: pl.Tensor[[ROWS, width], source_dtype],
         y: pl.Out[pl.Tensor[[ROWS, width], target_dtype]],
@@ -236,7 +236,7 @@ def _tail_cast_single_step_case(source_dtype, target_dtype, width: int, keep_sou
             pl.store(source, [0, 0], echo)
         return y
 
-    @pl.jit
+    @pl.jit_trace
     def cast_program(
         x: pl.Tensor[[ROWS, width], source_dtype],
         y: pl.Out[pl.Tensor[[ROWS, width], target_dtype]],

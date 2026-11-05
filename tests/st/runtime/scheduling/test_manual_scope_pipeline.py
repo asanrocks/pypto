@@ -915,7 +915,7 @@ class TestOriginalKVProjOuterParallelSwimlane:
 _TOKENS = pl.dynamic("TOKENS")
 
 
-@pl.jit.inline(auto_scope=False)
+@pl.jit_trace.inline(auto_scope=False)
 def _constexpr_producer(
     x: pl.Tensor[[_TOKENS, 32], pl.FP32],
     tmp: pl.Tensor[[_TOKENS, 32], pl.FP32],
@@ -929,7 +929,7 @@ def _constexpr_producer(
     return tmp, ready
 
 
-@pl.jit.inline(auto_scope=False)
+@pl.jit_trace.inline(auto_scope=False)
 def _constexpr_manual_branch(
     x: pl.Tensor[[_TOKENS, 32], pl.FP32],
     out: pl.Tensor[[_TOKENS, 32], pl.FP32],
@@ -954,7 +954,7 @@ def _constexpr_manual_branch(
     return out
 
 
-@pl.jit(auto_scope=False)
+@pl.jit_trace(auto_scope=False)
 def constexpr_manual_pipeline(
     x: pl.Tensor[[_TOKENS, 32], pl.FP32],
     out: pl.Out[pl.Tensor[[_TOKENS, 32], pl.FP32]],

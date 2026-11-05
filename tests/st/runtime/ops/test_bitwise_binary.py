@@ -59,17 +59,17 @@ def _scalar(dtype: DataType) -> int:
     return int("55" * (_WIDTH[dtype] // 8), 16)
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def _read_scalar_i8(src: pl.Tensor) -> pl.Scalar[pl.INT8]:
     return pl.cast(pl.read(src, [0, 2]), pl.INT8)
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def _read_scalar_i16(src: pl.Tensor) -> pl.Scalar[pl.INT16]:
     return pl.cast(pl.read(src, [0, 2]), pl.INT16)
 
 
-@pl.jit.inline
+@pl.jit_trace.inline
 def _read_scalar_i32(src: pl.Tensor) -> pl.Scalar[pl.INT32]:
     return pl.cast(pl.read(src, [0, 2]), pl.INT32)
 
@@ -92,7 +92,7 @@ def _make_program(
 
     if op_name == "and":
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def and_kernel(
             lhs: pl.Tensor[[M, N], pl_dtype],
             rhs: pl.Tensor[[M, N], pl_dtype],
@@ -102,7 +102,7 @@ def _make_program(
             rhs_tile = pl.load(rhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
             return pl.store(pl.tile.and_(lhs_tile, rhs_tile), [0, 0], out)
 
-        @pl.jit
+        @pl.jit_trace
         def and_program(
             lhs: pl.Tensor[[M, N], pl_dtype],
             rhs: pl.Tensor[[M, N], pl_dtype],
@@ -114,7 +114,7 @@ def _make_program(
 
     if op_name == "or":
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def or_kernel(
             lhs: pl.Tensor[[M, N], pl_dtype],
             rhs: pl.Tensor[[M, N], pl_dtype],
@@ -124,7 +124,7 @@ def _make_program(
             rhs_tile = pl.load(rhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
             return pl.store(pl.tile.or_(lhs_tile, rhs_tile), [0, 0], out)
 
-        @pl.jit
+        @pl.jit_trace
         def or_program(
             lhs: pl.Tensor[[M, N], pl_dtype],
             rhs: pl.Tensor[[M, N], pl_dtype],
@@ -136,7 +136,7 @@ def _make_program(
 
     if op_name == "xor":
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def xor_kernel(
             lhs: pl.Tensor[[M, N], pl_dtype],
             rhs: pl.Tensor[[M, N], pl_dtype],
@@ -144,15 +144,14 @@ def _make_program(
         ) -> pl.Tensor[[M, N], pl_dtype]:
             lhs_tile = pl.load(lhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
             rhs_tile = pl.load(rhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
-            tmp: pl.Tile[
-                [M, N],
-                lhs.dtype,
-                pl.MemorySpace.Vec,
-                pl.TileView(valid_shape=[valid_rows, valid_cols]),
-            ] = pl.tile.create([M, N], dtype=lhs.dtype, target_memory=pl.MemorySpace.Vec)
+            tmp = pl.tile.set_validshape(
+                pl.tile.create([M, N], dtype=pl_dtype, target_memory=pl.Mem.Vec),
+                valid_rows,
+                valid_cols,
+            )
             return pl.store(pl.tile.xor(lhs_tile, rhs_tile, tmp), [0, 0], out)
 
-        @pl.jit
+        @pl.jit_trace
         def xor_program(
             lhs: pl.Tensor[[M, N], pl_dtype],
             rhs: pl.Tensor[[M, N], pl_dtype],
@@ -166,7 +165,7 @@ def _make_program(
 
     if op_name == "ands" and scalar_encoding == "immediate":
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def ands_kernel(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
@@ -174,7 +173,7 @@ def _make_program(
             lhs_tile = pl.load(lhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
             return pl.store(pl.tile.ands(lhs_tile, scalar), [0, 0], out)
 
-        @pl.jit
+        @pl.jit_trace
         def ands_program(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
@@ -185,7 +184,7 @@ def _make_program(
 
     if op_name == "ands":
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def ands_ssa_kernel(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
@@ -194,7 +193,7 @@ def _make_program(
             lhs_tile = pl.load(lhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
             return pl.store(pl.tile.ands(lhs_tile, scalar_value), [0, 0], out)
 
-        @pl.jit
+        @pl.jit_trace
         def ands_ssa_program(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
@@ -205,7 +204,7 @@ def _make_program(
 
     if op_name == "ors" and scalar_encoding == "immediate":
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def ors_kernel(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
@@ -213,7 +212,7 @@ def _make_program(
             lhs_tile = pl.load(lhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
             return pl.store(pl.tile.ors(lhs_tile, scalar), [0, 0], out)
 
-        @pl.jit
+        @pl.jit_trace
         def ors_program(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
@@ -224,7 +223,7 @@ def _make_program(
 
     if op_name == "ors":
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def ors_ssa_kernel(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
@@ -233,7 +232,7 @@ def _make_program(
             lhs_tile = pl.load(lhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
             return pl.store(pl.tile.ors(lhs_tile, scalar_value), [0, 0], out)
 
-        @pl.jit
+        @pl.jit_trace
         def ors_ssa_program(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
@@ -246,21 +245,20 @@ def _make_program(
 
     if scalar_encoding == "immediate":
 
-        @pl.jit.incore
+        @pl.jit_trace.incore
         def xors_kernel(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
         ) -> pl.Tensor[[M, N], pl_dtype]:
             lhs_tile = pl.load(lhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
-            tmp: pl.Tile[
-                [M, N],
-                lhs.dtype,
-                pl.MemorySpace.Vec,
-                pl.TileView(valid_shape=[valid_rows, valid_cols]),
-            ] = pl.tile.create([M, N], dtype=lhs.dtype, target_memory=pl.MemorySpace.Vec)
+            tmp = pl.tile.set_validshape(
+                pl.tile.create([M, N], dtype=pl_dtype, target_memory=pl.Mem.Vec),
+                valid_rows,
+                valid_cols,
+            )
             return pl.store(pl.tile.xors(lhs_tile, scalar, tmp), [0, 0], out)
 
-        @pl.jit
+        @pl.jit_trace
         def xors_program(
             lhs: pl.Tensor[[M, N], pl_dtype],
             out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
@@ -269,22 +267,21 @@ def _make_program(
 
         return xors_program
 
-    @pl.jit.incore
+    @pl.jit_trace.incore
     def xors_ssa_kernel(
         lhs: pl.Tensor[[M, N], pl_dtype],
         out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],
     ) -> pl.Tensor[[M, N], pl_dtype]:
         scalar_value = scalar_reader(lhs)
         lhs_tile = pl.load(lhs, [0, 0], [M, N], valid_shape=[valid_rows, valid_cols])
-        tmp: pl.Tile[
-            [M, N],
-            lhs.dtype,
-            pl.MemorySpace.Vec,
-            pl.TileView(valid_shape=[valid_rows, valid_cols]),
-        ] = pl.tile.create([M, N], dtype=lhs.dtype, target_memory=pl.MemorySpace.Vec)
+        tmp = pl.tile.set_validshape(
+            pl.tile.create([M, N], dtype=pl_dtype, target_memory=pl.Mem.Vec),
+            valid_rows,
+            valid_cols,
+        )
         return pl.store(pl.tile.xors(lhs_tile, scalar_value, tmp), [0, 0], out)
 
-    @pl.jit
+    @pl.jit_trace
     def xors_ssa_program(
         lhs: pl.Tensor[[M, N], pl_dtype],
         out: pl.InOut[pl.Tensor[[M, N], pl_dtype]],

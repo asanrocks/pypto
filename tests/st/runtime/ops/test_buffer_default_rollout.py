@@ -18,7 +18,7 @@ from pypto import ir, passes
 _PLANNERS = (passes.MemoryPlanner.PYPTO, passes.MemoryPlanner.DSA_RP, passes.MemoryPlanner.PTOAS)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _sub(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     y = pl.load(b, [0, 0], [16, 32])
@@ -26,7 +26,7 @@ def _sub(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _div(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     y = pl.load(b, [0, 0], [16, 32])
@@ -34,7 +34,7 @@ def _div(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _maximum(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     y = pl.load(b, [0, 0], [16, 32])
@@ -42,7 +42,7 @@ def _maximum(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _minimum(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     y = pl.load(b, [0, 0], [16, 32])
@@ -50,112 +50,112 @@ def _minimum(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _abs(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.abs(x)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _exp(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.exp(x)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _sqrt(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.sqrt(x)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _neg(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.neg(x)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _relu(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.relu(x)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _log(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.log(x)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _recip(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.recip(x)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _adds(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.adds(x, 0.5)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _subs(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.subs(x, 0.5)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _muls(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.muls(x, 0.5)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _divs(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.divs(x, 0.5)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _maximums(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.maximums(x, 0.5)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _minimums(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.minimums(x, 0.5)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _lrelu(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     value = pl.tile.lrelu(x, 0.5)
     return pl.store(value, [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _full(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     value = pl.tile.full([16, 32], pl.FP32, 0.5)
     return pl.store(value, [0, 0], out)
 
 
 def _entry(kernel):
-    @pl.jit
+    @pl.jit_trace
     def entry(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
         return kernel(a, b, out)
 
@@ -243,13 +243,13 @@ def _assert_buffer_result(case_run, request):
         assert kernels and all(f.ir_stage == expected for f in kernels)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _typed_kernel(a: pl.Tensor, out: pl.InOut[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32], valid_shape=[13, 24])
     return pl.store(x, [3, 8], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _typed_entry(a: pl.Tensor, out: pl.InOut[pl.Tensor]):
     return _typed_kernel(a, out)
 
@@ -280,7 +280,7 @@ def test_default_partial_typed_transfer(case_run, request):
     _assert_buffer_result(case_run, request)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _reciprocal_kernel(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     y = pl.tile.recip(x, high_precision=True)
@@ -288,7 +288,7 @@ def _reciprocal_kernel(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(x, [16, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _reciprocal_entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     return _reciprocal_kernel(a, out)
 
@@ -312,14 +312,14 @@ def test_default_recip_preserves_live_input(case_run, request):
     _assert_buffer_result(case_run, request)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _typed_add(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     y = pl.load(b, [0, 0], [16, 32])
     return pl.store(pl.add(x, y), [0, 0], out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _typed_mul(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     x = pl.load(a, [0, 0], [16, 32])
     y = pl.load(b, [0, 0], [16, 32])

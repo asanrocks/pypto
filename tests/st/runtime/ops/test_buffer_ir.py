@@ -23,7 +23,7 @@ from pypto import ir, passes
 _ROWS, _COLS = 16, 32
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _buffer_arithmetic(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     lhs = pl.load(a, [0, 0], [_ROWS, _COLS])
     rhs = pl.load(b, [0, 0], [_ROWS, _COLS])
@@ -32,7 +32,7 @@ def _buffer_arithmetic(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(product, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _buffer_entry(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     out = _buffer_arithmetic(a, b, out)
     return out
@@ -193,7 +193,7 @@ def _executed_native(case_run, request) -> str | None:
 _M = _K = _N = 64
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _cube_twice(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     a_mat = pl.load(a, [0, 0], [_M, _K], target_memory=pl.MemorySpace.Mat)
     b_mat = pl.load(b, [0, 0], [_K, _N], target_memory=pl.MemorySpace.Mat)
@@ -204,13 +204,13 @@ def _cube_twice(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(total, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _cube_twice_entry(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     out = _cube_twice(a, b, out)
     return out
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _cube_k_loop(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     acc: pl.Tile[[16, 16], pl.FP32, pl.MemorySpace.Acc] = pl.tile.create(
         [16, 16], pl.FP32, target_memory=pl.MemorySpace.Acc
@@ -222,20 +222,20 @@ def _cube_k_loop(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     return pl.store(acc, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _cube_k_loop_entry(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     out = _cube_k_loop(a, b, out)
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def _auto_tiled_entry(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="tiled"):
         out[:, :] = pl.matmul(a[:, :], b[:, :], out_dtype=pl.FP32)
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def _transposed_entry(q: pl.Tensor, k: pl.Tensor, out: pl.Out[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="qk"):
         out[:, :] = pl.matmul(q[:, :], k[:, :], b_trans=True, out_dtype=pl.FP32)
@@ -365,17 +365,17 @@ def _wider_accumulator_kernel(overwrite: bool):
     return kernel
 
 
-_wider_accumulate = pl.jit.incore(_wider_accumulator_kernel(False))
-_wider_overwrite = pl.jit.incore(_wider_accumulator_kernel(True))
+_wider_accumulate = pl.jit_trace.incore(_wider_accumulator_kernel(False))
+_wider_overwrite = pl.jit_trace.incore(_wider_accumulator_kernel(True))
 
 
-@pl.jit
+@pl.jit_trace
 def _wider_accumulate_entry(lhs: pl.Tensor, seed: pl.Tensor, partial: pl.Tensor, out: pl.Out[pl.Tensor]):
     out = _wider_accumulate(lhs, seed, partial, out)
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def _wider_overwrite_entry(lhs: pl.Tensor, seed: pl.Tensor, partial: pl.Tensor, out: pl.Out[pl.Tensor]):
     out = _wider_overwrite(lhs, seed, partial, out)
     return out
@@ -431,7 +431,7 @@ _VIEW_GRID = torch.arange(64 * 64, dtype=torch.float32).reshape(64, 64)
 _VIEW_INPUT = (_VIEW_GRID.remainder(37) - 18) / 8
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _slice_assemble_kernel(x: pl.Tensor, out: pl.InOut[pl.Tensor]):
     # Recipe-level acceptance uses already-selected IR; normal rollout is tested separately.
     pl.func_attr({"buffer_ir_selected": True})
@@ -444,7 +444,7 @@ def _slice_assemble_kernel(x: pl.Tensor, out: pl.InOut[pl.Tensor]):
     return pl.store(placed, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _slice_assemble_entry(x: pl.Tensor, out: pl.InOut[pl.Tensor]):
     out = _slice_assemble_kernel(x, out)
     return out
@@ -457,7 +457,7 @@ def _slice_assemble_golden(tensors) -> torch.Tensor:
     return result
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _runtime_slice_kernel(
     x: pl.Tensor, out: pl.InOut[pl.Tensor], row: pl.Scalar[pl.INDEX], base: pl.Scalar[pl.INDEX]
 ):
@@ -469,7 +469,7 @@ def _runtime_slice_kernel(
     return pl.store(doubled, [base, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _runtime_slice_entry(x: pl.Tensor, out: pl.InOut[pl.Tensor]):
     for index in pl.range(_VIEW_CASES):
         row = index * 8
@@ -485,7 +485,7 @@ def _runtime_slice_golden(tensors) -> torch.Tensor:
     return result
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _valid_load_kernel(
     x: pl.Tensor, out: pl.InOut[pl.Tensor], cols: pl.Scalar[pl.INDEX], base: pl.Scalar[pl.INDEX]
 ):
@@ -498,7 +498,7 @@ def _valid_load_kernel(
     return pl.store(doubled, [base, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _valid_load_entry(x: pl.Tensor, out: pl.InOut[pl.Tensor]):
     for index in pl.range(_VIEW_CASES):
         cols = (index + 1) * 16
@@ -507,7 +507,7 @@ def _valid_load_entry(x: pl.Tensor, out: pl.InOut[pl.Tensor]):
     return out
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _set_valid_kernel(
     x: pl.Tensor, out: pl.InOut[pl.Tensor], cols: pl.Scalar[pl.INDEX], base: pl.Scalar[pl.INDEX]
 ):
@@ -519,7 +519,7 @@ def _set_valid_kernel(
     return pl.store(doubled, [base, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _set_valid_entry(x: pl.Tensor, out: pl.InOut[pl.Tensor]):
     for index in pl.range(_VIEW_CASES):
         cols = (index + 1) * 16

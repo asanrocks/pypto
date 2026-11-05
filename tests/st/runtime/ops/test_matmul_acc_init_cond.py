@@ -206,7 +206,7 @@ class TestMatmulAccInitCondOperations:
         assert result.passed, f"Test failed: {result.error}"
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_acc_row_windows(
     x: pl.Tensor[[64, 1024], pl.INT8],
     w: pl.Tensor[[128, 1024], pl.INT8],

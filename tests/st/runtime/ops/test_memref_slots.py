@@ -56,7 +56,7 @@ TR, TC = 64, 64
 ROWS = TR * NT
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_slot_pingpong(
     a: pl.Tensor[[M, K], pl.FP32],
     a2: pl.Tensor[[M, K], pl.FP32],
@@ -85,7 +85,7 @@ def matmul_slot_pingpong(
             pl.store(other, [0, i * TN], out2)
 
 
-@pl.jit
+@pl.jit_trace
 def vector_slot_pingpong(
     a: pl.Tensor[[ROWS, TC], pl.FP32],
     b: pl.Tensor[[ROWS, TC], pl.FP32],
@@ -103,6 +103,39 @@ def vector_slot_pingpong(
             # If both slots resolved to one address, `lo` is gone by now.
             s: pl.Tile[[TR, TC], pl.FP32, pl.Mem.Vec] = pl.add(lo, hi)
             pl.store(s, [i * TR, 0], out)
+
+
+@pl.jit_trace
+def traced_vector_slot_pingpong(
+    a: pl.Tensor[[ROWS, TC], pl.FP32],
+    b: pl.Tensor[[ROWS, TC], pl.FP32],
+    out: pl.Out[pl.Tensor[[ROWS, TC], pl.FP32]],
+):
+    pool = pl.MemRef(slots=2)
+    for _ in pl.spmd(1, name_hint="traced_slots"):
+        for i in pl.range(NT):
+            lo = pl.load(a, [i * TR, 0], [TR, TC], target_memory=pl.Mem.Vec, memref=pool[i % 2])
+            hi = pl.load(b, [i * TR, 0], [TR, TC], target_memory=pl.Mem.Vec, memref=pool[(i + 1) % 2])
+            # Both slots remain live: an overlapping binding computes b + b.
+            pl.store(pl.add(lo, hi), [i * TR, 0], out)
+
+
+@pl.jit_trace
+def traced_slot_copy(
+    a: pl.Tensor[[ROWS, TC], pl.FP32],
+    out: pl.Out[pl.Tensor[[ROWS, TC], pl.FP32]],
+):
+    pool = pl.MemRef(slots=2)
+    for _ in pl.spmd(1, name_hint="traced_slot_copy"):
+        for i in pl.range(NT):
+            value = pl.load(a, [i * TR, 0], [TR, TC], target_memory=pl.Mem.Vec, memref=pool[i % 2])
+            pl.store(value, [i * TR, 0], out)
+
+
+def _slot_copy_case():
+    a = torch.randn(ROWS, TC, dtype=torch.float32)
+    out = torch.zeros_like(a)
+    return st.case(traced_slot_copy, a, out, name="traced_slot_copy", golden=lambda _: a, rtol=0, atol=0)
 
 
 def _acc_pingpong_case():
@@ -132,18 +165,18 @@ def _acc_pingpong_case():
     )
 
 
-def _vec_pingpong_case():
+def _vec_pingpong_case(kernel=vector_slot_pingpong, name="vector_slot_pingpong"):
     """UB ping-pong: the sum is ``a + b``, not ``b + b``."""
     torch.manual_seed(0)
     a = torch.randn(ROWS, TC, dtype=torch.float32)
     b = torch.randn(ROWS, TC, dtype=torch.float32)
     out = torch.zeros((ROWS, TC), dtype=torch.float32)
     return st.case(
-        vector_slot_pingpong,
+        kernel,
         a,
         b,
         out,
-        name="vector_slot_pingpong",
+        name=name,
         golden=lambda _: a + b,
         rtol=1e-3,
         atol=1e-3,
@@ -151,7 +184,12 @@ def _vec_pingpong_case():
 
 
 @pytest.mark.platforms("a2a3", "a2a3sim")
-@st.cases(_acc_pingpong_case(), _vec_pingpong_case())
+@st.cases(
+    _acc_pingpong_case(),
+    _vec_pingpong_case(),
+    _vec_pingpong_case(traced_vector_slot_pingpong, "traced_vector_slot_pingpong"),
+    _slot_copy_case(),
+)
 def test_slots_rotate_at_runtime(case_run):
     """Runtime-indexed slots of one declared allocation, on device."""
     case_run.assert_passed()

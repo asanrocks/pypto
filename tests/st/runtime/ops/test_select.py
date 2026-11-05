@@ -68,7 +68,7 @@ def _source(rows: int, cols: int, dtype: torch.dtype) -> torch.Tensor:
 
 
 def _scalar_on_false(cmp_type: int, dtype, rows: int, cols: int, valid, threshold, scalar):
-    @pl.jit
+    @pl.jit_trace
     def kernel(v: pl.Tensor[[rows, cols], dtype], out: pl.Out[pl.Tensor[[rows, cols], dtype]]):
         with pl.at(level=pl.Level.CORE_GROUP):
             t = pl.load(v, [0, 0], [rows, cols], valid_shape=valid)
@@ -79,7 +79,7 @@ def _scalar_on_false(cmp_type: int, dtype, rows: int, cols: int, valid, threshol
 
 
 def _scalar_on_true(cmp_type: int, dtype, rows: int, cols: int, valid, threshold, scalar):
-    @pl.jit
+    @pl.jit_trace
     def kernel(v: pl.Tensor[[rows, cols], dtype], out: pl.Out[pl.Tensor[[rows, cols], dtype]]):
         with pl.at(level=pl.Level.CORE_GROUP):
             t = pl.load(v, [0, 0], [rows, cols], valid_shape=valid)
@@ -90,7 +90,7 @@ def _scalar_on_true(cmp_type: int, dtype, rows: int, cols: int, valid, threshold
 
 
 def _two_tiles(cmp_type: int, dtype, rows: int, cols: int, valid):
-    @pl.jit
+    @pl.jit_trace
     def kernel(
         a: pl.Tensor[[rows, cols], dtype],
         b: pl.Tensor[[rows, cols], dtype],
@@ -116,7 +116,7 @@ def _split_dtype(cmp_type: int, cmp_dtype, val_dtype, threshold, scalar, rows: i
     the selection itself.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def kernel(
         c: pl.Tensor[[rows, cols], cmp_dtype],
         v: pl.Tensor[[rows, cols], val_dtype],
@@ -131,7 +131,7 @@ def _split_dtype(cmp_type: int, cmp_dtype, val_dtype, threshold, scalar, rows: i
     return kernel
 
 
-@pl.jit
+@pl.jit_trace
 def _clamp(v: pl.Tensor[[M, N], pl.FP32], out: pl.Out[pl.Tensor[[M, N], pl.FP32]]):
     """Composed selects: clamp(v, -2, 2), the shape issue #2742 asks for."""
     with pl.at(level=pl.Level.CORE_GROUP):

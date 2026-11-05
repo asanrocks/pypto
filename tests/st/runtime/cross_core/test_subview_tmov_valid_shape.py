@@ -31,7 +31,7 @@ from harness import st
 M, K, N, SUB = 16, 128, 32, 8
 
 
-@pl.jit
+@pl.jit_trace
 def cube_slice(
     x: pl.Tensor[[M, K], pl.BF16],
     w: pl.Tensor[[N, K], pl.FP32],

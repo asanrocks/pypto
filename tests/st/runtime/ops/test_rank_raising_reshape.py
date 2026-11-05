@@ -46,7 +46,7 @@ def _planner_tag(planner: MemoryPlanner) -> str:
     return {MemoryPlanner.PYPTO: "pypto", MemoryPlanner.PTOAS: "ptoas"}[planner]
 
 
-@pl.jit
+@pl.jit_trace
 def scale_via_3d_reshape(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """Scale by 2 with the compute expressed on a rank-3 view of the tile.
 
@@ -62,7 +62,7 @@ def scale_via_3d_reshape(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def scale_via_reshaped_2d(x: pl.Tensor, out: pl.Out[pl.Tensor]):
     """The same kernel through a rank-3 shape that is a real 2D reshape.
 

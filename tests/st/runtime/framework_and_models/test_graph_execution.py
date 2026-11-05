@@ -97,7 +97,7 @@ def _graph_boundary_arity(src: str) -> tuple[int, int]:
     return arity
 
 
-@pl.jit.graph
+@pl.jit_trace.graph
 def accumulate_band(w: pl.Tensor, acc: pl.InOut[pl.Tensor], layer_idx: pl.Scalar[pl.INDEX]):
     """``base`` is derived from the boundary scalar, so Step A hoists it out.
 
@@ -112,14 +112,14 @@ def accumulate_band(w: pl.Tensor, acc: pl.InOut[pl.Tensor], layer_idx: pl.Scalar
     return acc
 
 
-@pl.jit
+@pl.jit_trace
 def per_layer_accumulate(w: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     for i in pl.range(LAYERS):
         acc = accumulate_band(w, acc, i)
     return acc
 
 
-@pl.jit
+@pl.jit_trace
 def no_graph_per_layer_accumulate(w: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     """Same arithmetic, no Graph — the body is inlined rather than called.
 
@@ -136,7 +136,7 @@ def no_graph_per_layer_accumulate(w: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     return acc
 
 
-@pl.jit.graph
+@pl.jit_trace.graph
 def accumulate_view(w: pl.Tensor, acc: pl.InOut[pl.Tensor], layer_idx: pl.Scalar[pl.INDEX]):
     """Step B: a boundary tensor sliced by a per-layer offset.
 
@@ -151,14 +151,14 @@ def accumulate_view(w: pl.Tensor, acc: pl.InOut[pl.Tensor], layer_idx: pl.Scalar
     return acc
 
 
-@pl.jit
+@pl.jit_trace
 def boundary_view_accumulate(w: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     for i in pl.range(LAYERS):
         acc = accumulate_view(w, acc, i)
     return acc
 
 
-@pl.jit.graph
+@pl.jit_trace.graph
 def double_via_scratch(a: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     """Step C: a constant-shaped allocation inside the region.
 
@@ -176,14 +176,14 @@ def double_via_scratch(a: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     return acc
 
 
-@pl.jit
+@pl.jit_trace
 def region_alloc_accumulate(a: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     for _ in pl.range(LAYERS):
         acc = double_via_scratch(a, acc)
     return acc
 
 
-@pl.jit.graph
+@pl.jit_trace.graph
 def add_layer(a: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         t = pl.load(a, [0, 0], [ROWS, COLS])
@@ -192,7 +192,7 @@ def add_layer(a: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     return acc
 
 
-@pl.jit.graph
+@pl.jit_trace.graph
 def double_layer(acc: pl.InOut[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         c = pl.load(acc, [0, 0], [ROWS, COLS])
@@ -200,7 +200,7 @@ def double_layer(acc: pl.InOut[pl.Tensor]):
     return acc
 
 
-@pl.jit
+@pl.jit_trace
 def two_distinct_graphs(a: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     """Two Graph functions interleaved.
 
@@ -214,7 +214,7 @@ def two_distinct_graphs(a: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     return acc
 
 
-@pl.jit
+@pl.jit_trace
 def scope_form_accumulate(w: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     """``per_layer_accumulate`` written with the scope form instead.
 
@@ -234,7 +234,7 @@ def scope_form_accumulate(w: pl.Tensor, acc: pl.InOut[pl.Tensor]):
     return acc
 
 
-@pl.jit.graph
+@pl.jit_trace.graph
 def scale_once(a: pl.Tensor, out: pl.InOut[pl.Tensor]):
     with pl.at(level=pl.Level.CORE_GROUP):
         t = pl.load(a, [0, 0], [ROWS, COLS])
@@ -242,7 +242,7 @@ def scale_once(a: pl.Tensor, out: pl.InOut[pl.Tensor]):
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def single_launch(a: pl.Tensor, out: pl.InOut[pl.Tensor]):
     out = scale_once(a, out)
     return out

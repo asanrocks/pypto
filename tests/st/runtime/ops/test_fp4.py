@@ -31,7 +31,7 @@ def _xor_row_fp4() -> torch.Tensor:
     return physical.view(_TORCH_FP4_DTYPE)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _fp4_copy_kernel(
     src: pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2],
     out: pl.Out[pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2]],
@@ -39,7 +39,7 @@ def _fp4_copy_kernel(
     return pl.store(pl.load(src, [0, 0], [ROWS, PACKED_K]), [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _fp4_copy_entry(
     src: pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2],
     out: pl.Out[pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2]],
@@ -47,7 +47,7 @@ def _fp4_copy_entry(
     return _fp4_copy_kernel(src, out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _fp4_view_copy_kernel(
     src: pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2],
     out: pl.Out[pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2]],
@@ -56,7 +56,7 @@ def _fp4_view_copy_kernel(
     return pl.store(pl.load(viewed, [0, 0], [ROWS, PACKED_K]), [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _fp4_view_copy_entry(
     src: pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2],
     out: pl.Out[pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2]],
@@ -64,7 +64,7 @@ def _fp4_view_copy_entry(
     return _fp4_view_copy_kernel(src, out)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _fp4_offset_copy_kernel(
     src: pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2],
     out: pl.Out[pl.Tensor[[ROWS, PACKED_K // 2], pl.fp4e2m1x2]],
@@ -73,7 +73,7 @@ def _fp4_offset_copy_kernel(
     return pl.store(tile, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _fp4_offset_copy_entry(
     src: pl.Tensor[[ROWS, PACKED_K], pl.fp4e2m1x2],
     out: pl.Out[pl.Tensor[[ROWS, PACKED_K // 2], pl.fp4e2m1x2]],
@@ -198,7 +198,7 @@ def _decode_fp4_data(data: torch.Tensor, rows: int, cols: int) -> torch.Tensor:
     return values[codes]
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _fp4_cast_kernel(
     src: pl.Tensor[[CAST_ROWS, CAST_LOGICAL_K // 2], pl.fp4e2m1x2],
     out: pl.Out[pl.Tensor[[CAST_ROWS, CAST_LOGICAL_K], pl.BF16]],
@@ -206,7 +206,7 @@ def _fp4_cast_kernel(
     return pl.store(pl.cast(pl.load(src, [0, 0], [CAST_ROWS, CAST_LOGICAL_K // 2]), pl.BF16), [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _fp4_cast_entry(
     src: pl.Tensor[[CAST_ROWS, CAST_LOGICAL_K // 2], pl.fp4e2m1x2],
     out: pl.Out[pl.Tensor[[CAST_ROWS, CAST_LOGICAL_K], pl.BF16]],
@@ -268,7 +268,7 @@ def _packed_fp4_values(data: torch.Tensor, dtype: pl.DataType) -> torch.Tensor:
 
 
 def _make_packed_fp4_decode(dtype):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def decode(src: pl.Tensor[[4, 32], dtype], out: pl.Out[pl.Tensor[[4, 64], pl.BF16]]):
         with pl.spmd(1):
             row = pl.tile.get_block_idx() * 4
@@ -281,7 +281,7 @@ def _make_packed_fp4_decode(dtype):
 
 
 def _make_packed_fp4_encode(dtype, mode):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def encode(src: pl.Tensor[[4, 64], pl.BF16], out: pl.Out[pl.Tensor[[4, 32], dtype]]):
         with pl.spmd(1):
             row = pl.tile.get_block_idx() * 4
@@ -294,7 +294,7 @@ def _make_packed_fp4_encode(dtype, mode):
 
 
 def _make_packed_fp4_roundtrip(dtype):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def roundtrip(src: pl.Tensor[[4, 32], dtype], out: pl.Out[pl.Tensor[[4, 32], dtype]]):
         with pl.spmd(1):
             row = pl.tile.get_block_idx() * 4
@@ -308,7 +308,7 @@ def _make_packed_fp4_roundtrip(dtype):
 
 
 def _make_packed_fp4_convert(source, target):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def convert(src: pl.Tensor[[4, 32], source], out: pl.Out[pl.Tensor[[4, 32], target]]):
         with pl.spmd(1):
             row = pl.tile.get_block_idx() * 4
@@ -462,7 +462,7 @@ def test_packed_fp4_raw_carrier_runtime(case_run):
 
 
 def _make_packed_fp4_dn_decode(dtype):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def decode(src: pl.Tensor[[4, 32], dtype], out: pl.Out[pl.Tensor[[4, 64], pl.BF16]]):
         with pl.spmd(1):
             block = pl.tile.get_block_idx()
@@ -477,7 +477,7 @@ def _make_packed_fp4_dn_decode(dtype):
 
 
 def _make_packed_fp4_dn_encode(dtype, mode):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def encode(src: pl.Tensor[[4, 64], pl.BF16], out: pl.Out[pl.Tensor[[4, 32], dtype]]):
         with pl.spmd(1):
             block = pl.tile.get_block_idx()
@@ -494,7 +494,7 @@ def _make_packed_fp4_dn_encode(dtype, mode):
 
 
 def _make_packed_fp4_dn_convert(source_dtype, target_dtype):
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def convert(src: pl.Tensor[[4, 32], source_dtype], out: pl.Out[pl.Tensor[[4, 32], target_dtype]]):
         with pl.spmd(1):
             block = pl.tile.get_block_idx()
@@ -512,7 +512,7 @@ def _make_packed_fp4_dn_tensor_cast(source_dtype, target_dtype):
     source_cols = 64 if source_dtype == pl.BF16 else 32
     target_cols = 64 if target_dtype == pl.BF16 else 32
 
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def convert(
         src: pl.Tensor[[4, source_cols], source_dtype],
         out: pl.Out[pl.Tensor[[4, target_cols], target_dtype]],

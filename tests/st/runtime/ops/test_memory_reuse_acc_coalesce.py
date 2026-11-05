@@ -36,7 +36,7 @@ from harness import st  # noqa: E402
 M, N, K = 512, 512, 192
 
 
-@pl.jit
+@pl.jit_trace
 def matmul_512x512x192_bf16(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
     """``a @ b`` -> ``[512, 512]`` f32 stored to DDR. The chosen ``176 x 176`` L0
     tile + split-K (K=192) peels into the pipelined accumulator if-phi shape that

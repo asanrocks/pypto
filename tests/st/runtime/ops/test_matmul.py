@@ -62,7 +62,7 @@ def test_fp32_matmul_clears_inherited_hf32(test_config, monkeypatch, split_k):
 
     monkeypatch.setattr(pto_backend, "_generate_kernel_wrapper", poison_inherited_mode)
 
-    @pl.jit
+    @pl.jit_trace
     def fp32_matmul(
         a: pl.Tensor[[256, 256], pl.FP32],
         b: pl.Tensor[[256, 256], pl.FP32],
@@ -146,7 +146,7 @@ def test_hf32_rounding_and_fp32_restoration(test_config, mode, split_k):
         torch.testing.assert_close(fp, expected_fp, rtol=0, atol=0)
 
 
-@pl.jit
+@pl.jit_trace
 def explicit_valid_shape_matmul(
     a: pl.Tensor[[17, 128], pl.FP16],
     b: pl.Tensor[[128, 24], pl.FP16],
@@ -1714,7 +1714,7 @@ class TestMatmulOperations:
         assert result.passed, f"Test failed: {result.error}"
 
     def test_matmulacc(self, test_config):
-        """Test matmul_acc_64 (@pl.jit): K=64 split into two K=32 chunks."""
+        """Test matmul_acc_64 (@pl.jit_trace): K=64 split into two K=32 chunks."""
         matmul_acc_64._cache.clear()
         torch.manual_seed(0)
         a = torch.randn(64, 64, dtype=torch.float32)

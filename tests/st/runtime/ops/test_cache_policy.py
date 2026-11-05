@@ -61,7 +61,7 @@ def _golden(tensors: dict[str, torch.Tensor]) -> torch.Tensor:
 def _cache_policy_case(cache, planner, scope):
     """Keep both legacy declaration paths, with DEFAULT as the reference."""
 
-    @pl.jit.incore
+    @pl.jit_trace.incore
     def load_kernel(
         x: pl.Tensor[[M, K], pl.FP16],
         w: pl.Tensor[[N, K], pl.FP16],
@@ -71,7 +71,7 @@ def _cache_policy_case(cache, planner, scope):
         wt = pl.load(w, [0, 0], [N, K], target_memory=pl.Mem.Mat, cache=cache)
         return pl.store(pl.matmul(xt, pl.tile.transpose_view(wt)), [0, 0], out)
 
-    @pl.jit
+    @pl.jit_trace
     def per_load(
         x: pl.Tensor[[M, K], pl.FP16],
         w: pl.Tensor[[N, K], pl.FP16],
@@ -79,7 +79,7 @@ def _cache_policy_case(cache, planner, scope):
     ) -> pl.Tensor[[M, N], pl.FP32]:
         return load_kernel(x, w, out)
 
-    @pl.jit
+    @pl.jit_trace
     def scope_bypass(
         x: pl.Tensor[[M, K], pl.FP16],
         w: pl.Tensor[[K, N], pl.FP16],
@@ -91,7 +91,7 @@ def _cache_policy_case(cache, planner, scope):
             out = pl.assemble(out, c, [0, 0])
         return out
 
-    @pl.jit
+    @pl.jit_trace
     def scope_default(
         x: pl.Tensor[[M, K], pl.FP16],
         w: pl.Tensor[[K, N], pl.FP16],

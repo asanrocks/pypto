@@ -37,7 +37,7 @@ B_DYN = pl.dynamic("B_DYN")
 B = 8  # concrete batch size used by the tests
 
 
-@pl.jit
+@pl.jit_trace
 def spmd_core_num_mul(
     x: pl.Tensor[[B_DYN, 64, 64], pl.BF16],
     out: pl.Out[pl.Tensor[[B_DYN, 64, 64], pl.FP32]],
@@ -52,7 +52,7 @@ def spmd_core_num_mul(
     return out
 
 
-@pl.jit
+@pl.jit_trace
 def spmd_core_num_floordiv(
     x: pl.Tensor[[B_DYN, 64, 64], pl.BF16],
     out: pl.Out[pl.Tensor[[B_DYN, 64, 64], pl.FP32]],
