@@ -95,7 +95,7 @@ def test_auto_split_mat_staging(tmp_path, ascend_backend, b_trans):
     """AutoTile's K loop consumes the gathered operand without a Mat->Mat move."""
     vn, vk = (256, 128) if b_trans else (128, 256)
 
-    @pl.jit
+    @pl.jit_trace
     def attention(
         q: pl.Tensor[[256, 256], pl.BF16],
         k: pl.Tensor[[256, 256], pl.BF16],
@@ -135,7 +135,7 @@ def test_auto_split_mat_staging(tmp_path, ascend_backend, b_trans):
 def test_explicit_vec_to_mat_qk_pv(tmp_path, ascend_backend, split_mode):
     """An authored NZ Vec->Mat boundary needs no copy, even without K tiling (#2992)."""
 
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def entry(
         query: pl.Tensor[[16, 16], pl.BF16],
         keys: pl.Tensor[[16, 16], pl.BF16],
@@ -193,7 +193,7 @@ def test_explicit_vec_to_mat_qk_pv(tmp_path, ascend_backend, split_mode):
 def test_two_retained_mat_operands_require_two_fifo_slots(tmp_path, ascend_backend, slot_num, place_first):
     """Two gathers before either placement cannot share a one-slot ring."""
 
-    @pl.jit
+    @pl.jit_trace
     def two_operands(
         a: pl.Tensor[[32, 32], pl.FP16],
         b: pl.Tensor[[32, 32], pl.FP16],
@@ -212,7 +212,7 @@ def test_two_retained_mat_operands_require_two_fifo_slots(tmp_path, ascend_backe
             out = pl.store(pl.matmul(al, br), [0, 0], out)
         return out
 
-    @pl.jit
+    @pl.jit_trace
     def early_placement(
         a: pl.Tensor[[32, 32], pl.FP16],
         b: pl.Tensor[[32, 32], pl.FP16],
@@ -260,7 +260,7 @@ def test_two_retained_mat_operands_require_two_fifo_slots(tmp_path, ascend_backe
 def test_reverse_consumption_preserves_fifo_prefix(tmp_path, ascend_backend, third_pop, slot_num):
     """Finishing the second tile first must not release the first tile's slot."""
 
-    @pl.jit
+    @pl.jit_trace
     def reverse_two(
         a: pl.Tensor[[32, 32], pl.FP16],
         b: pl.Tensor[[32, 32], pl.FP16],
@@ -279,7 +279,7 @@ def test_reverse_consumption_preserves_fifo_prefix(tmp_path, ascend_backend, thi
             out = pl.store(pl.matmul(al, br), [0, 0], out)
         return out
 
-    @pl.jit
+    @pl.jit_trace
     def reverse_three(
         a: pl.Tensor[[32, 32], pl.FP16],
         b: pl.Tensor[[32, 32], pl.FP16],
@@ -337,7 +337,7 @@ def test_reverse_consumption_preserves_fifo_prefix(tmp_path, ascend_backend, thi
 def test_nested_handoff_cannot_release_an_enclosing_fifo_tile(tmp_path, ascend_backend):
     """A nested last-use finalizer must not free past an enclosing live pop."""
 
-    @pl.jit
+    @pl.jit_trace
     def nested_reverse(
         a: pl.Tensor[[32, 32], pl.FP16],
         b: pl.Tensor[[32, 32], pl.FP16],

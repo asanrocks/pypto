@@ -88,7 +88,7 @@ class TestQuantMxCodegen:
     def test_public_mx_gather_compiles(self, case, slot_num, tmp_path):
         """Both public MX scale orientations survive an explicit AIV/AIC crossing."""
 
-        @pl.jit
+        @pl.jit_trace
         def direct(
             query: pl.Tensor[[64, 128], pl.BF16],
             rhs: pl.Tensor[[64, 128], pl.BF16],
@@ -101,7 +101,7 @@ class TestQuantMxCodegen:
                 output = pl.store(pl.matmul_mx(q_mx, q_scale, b_mx, b_scale), [0, 0], output)
             return output
 
-        @pl.jit
+        @pl.jit_trace
         def none_gather(
             query: pl.Tensor[[64, 128], pl.BF16],
             rhs: pl.Tensor[[64, 128], pl.BF16],
@@ -119,7 +119,7 @@ class TestQuantMxCodegen:
                 output = pl.store(pl.matmul_mx(q_mx, q_scale, b_mx, b_scale), [0, 0], output)
             return output
 
-        @pl.jit
+        @pl.jit_trace
         def split_gather(
             query: pl.Tensor[[64, 128], pl.BF16],
             rhs: pl.Tensor[[128, 64], pl.FP8E4M3FN],

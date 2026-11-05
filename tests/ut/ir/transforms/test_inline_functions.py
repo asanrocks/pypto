@@ -3798,13 +3798,13 @@ class TestInlineFunctionsParamRebinding:
     def test_jit_tensor_loop_rebinding_compiles_with_local_carry(self, count, tmp_path):
         """Specialization, inlining, SSA and codegen preserve the caller's input."""
 
-        @pl.jit.inline
+        @pl.jit_trace.inline
         def twice(t: pl.Tensor[[8, 8], pl.FP32]) -> pl.Tensor[[8, 8], pl.FP32]:
             for i in pl.range(count):
                 t = pl.add(t, t)
             return t
 
-        @pl.jit
+        @pl.jit_trace
         def main(a: pl.Tensor[[8, 8], pl.FP32], out: pl.Out[pl.Tensor[[8, 8], pl.FP32]]):
             with pl.at(pl.Level.CORE_GROUP):
                 u = twice(a)
@@ -3963,12 +3963,12 @@ class TestInlineFunctionsParamRebinding:
         onto a backing array, never from its type, so it aborts with
         ``GetCppType called for ArrayType``."""
 
-        @pl.jit.inline
+        @pl.jit_trace.inline
         def fill(vals: pl.Array[2, pl.INDEX], base: pl.Scalar[pl.INDEX]):
             for i in pl.range(2):
                 vals[i] = base + i
 
-        @pl.jit
+        @pl.jit_trace
         def drv(
             x: pl.Tensor[[64], pl.FP32],
             k: pl.Scalar[pl.INDEX],
@@ -4012,13 +4012,13 @@ class TestInlineFunctionsParamRebinding:
         run over a call-site temporary, leaving the caller's ``k`` readable
         afterwards (``s == k + (k + 6)``, not ``(k + 6) * 2``)."""
 
-        @pl.jit.inline
+        @pl.jit_trace.inline
         def acc(n: pl.Scalar[pl.INDEX]) -> pl.Scalar[pl.INDEX]:
             for i in pl.range(4):
                 n = n + i
             return n
 
-        @pl.jit
+        @pl.jit_trace
         def drv(
             a: pl.Tensor[[256], pl.FP32],
             k: pl.Scalar[pl.INDEX],
@@ -4055,13 +4055,13 @@ class TestInlineFunctionsParamRebinding:
         into a tensor param, called with ``c[r]``, lowers through the default
         pipeline and still writes into the caller's ``c``."""
 
-        @pl.jit.inline
+        @pl.jit_trace.inline
         def add_into(x: pl.Tensor[[64, 128], pl.FP32], c: pl.Tensor[[64, 128], pl.FP32]):
             for i in pl.spmd(2):
                 c0 = i * 64
                 c[0:64, c0 : c0 + 64] = pl.add(x[0:64, c0 : c0 + 64], x[0:64, c0 : c0 + 64])
 
-        @pl.jit
+        @pl.jit_trace
         def drv(a: pl.Tensor[[2, 64, 128], pl.FP32], c: pl.Out[pl.Tensor[[2, 64, 128], pl.FP32]]):
             for r in pl.range(2):
                 add_into(a[r], c[r])

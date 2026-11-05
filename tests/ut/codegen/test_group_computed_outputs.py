@@ -168,7 +168,7 @@ def test_group_computed_tensor_output_full_codegen(tmp_path):
 def test_recompiling_a_lowered_jit_program_preserves_buffer_stage(tmp_path):
     """The documented compile(kernel.lower(...)) path must accept already lowered kernels."""
 
-    @pl.jit
+    @pl.jit_trace
     def add_kernel(a: pl.Tensor, b: pl.Tensor, out: pl.Out[pl.Tensor]):
         with pl.at(level=pl.Level.CORE_GROUP):
             left = pl.load(a, [0, 0], [16, 16])

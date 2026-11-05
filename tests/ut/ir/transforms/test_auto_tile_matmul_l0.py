@@ -2032,7 +2032,6 @@ class TestAutoTileMatmulL0MNTiling:
 
         torch = pytest.importorskip("torch")
         from pypto.debug import torch_codegen  # noqa: PLC0415
-        from pypto.jit.decorator import jit  # noqa: PLC0415
 
         # Override the autouse Ascend950 fixture: 256×256 FP32 fits L0c on 950
         # but overflows it on 910B, which is the configuration that forces M/N
@@ -2040,7 +2039,7 @@ class TestAutoTileMatmulL0MNTiling:
         _backend.reset_for_testing()
         _backend.set_backend_type(BackendType.Ascend910)
 
-        @jit
+        @pl.jit_trace
         def kernel(a: pl.Tensor, b: pl.Tensor, c: pl.Out[pl.Tensor]):
             with pl.at(level=pl.Level.CORE_GROUP):
                 ta = pl.load(a, [0, 0], [256, 256], target_memory=pl.MemorySpace.Mat)

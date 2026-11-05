@@ -259,21 +259,14 @@ def test_proves_floor_divided_loop_offset():
 
 
 def test_proves_offset_through_outlined_scalar_params():
-    @pl.jit
+    @pl.jit_trace
     def outlined(a_s: pl.Tensor[[32, 2], pl.FP8E8M0, pl.MX_A_ZZ]):
         for mt in pl.parallel(2):
             row = mt * 16
             for block in pl.spmd(1, name_hint="mx_offset"):
                 _ = pl.load(a_s, [row + block * 16, 0], [16, 2], target_memory=pl.Mem.Mat)
 
-    _, _, tensor_map, scalar_dtypes, cx, dynamic_symbols = outlined._bind_args_from_signature({})
-    program = outlined._compile_to_program(
-        tensor_map,
-        scalar_dtypes,
-        cx,
-        dynamic_symbols,
-        pl,
-    )
+    program = outlined.specialize()
     (load,) = _mx_loads(_run(program))
     block_offset = _elements(load.args[1])[1]
     assert isinstance(block_offset, ir.FloorDiv)
