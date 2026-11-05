@@ -4553,6 +4553,39 @@ class Before:
     assert isinstance(source_tensor_type, (ir.TensorType, ir.DistributedTensorType))
     assert calls[0].args[0].same_as(source_tensor_type.shape[0])
 
+    def test_terminal_scope_exports_only_store_targets(self):
+        """A value-less entry's final scope exports only what it stores.
+
+        The no-context fallback used to export every non-scalar definition,
+        so a scope that computed tiles and stored into an ``Out`` parameter
+        declared tile-typed returns on the outlined function — which
+        ConvertTensorToTileOps rejects with an INTERNAL_CHECK, a bug-class
+        failure for a legal entry shape (a value-less entry whose final
+        statement is a scope). The intermediates are dead by construction:
+        the fallback is reached only when nothing after the scope reads
+        anything, at any enclosing level.
+        """
+
+        @pl.program
+        class Valueless:
+            @pl.function
+            def main(
+                self,
+                a: pl.Tensor[[128, 128], pl.FP32],
+                b: pl.Tensor[[128, 128], pl.FP32],
+                out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+            ) -> None:
+                with pl.at(level=pl.Level.CORE_GROUP):
+                    left = pl.load(a, [0, 0], [128, 128])
+                    right = pl.load(b, [0, 0], [128, 128])
+                    pl.store(pl.add(left, right), [0, 0], out)
+
+        after = passes.outline_incore_scopes()(passes.convert_to_ssa()(Valueless))
+        outlined = next(fn for fn in after.functions.values() if fn.func_type == ir.FunctionType.InCore)
+        # Only the store target escapes: one tensor-typed return, no dead loads.
+        assert len(outlined.return_types) == 1, [str(t) for t in outlined.return_types]
+        assert isinstance(outlined.return_types[0], ir.TensorType)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

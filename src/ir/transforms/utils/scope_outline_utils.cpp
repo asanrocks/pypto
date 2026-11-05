@@ -870,22 +870,72 @@ ExprPtr ScopeOutliner::VisitExpr_(const IterArgPtr& op) {
 }
 
 /**
+ * @brief Collects definitions that name the post-write state of a buffer.
+ *
+ * An ``AssignStmt`` whose value is a builtin call writing through one of its
+ * arguments binds the destination's post-write alias — ``out = reg.store(...)``
+ * or ``v = tile.store(t, off, dst)``; an accumulating atomic is the
+ * ``ReadWrite`` member of the same family. Such a definition is side-effect
+ * state in the same family as a store target, so the no-context fallback
+ * exports it (see ``ComputeFallbackUsedAfter``). Which calls write is read
+ * straight off the argument-effect registry, never from a hand-kept op list.
+ *
+ * Scalars, tuple unpacking temporaries, and Reg values stay local: they are
+ * not runtime outputs (scalar live-outs are hoisted by
+ * ``PlanScalarOutputHoist``; a Reg value cannot leave its register scope).
+ */
+class WriteAliasDefCollector : public IRVisitor {
+ public:
+  std::vector<const Var*> defs;
+
+ protected:
+  void VisitStmt_(const AssignStmtPtr& op) override {
+    if (auto call = std::dynamic_pointer_cast<const Call>(op->value_)) {
+      const auto& type = op->var_->GetType();
+      if (!As<ScalarType>(type) && !As<TupleType>(type) && !As<RegType>(type) &&
+          !CallWriteTargets(call).empty()) {
+        defs.push_back(op->var_.get());
+      }
+    }
+    IRVisitor::VisitStmt_(op);
+  }
+};
+
+/**
  * @brief Compute used_after when no explicit context is available.
  *
- * Two regimes:
- *   1. Scope is nested inside another (non-target) ScopeStmt — only store
- *      targets escape, because scope boundaries confine locally-defined
- *      variables.
- *   2. Scope is at the top level or inside a control-flow body — retain the
- *      original defensive fallback: all defined vars + store targets are
- *      treated as outputs so the caller retains access.
+ * The fallback is reached only when nothing after the scope reads anything:
+ * the SeqStmts visitor computes tail uses at every enclosing level and
+ * propagates them (required_outputs_), so an empty context means no
+ * subsequent statement — at any level — references a value this scope
+ * defines. Two families of side-effect state therefore escape, and nothing
+ * else:
+ *
+ *   - store targets: an external buffer the scope writes is caller-visible
+ *     state regardless of reads (a loop-carried accumulator rides this rule);
+ *   - write-alias definitions: a binding that names the post-write state of
+ *     a buffer the scope wrote (``WriteAliasDefCollector``).
+ *
+ * The former "export every non-scalar definition" rule exported provably
+ * dead values — dead because the fallback fires only when nothing after the
+ * scope reads anything — and a dead tile definition was worse than dead: it
+ * became a tile-typed declared return on the outlined InCore function, which
+ * ConvertTensorToTileOps rejects with an INTERNAL_CHECK, a bug-class failure
+ * for a value-less entry whose final statement is a ``pl.at`` scope computing
+ * intermediates. A definition whose only wiring is an enclosing loop's
+ * return_var (a carry whose final value nothing reads) is no longer exported
+ * either; such a carry is dead, and dropping it fails the SSA verifier loudly
+ * instead of compiling a longer dead cycle. A carry that anything reads after
+ * its loop is propagated through required_outputs_ and never reaches this
+ * fallback; a loop *inside* the scope keeps leaving through that loop's own
+ * return_vars.
  */
 std::unordered_set<const Var*> ScopeOutliner::ComputeFallbackUsedAfter(const ScopeStmtPtr& scope) const {
   // A deferred-completion waiter is registration-only: its scalar
   // bookkeeping and loop induction variables are local implementation
-  // details, never semantic outputs.  In particular, exporting all local
-  // definitions from a terminal waiter would try to return a loop variable
-  // outside the ForStmt that defines it.  OutlineScope validates the full
+  // details, never semantic outputs. In particular, exporting scalar
+  // bookkeeping from a terminal waiter would try to return a loop variable
+  // outside the ForStmt that defines it. OutlineScope validates the full
   // waiter contract immediately after this fallback is computed, so no
   // legitimate store/output can be hidden by returning an empty set here.
   if (ContainsDeferredWait(scope->body_)) return {};
@@ -893,21 +943,10 @@ std::unordered_set<const Var*> ScopeOutliner::ComputeFallbackUsedAfter(const Sco
   StoreTargetCollector store_collector;
   store_collector.VisitStmt(scope->body_);
   std::unordered_set<const Var*> used_after;
-  if (!inside_nested_scope_body_) {
-    var_collectors::VarDefUseCollector def_collector;
-    def_collector.VisitStmt(scope->body_);
-    // Scalars, tuple unpacking temporaries, and Reg values are not runtime
-    // outputs. Tuple projections already expose their tensor definitions;
-    // exporting the tuple too would create a nested terminal SPMD output.
-    // Actual live-out uses are handled by the explicit tail-use analysis.
-    for (const Var* var : def_collector.var_defs) {
-      if (As<ScalarType>(var->GetType()) || As<TupleType>(var->GetType()) || As<RegType>(var->GetType())) {
-        continue;
-      }
-      used_after.insert(var);
-    }
-  }
   used_after.insert(store_collector.store_targets.begin(), store_collector.store_targets.end());
+  WriteAliasDefCollector alias_collector;
+  alias_collector.VisitStmt(scope->body_);
+  used_after.insert(alias_collector.defs.begin(), alias_collector.defs.end());
   return used_after;
 }
 
@@ -1000,7 +1039,8 @@ StmtPtr ScopeOutliner::VisitStmt_(const SeqStmtsPtr& op) {
       used_after.insert(required_outputs_.begin(), required_outputs_.end());
 
       // When no context is available (no subsequent statements and no parent
-      // requirements), fall back to scope-nesting-aware defaults.  This
+      // requirements), fall back to the scope's side-effect state only (see
+      // ``ComputeFallbackUsedAfter``).  This
       // happens when a single ScopeStmt is wrapped in SeqStmts inside a
       // control-flow body (if/for/while) where the outer context hasn't
       // propagated required_outputs_, or when the scope sits directly
@@ -1039,11 +1079,10 @@ StmtPtr ScopeOutliner::VisitStmt_(const SeqStmtsPtr& op) {
  * @brief Handle ScopeStmts that are direct children of another node (not
  * inside a SeqStmts).
  *
- * The fallback honours scope nesting via ``inside_nested_scope_body_``: an
- * inner scope whose only "context" is an enclosing non-target scope has no
- * way for its locally-defined variables to escape, so we only expose store
- * targets. Scopes at the true top level (outside any parent scope body)
- * retain the original defensive "all defs are outputs" behaviour.
+ * The fallback exports only side-effect state (store targets and write-alias
+ * definitions) in every regime (see ``ComputeFallbackUsedAfter``);
+ * ``inside_nested_scope_body_`` remains the deferred-wait nesting check in
+ * ``OutlineScope``.
  */
 // Shared per-kind logic: outline if kind matches, else descend with the
 // nested-scope flag set so any target-kind scope we find inside can make a
