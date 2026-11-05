@@ -11,7 +11,8 @@
 
 One runtime under the tier's protocols (see
 ``docs/en/dev/language/07-authoring-recipes.md``): the session that owns one
-invocation, its function units, and the contracts a recipe pushes.
+invocation, its function units, the contracts a recipe pushes, and the
+dispatch effect.
 
 The stdlib's structural constructs (``pl.at``, ``pl.spmd``, ...) are this
 tier's reference clients — they are built on the same public capabilities an
@@ -20,10 +21,11 @@ capability views (``FunctionContext`` / ``ControlContext``) only: no builder,
 no ``PtoFrame``, no interpreter.
 
 The package splits by responsibility: the contracts and artifacts
-(:mod:`.contracts`) and the session and function-unit lifecycle
-(:mod:`.session`). This package is the tier's sole import root: nothing of the
-authoring surface is re-exported at the top-level ``pl`` namespace — the root
-stays the kernel author's, and framework authors import here.
+(:mod:`.contracts`), the session and function-unit lifecycle
+(:mod:`.session`), and the dispatch effect (:mod:`.dispatch`). This package is
+the tier's sole import root: nothing of the authoring surface is re-exported at
+the top-level ``pl`` namespace — the root stays the kernel author's, and
+framework authors import here.
 """
 
 from pypto.language.authoring.contracts import (
@@ -37,6 +39,8 @@ from pypto.language.authoring.session import (
     FunctionContext,
 )
 
+from . import dispatch as dispatch
+
 __all__ = [
     "CollectedBody",
     "ControlContext",
@@ -44,4 +48,5 @@ __all__ = [
     "FunctionContract",
     "FunctionContext",
     "ParamSpec",
+    "dispatch",
 ]

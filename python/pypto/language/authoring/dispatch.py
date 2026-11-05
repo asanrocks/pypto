@@ -1,0 +1,643 @@
+# Copyright (c) PyPTO Contributors.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# -----------------------------------------------------------------------------------------------------------
+
+"""The dispatch authoring effect — one task submission as a semantic capability.
+
+``pl.submit`` and ``pl.spmd_submit`` lower to an :class:`ir.Submit` — a
+*structure* statement (task creation), not a dataflow op — so the dispatch
+family belongs to the authoring tier's effect vocabulary (see the surface
+classification in ``docs/en/dev/language/07-authoring-recipes.md``). This
+module is the one implementation of the effect: operand-boundary coercion,
+callee validation, dependency / dump lowering, and the ``ir.Submit``
+assembly. The stdlib spellings (:mod:`pypto.language.constructs.submit`) are
+policy wrappers over :func:`dispatch`; the authoring capability
+(``ctx.submit`` — see :class:`pypto.language.authoring.recipe.RecipeContext`)
+is the recipe-facing spelling over the same function. Neither adds lowering
+of its own, so the two spellings cannot drift.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterator, Sequence
+from typing import Any, cast
+
+from pypto.language.diagnostics import ParserTypeError
+from pypto.language.facade import Facade, is_facade
+from pypto.language.op.marker import Marker
+from pypto.language.typing import Tuple, wrap_expr
+from pypto.language.typing._emit import _EmitState, _structural_projection
+from pypto.language.typing.tensor import NoDepMarker
+from pypto.pypto_core import DataType
+from pypto.pypto_core import ir as _ir
+
+__all__ = [
+    "SubmitArg",
+    "SubmitCallee",
+    "SubmitEntries",
+    "SubmitOperand",
+    "dispatch",
+]
+
+#: The closed submit-operand vocabulary — exactly what :func:`submit_expr`
+#: accepts at the operand boundary: the five unwrap facades, a raw
+#: ``ir.Expr``, and the host scalars lifted to typed constants. Anything
+#: else is a loud TypeError there.
+SubmitOperand = Facade | _ir.Expr | int | float | bool
+
+#: A submit kernel argument: an operand, or a ``pl.no_dep`` marker wrapping one.
+SubmitArg = SubmitOperand | NoDepMarker
+
+#: The ``deps=``/``dumps=`` entry-list form (a ``None`` entry is the
+#: conditional-edge sentinel — skipped, never coerced).
+SubmitEntries = Sequence[SubmitOperand | None]
+
+#: The callee surface as the type checker sees it. At runtime the argument
+#: is always a ``Marker`` (validated below), but ``@pl.function`` inside a
+#: ``@pl.program`` class *replaces* the method with a Marker — a class
+#: decorator effect invisible to static checkers — so call sites hold a
+#: plain callable. The union admits that static view; the runtime check
+#: keeps the real contract loud.
+SubmitCallee = Marker | Callable[..., object]
+
+_ARRAY_GET_ELEMENT = _ir.get_op("array.get_element").name
+
+
+def submit_expr(value: Any, what: str) -> _ir.Expr:
+    """Normalize a submit operand to an ``ir.Expr`` at the operand boundary
+    (the one automatic host-literal lift): facades unwrap,
+    raw ``ir.Expr`` pass through, host ``int``/``bool`` literals lift to
+    typed constants. Anything else is loud (the AST's parse discipline:
+    every submit operand is an IR expression).
+
+    A host ``int`` lifts to an **INDEX** ``ConstInt`` — the language's
+    bare-integer rule (*"A bare integer literal is always INDEX-typed"*),
+    which is what the parser's ``parse_constant`` produces for the same source
+    and what the frontend's other operand boundaries (``typing/_host.py``)
+    already do. A host ``bool`` lifts to a **``ConstBool``** for the same
+    reason (``bool`` is a Python ``int`` subclass, so the check comes first);
+    typing it as a ``ConstInt`` would lie against a ``pl.BOOL`` parameter.
+    Every bare-``int``/``bool`` submit operand therefore agrees with the
+    parser: the SPMD ``core_num=`` launch spec, the dispatch ``device=``, a
+    kernel argument, and the ``deps=`` / ``dumps=`` / ``predicate=`` operands."""
+    if is_facade(value):
+        return value.unwrap()
+    if isinstance(value, _ir.Expr):
+        return value
+    if isinstance(value, bool):
+        return _ir.ConstBool(value, _ir.Span.unknown())
+    if isinstance(value, int):
+        return _ir.ConstInt(value, DataType.INDEX, _ir.Span.unknown())
+    if isinstance(value, float):
+        return _ir.ConstFloat(value, DataType.DEFAULT_CONST_FLOAT, _ir.Span.unknown())
+    raise TypeError(f"{what}: expected a staged value (facade or ir.Expr), got {value!r}")
+
+
+def resolve_callee(
+    callee: SubmitCallee, kernel_args: tuple[SubmitArg, ...], construct: str
+) -> tuple[SubmitCallee, tuple[SubmitArg, ...]]:
+    """Run the callee's Submit-reference resolution before validation.
+
+    Call and submit share one instantiation semantics: a callee that
+    specializes per call (the jit envelope) resolves the reference through
+    the same lane a call takes, so validation, arg coercion, and the lowered
+    ``ir.Submit`` all see the specialized target — never the frozen
+    declaration with a stale signature. A plain Marker declines (``None``)
+    and the submit lowers verbatim.
+    """
+    resolve = getattr(callee, "resolve_submit", None)
+    if resolve is None:
+        return callee, kernel_args  # check_callee raises the loud marked-callee error
+    resolved = resolve(kernel_args)
+    if resolved is None:
+        return callee, kernel_args  # the verbatim reference: the frozen callee
+    target, runtime_args = resolved
+    if not isinstance(target, Marker):
+        raise TypeError(f"{construct} callee resolution returned {target!r}, not a marked sub-kernel")
+    return target, runtime_args
+
+
+def check_callee(callee: object, kernel_args: Sequence[SubmitArg], construct: str) -> Marker:
+    """Validate the marked callee and its arity (the collect-tier conformance
+    contract — the Submit's Tuple[<ret>, TASK_ID] type is derived from
+    the callee's *declared* return, never its implicit return).
+
+    Every failure raises; the return is the narrowed ``Marker`` for the
+    lowering path (``lower_submit`` wants the real type, not the widened
+    :data:`SubmitCallee` union).
+    """
+    if not isinstance(callee, Marker):
+        raise TypeError(
+            f"{construct} first argument must be a marked sub-kernel (a @pl.function Marker), got {callee!r}"
+        )
+    declared = list(callee.declared_return_types)
+    if not declared:
+        if callee.return_types:
+            # The lie guard: a callee that *implicitly* returns must declare the
+            # ``->`` — the Submit's Tuple[<ret>, TASK_ID] type is derived from the
+            # declared return, never the implicit one. A callee with no return at
+            # all is unambiguous: the Submit yields only its TASK_ID.
+            raise TypeError(
+                f"{construct} callee {callee.name!r} must declare a -> return type — the "
+                f"Submit's Tuple[<ret>, TASK_ID] type is derived from it"
+            )
+        if not callee.implicit_returns_pinned:
+            # An annotation-less program method the decorator has not traced
+            # yet (defined after the caller). Deriving TASK_ID-only from an
+            # *unknown* return set would be a silent guess — the callee may
+            # well return values — so stay loud.
+            raise TypeError(
+                f"{construct} callee {callee.name!r} must declare a -> return type — its "
+                f"implicit return set is not pinned yet (annotation-less program methods "
+                f"are pinned in class-body order, so define it before the caller)"
+            )
+    if len(kernel_args) > len(callee.params):
+        raise TypeError(
+            f"{construct} callee {callee.name!r} expects at most {len(callee.params)} "
+            f"argument(s), got {len(kernel_args)}"
+        )
+    # The IR contract (the orchestration codegen's CountTrailingCommCtxParams
+    # rule): CommCtx-typed params form a trailing suffix — the materialize
+    # pass appends them and forwards them as the last positional args — so
+    # the omitted window between the caller-supplied prefix and that suffix
+    # may hold only Out parameters (runtime-allocated by the backend). A
+    # mid-signature Out param is therefore omittable, exactly like the
+    # pass-produced Submit shape the printer round-trips.
+    params = callee.params
+    directions = callee.param_directions
+    ctx_count = 0
+    while ctx_count < len(params) and isinstance(params[len(params) - 1 - ctx_count].type, _ir.CommCtxType):
+        ctx_count += 1
+    if len(kernel_args) < ctx_count:
+        raise TypeError(
+            f"{construct} callee {callee.name!r}: {len(kernel_args)} argument(s) "
+            f"cannot cover the {ctx_count} materialized CommCtx parameter(s)"
+        )
+    original_arg_count = len(kernel_args) - ctx_count
+    original_param_count = len(params) - ctx_count
+    for index in range(original_arg_count, original_param_count):
+        if directions[index] != _ir.ParamDirection.Out:
+            raise TypeError(
+                f"{construct} callee {callee.name!r} missing positional argument "
+                f"{index}, which is declared {directions[index].name}; "
+                "only Out parameters may be runtime-allocated"
+            )
+    return callee
+
+
+def reject_host_level_omitted_outputs(
+    frame: Any, callee: Marker, kernel_args: Sequence[SubmitArg], construct: str
+) -> None:
+    """A distributed HOST submit dispatches to L3, which allocates no output
+    tensors, so it cannot omit Out/InOut params the way an Orchestration-level
+    submit can (mirrors the AST parser's ``host_submit`` arity window)."""
+    if frame is None or frame.function_level is not _ir.Level.HOST:
+        return
+    if len(kernel_args) < len(callee.params):
+        raise ParserTypeError(
+            f"Distributed HOST {construct}(...) requires every callee argument, including "
+            f"Out/InOut tensors; function '{callee.name}' expects {len(callee.params)} "
+            f"argument(s), got {len(kernel_args)}"
+        )
+
+
+def _strip_no_dep_and_coerce(
+    kernel_args: Sequence[SubmitArg], construct: str
+) -> tuple[list[int], list[_ir.Expr]]:
+    """Unwrap ``pl.no_dep`` markers and coerce each kernel arg to an
+    ``ir.Expr`` at the operand boundary. Returns ``(no_dep_indices,
+    arg_exprs)`` — the indices feed the Submit's ``arg_direction_overrides`` attr
+    (the AST's ``_strip_call_arg_markers`` threads the same per-arg override)."""
+    no_dep_indices: list[int] = []
+    args_list = list(kernel_args)
+    for i, a in enumerate(args_list):
+        if isinstance(a, NoDepMarker):
+            no_dep_indices.append(i)
+            args_list[i] = a.unwrap()
+    arg_exprs = [submit_expr(a, f"{construct} argument") for a in args_list]
+    return no_dep_indices, arg_exprs
+
+
+def _is_dep_var_type(type_: _ir.Type | None) -> bool:
+    """A ``deps=`` entry type the whole-Var path accepts: a TaskId scalar or
+    a TASK_ID array (the parser's ``_is_dep_var_type``)."""
+    if isinstance(type_, _ir.ScalarType) and type_.dtype == DataType.TASK_ID:
+        return True
+    return isinstance(type_, _ir.ArrayType) and type_.dtype == DataType.TASK_ID
+
+
+def _is_per_element_task_id_read(expr: _ir.Expr) -> bool:
+    """An ``array.get_element(arr, i)`` reading a TaskId from a TASK_ID
+    array — the Form-1 per-element ``deps=`` entry."""
+    if not isinstance(expr, _ir.Call) or expr.op.name != _ARRAY_GET_ELEMENT:
+        return False
+    if not isinstance(expr.type, _ir.ScalarType) or expr.type.dtype != DataType.TASK_ID:
+        return False
+    if not expr.args:
+        return False
+    return _is_dep_var_type(expr.args[0].type)
+
+
+def _synthesize_deps_array(frame: Any, entries: list[_ir.Expr]) -> _ir.Var:
+    """Fold per-element ``deps=`` entries into one fresh ``Array[K, TASK_ID]``
+    (``array.create`` + ``array.update_element`` rebinds) so the existing
+    whole-array dep codegen fires unchanged — the parser's
+    ``_synthesize_deps_array`` on the tracing side."""
+    if frame is None:
+        raise TypeError("deps= per-element desugaring requires an active trace")
+    size = _ir.ConstInt(len(entries), DataType.INDEX, _ir.Span.unknown())
+    create = _ir.create_op_call("array.create", [size], {"dtype": DataType.TASK_ID}, _ir.Span.unknown())
+    buffer = frame.let_temp(create, "submit_deps")
+    for index, entry in enumerate(entries):
+        slot = _ir.ConstInt(index, DataType.INDEX, _ir.Span.unknown())
+        update = _ir.create_op_call("array.update_element", [buffer, slot, entry], {}, _ir.Span.unknown())
+        buffer = frame.let_temp(update, "submit_deps")
+    return buffer
+
+
+def coerce_deps(deps: Sequence[SubmitOperand | None] | None, construct: str, frame: Any) -> list[_ir.Var]:
+    """Coerce the ``deps=`` list to the IR's Var-based dependency form.
+
+    The one ``deps=`` lowering on the trace lane: the dispatch effect
+    (``pl.submit`` / ``pl.spmd_submit`` / ``ctx.submit``) and the scope
+    constructs (``ctx.lower_deps`` — ``pl.at`` / ``pl.spmd``'s
+    ``manual_dep_edges``) share this implementation, mirroring the parser's
+    single ``parse_submit_deps_kwarg``.
+
+    The parser's ``deps=`` contract, ported to the operand boundary: a bare
+    TaskId Var or a whole TASK_ID array Var passes direct; an ``arr[i]``
+    per-element read (Form 1) folds the whole list into one fresh
+    ``Array[K, TASK_ID]`` synthesized at the current insertion point, so
+    ``manual_dep_edges`` / ``Submit.deps`` stay Var-only (a raw element Call
+    is rejected by the builder and would leave invalid entries for
+    ``SubmitToCallView``); a ``None`` entry is the conditional-edge sentinel
+    — skipped, never coerced. Mixing a whole-array entry with per-element
+    entries is loud: the synthesizer would feed the array Var into a scalar
+    ``update_element`` slot.
+    """
+    if deps is None:
+        return []
+    if not isinstance(deps, (list, tuple)):
+        raise TypeError(f"{construct} deps= must be a list of TaskId values, got {deps!r}")
+    entries: list[_ir.Expr] = []
+    needs_desugar = False
+    saw_whole_array = False
+    for d in deps:
+        if d is None:
+            continue
+        expr = submit_expr(d, f"{construct} deps entry")
+        if isinstance(expr, _ir.Var) and _is_dep_var_type(expr.type):
+            if isinstance(expr.type, _ir.ArrayType):
+                if needs_desugar:
+                    raise TypeError(
+                        f"{construct} deps= cannot mix a whole TASK_ID array with "
+                        "per-element entries (got an array entry after a per-element "
+                        "entry) — pass the array alone or index it slot-by-slot"
+                    )
+                saw_whole_array = True
+            entries.append(expr)
+            continue
+        if _is_per_element_task_id_read(expr):
+            if saw_whole_array:
+                raise TypeError(
+                    f"{construct} deps= cannot mix a whole TASK_ID array with "
+                    "per-element entries (got a per-element entry after a whole "
+                    "array) — pass the array alone or index it slot-by-slot"
+                )
+            entries.append(expr)
+            needs_desugar = True
+            continue
+        raise TypeError(
+            f"{construct} deps= entries must be a TaskId variable, a TASK_ID "
+            f"array, a TASK_ID array element (e.g. arr[i]), or None — got {d!r}"
+        )
+    if not entries:
+        return []
+    if needs_desugar:
+        return [_synthesize_deps_array(frame, entries)]
+    # Sound without a runtime filter: an entry that is not a Var can only be a
+    # per-element read, and any such entry sets needs_desugar above.
+    return cast("list[_ir.Var]", entries)
+
+
+def coerce_dumps(dumps: Sequence[SubmitOperand | None] | None, construct: str) -> list[_ir.Expr] | None:
+    """Coerce the ``dumps=`` list (tensor args) to ``ir.Expr``; ``None`` stays
+    ``None`` (no dump attr).
+
+    Entries are deduplicated by Var identity, first occurrence kept — the
+    parser's ``_parse_submit_dumps_kwarg`` rule (and the same normalization its
+    positional-arg scan applies). ``dump_vars`` is a set-like carrier: the
+    printer emits it in arg order through a Var-identity set, so a repeated
+    entry has no printed form (``dumps=[x, x]`` prints ``dumps=[x]`` and
+    re-parses deduplicated) and the traced IR would fail the print→parse
+    round-trip invariant."""
+    if dumps is None:
+        return None
+    if not isinstance(dumps, (list, tuple)):
+        raise TypeError(f"{construct} dumps= must be a list of tensor args, got {dumps!r}")
+    deduped: list[_ir.Expr] = []
+    for entry in (submit_expr(d, f"{construct} dumps entry") for d in dumps):
+        if not any(entry is existing for existing in deduped):
+            deduped.append(entry)
+    return deduped
+
+
+def merge_sticky_dump_args(
+    frame: Any,
+    arg_exprs: Sequence[_ir.Expr],
+    dumps: list[_ir.Expr] | None,
+) -> list[_ir.Expr]:
+    """Build the Submit's ``dump_vars`` vector — the AST parser's per-call scan.
+
+    ``_parse_kernel_call`` builds ``dump_vars`` with one positional-arg scan
+    over ``(tagged ∪ explicit dumps=)``, Var identity deduped, for every call
+    kind, and the plain-call op boundary performs the same forward-sticky merge
+    (``Marker.__call__``). The scan is also what makes the vector *arg-ordered*:
+    the printer emits ``dumps=`` in arg order (``python_printer.cpp``), so any
+    other order — the source order of a reordered ``dumps=[y, x]`` — has no
+    printed form and fails the print→parse round trip (F43). A tagged tensor
+    that reaches ``pl.submit`` / ``pl.spmd_submit`` is a declarative dump
+    request: dropping the tag loses the user's mark (F30).
+
+    A ``dumps=`` entry that is not a positional arg is a tracing-only leniency
+    (the parser rejects it) — kept, appended after the scanned args. The
+    forward-sticky half needs a live trace (``frame`` is ``None`` for a direct
+    call, which then has no tagged args, exactly like ``Marker.__call__``)."""
+    explicit = list(dumps or [])
+    tagged: list[_ir.Expr] = []
+    if frame is not None:
+        tagged = [e for e in arg_exprs if isinstance(e, _ir.Var) and frame.is_dump_tagged(e)]
+    if not tagged and not explicit:
+        return []
+    merged: list[_ir.Expr] = []
+    for arg in arg_exprs:
+        if not isinstance(arg, _ir.Var):
+            continue
+        if not any(arg is t for t in tagged) and not any(arg is d for d in explicit):
+            continue
+        if not any(arg is m for m in merged):
+            merged.append(arg)
+    for entry in explicit:
+        if not any(entry is m for m in merged):
+            merged.append(entry)
+    return merged
+
+
+def _opt_expr(value: Any, what: str) -> _ir.Expr | None:
+    """Coerce an optional submit operand (predicate/device/core_num) to
+    ``ir.Expr`` at the operand boundary; ``None`` passes through."""
+    return submit_expr(value, what) if value is not None else None
+
+
+#: The runtime's fixed task-timing slot count (sixteen; the parser pins the
+#: same number — the scheduler exposes no more).
+_NUM_TASK_TIMING_SLOTS = 16
+
+
+def validated_timing_slot(timing_slot: object, construct: str) -> int | None:
+    """Validate an optional ``timing_slot=0..15`` tag.
+
+    The slot is a compile-time configuration value (a non-negative integer
+    literal, never an IR expression): the runtime has sixteen fixed
+    task-timing slots and a tagged task contributes its dispatch/finish
+    window to the selected one."""
+    if timing_slot is None:
+        return None
+    if isinstance(timing_slot, bool) or not isinstance(timing_slot, int):
+        raise TypeError(
+            f"{construct} timing_slot must be a non-negative integer literal in "
+            f"0..{_NUM_TASK_TIMING_SLOTS - 1}, got {timing_slot!r}"
+        )
+    if not 0 <= timing_slot < _NUM_TASK_TIMING_SLOTS:
+        raise ValueError(
+            f"{construct} timing_slot must be in 0..{_NUM_TASK_TIMING_SLOTS - 1}, got {timing_slot}"
+        )
+    return timing_slot
+
+
+def validated_core_num(core_num: SubmitOperand | None, construct: str) -> _ir.Expr | None:
+    """Validate a submit ``core_num=`` launch width at the operand boundary.
+
+    ``core_num`` is the SPMD block count, and the language contract is a
+    *positive integer expression* — the parser's ``parse_and_validate_core_num``
+    rule, which the tracing lane's sibling launch head already enforces
+    (``pl.spmd``'s ``_pin_spmd_core_num``). Without this check the operand
+    boundary's automatic host-literal lift would turn ``0`` into a zero-block
+    launch whose Submit still claims a TaskId, and its ``bool`` arm would coerce
+    ``True`` into an ``INT32`` ``1``.
+
+    The positivity rule reads the *coerced* expression, so a host ``0`` and a
+    staged ``pl.const(0, pl.INDEX)`` reject alike — the parser's constant check
+    sees the same ``ConstInt``. A non-integer *typed* operand is left to the IR
+    boundary (``Submit::ValidateLaunchSpec``), which rejects it."""
+    if core_num is None:
+        return None
+    if isinstance(core_num, bool) or not (is_facade(core_num) or isinstance(core_num, (_ir.Expr, int))):
+        raise TypeError(f"{construct} core_num must be an integer expression, got {core_num!r}")
+    expr = submit_expr(core_num, f"{construct} core_num")
+    if isinstance(expr, _ir.ConstInt) and expr.value <= 0:
+        raise ValueError(f"{construct} core_num must be a positive integer, got {expr.value}")
+    return expr
+
+
+class _SubmitOutputs:
+    """Nested Python unpacking view over only the output projections."""
+
+    def __init__(self, node: _ir.Submit, output_count: int, state: _EmitState) -> None:
+        self._node = node
+        self._output_count = output_count
+        self._state = state
+
+    def __iter__(self) -> Iterator[object]:
+        for index in range(self._output_count):
+            expr = _ir.TupleGetItemExpr(self._node, index, _ir.Span.unknown())
+            output = wrap_expr(expr, expr.type)
+            yield _structural_projection(output, self._state, index, "submit")
+
+
+class _SubmitResult:
+    """Nested Python unpacking view for a multi-return Submit.
+
+    The IR result stays flat as ``(out0, out1, task_id)`` for codegen, while
+    the ergonomic source form ``(out0, out1), task_id = pl.submit(...)`` needs
+    one nested Python tuple boundary. Every projection shares the same emit
+    state so the Submit is named exactly once in the traced IR.
+    """
+
+    def __init__(self, node: _ir.Submit, output_count: int, state: _EmitState) -> None:
+        self._node = node
+        self._output_count = output_count
+        self._state = state
+
+    def __iter__(self) -> Iterator[Any]:
+        """Yield the (outputs-view, task-id) pair for ``res, tid = submit``.
+
+        The element types are dynamic facades derived from the callee's
+        *declared* return types — unknowable statically — so they cross as
+        ``Any``; the bind hooks carry the real types.
+        """
+        yield _SubmitOutputs(self._node, self._output_count, self._state)
+        task_expr = _ir.TupleGetItemExpr(self._node, self._output_count, _ir.Span.unknown())
+        task = wrap_expr(task_expr, task_expr.type)
+        yield _structural_projection(task, self._state, self._output_count, "submit")
+
+    def __getitem__(self, index: int) -> Any:
+        """Expose flat projections for the parser-compatible temporary form.
+
+        The element types are the callee's declared-return-derived
+        projections — unknowable statically (the same dynamic-facade
+        contract as ``__iter__``)."""
+        if index < 0 or index > self._output_count:
+            raise IndexError(f"Submit result index {index!r} is out of range")
+        expr = _ir.TupleGetItemExpr(self._node, index, _ir.Span.unknown())
+        projection = wrap_expr(expr, expr.type)
+        return _structural_projection(projection, self._state, index, "submit")
+
+
+def lower_submit(  # noqa: PLR0913 - one kwarg per ir.Submit field
+    *,
+    callee: Marker,
+    arg_exprs: list[_ir.Expr],
+    no_dep: list[int],
+    deps: Sequence[_ir.Expr],
+    dumps: list[_ir.Expr] | None,
+    allow_early_resolve: bool,
+    predicate: _ir.Expr | None,
+    device: _ir.Expr | None,
+    extra_attrs: dict[str, Any] | None,
+    core_num: _ir.Expr | None,
+    sync_start: bool,
+    spmd: bool,
+    timing_slot: int | None = None,
+    frame: Any = None,
+) -> Any:
+    """Pure lowering: assemble the Submit attrs, deduce the return type, build
+    the ``ir.Submit``, and wrap the structural Tuple facade (the 2-target unpack
+    / single-LHS bind machinery). No kwargs parsing, no isinstance-on-kwargs,
+    no coercion — the effect entry owns that.
+
+    Returns a staged ``Tuple`` facade over the Submit node: the 2-target
+    unpack ``a, a_tid = pl.submit(...)`` iterates the element projections (each
+    carrying ``__trace_bind__`` + a shared ``_EmitState``, so the shared node
+    is named once as a ``_tuple_tmp``); the single-LHS ``res = pl.submit(...)``
+    binds the facade itself through the ordinary bind path — one statement,
+    the Submit bound directly to the user's name, which is exactly the AST
+    parser's ``_parse_submit_single_lhs`` shape (its ``_submit_tmp`` exists
+    only on the *unpacking* path). Dedup is value-owned (``state.temp``)."""
+    # A Submit references its callee without calling it; a callee whose
+    # program-assembly registration is lazy (the jit envelope's global
+    # wrapper) registers here — the op-layer hook, frontend-implemented.
+    callee.on_submit_reference()
+    attrs: dict[str, Any] | None = None
+    dump_vars = merge_sticky_dump_args(frame, arg_exprs, dumps)
+    if dump_vars:
+        attrs = {"dump_vars": dump_vars}
+    if no_dep:
+        attrs = attrs or {}
+        attrs["arg_direction_overrides"] = list(no_dep)
+    if device is not None:
+        attrs = attrs or {}
+        attrs["device"] = device
+    if extra_attrs:
+        attrs = attrs or {}
+        for k, v in extra_attrs.items():
+            attrs.setdefault(k, v)
+    if timing_slot is not None:
+        # The dedicated kwarg wins over a round-trip attrs= dict (the AST's
+        # setdefault discipline shared with device= / no_dep below).
+        attrs = attrs or {}
+        attrs.setdefault("task_timing_slot", timing_slot)
+
+    declared = list(callee.declared_return_types)
+    supplied_params = callee.params[: len(arg_exprs)]
+    return_types = _ir.deduce_call_return_type(supplied_params, arg_exprs, declared)
+    # A callee's structural ``pl.Tuple[...]`` return is one Function return
+    # slot, but Submit exposes each output followed by its TaskId. Builtin
+    # ``tuple[...]`` annotations already arrive as flat return slots.
+    if len(return_types) == 1 and isinstance(return_types[0], _ir.TupleType):
+        result_types = list(return_types[0].types)
+    else:
+        result_types = return_types
+    ret_type = _ir.TupleType([*result_types, _ir.ScalarType(DataType.TASK_ID)])
+    span = _ir.Span.unknown()
+    if spmd or attrs is not None or allow_early_resolve or predicate is not None:
+        submit_node = _ir.Submit(
+            callee.gvar,
+            arg_exprs,
+            deps,
+            {},
+            attrs,
+            ret_type,
+            span,
+            core_num=core_num,
+            sync_start=sync_start,
+            allow_early_resolve=allow_early_resolve,
+            predicate=predicate,
+        )
+    else:
+        submit_node = _ir.Submit(callee.gvar, arg_exprs, deps, ret_type, span)
+    state = _EmitState(submit_node)
+
+    if len(result_types) > 1:
+        return _SubmitResult(submit_node, len(result_types), state)
+
+    facade = Tuple._runtime(submit_node)
+    # The shared emit state the two-target unpack projections name the shared
+    # node through (``_structural_projection``). No bind hook: the single-LHS
+    # ``res = pl.submit(...)`` binds this facade directly, matching
+    # ``_parse_submit_single_lhs`` — a temp here left a Var-to-Var copy the
+    # parser never emits (F28).
+    facade._emit_state = state
+    return facade
+
+
+def dispatch(  # noqa: PLR0913 - one kwarg per ir.Submit field
+    *,
+    callee: SubmitCallee,
+    kernel_args: tuple[SubmitArg, ...],
+    construct: str,
+    frame: Any = None,
+    deps: SubmitEntries | None = None,
+    dumps: SubmitEntries | None = None,
+    allow_early_resolve: bool = False,
+    predicate: SubmitOperand | None = None,
+    device: SubmitOperand | None = None,
+    timing_slot: int | None = None,
+    attrs: dict[str, Any] | None = None,
+    core_num: SubmitOperand | None = None,
+    sync_start: bool = False,
+) -> Any:
+    """The one dispatch effect: validate, coerce, and lower one task submission.
+
+    ``frame`` is the trace frame the effect lands in — the ambient frame for
+    the stdlib spellings, the authoring session's borrowed frame for the
+    capability. ``core_num`` (with ``sync_start``) is the SPMD launch spec; a
+    submit without one is a single-block dispatch. Everything else matches the
+    stdlib spellings' contracts; this is the shared implementation beneath
+    them, so the two cannot drift.
+    """
+    callee, kernel_args = resolve_callee(callee, kernel_args, construct)
+    marker = check_callee(callee, kernel_args, construct)
+    reject_host_level_omitted_outputs(frame, marker, kernel_args, construct)
+    no_dep, arg_exprs = _strip_no_dep_and_coerce(kernel_args, construct)
+    return lower_submit(
+        callee=marker,
+        arg_exprs=arg_exprs,
+        no_dep=no_dep,
+        deps=coerce_deps(deps, construct, frame),
+        dumps=coerce_dumps(dumps, construct),
+        allow_early_resolve=allow_early_resolve,
+        predicate=_opt_expr(predicate, f"{construct} predicate"),
+        device=_opt_expr(device, f"{construct} device"),
+        extra_attrs=attrs,
+        core_num=None if core_num is None else validated_core_num(core_num, construct),
+        timing_slot=validated_timing_slot(timing_slot, construct),
+        sync_start=sync_start,
+        spmd=core_num is not None,
+        frame=frame,
+    )
