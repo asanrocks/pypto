@@ -52,7 +52,7 @@ LR_OUTPUT_COLS = 16
 LR_EVENT_ID = 5
 
 
-@pl.jit
+@pl.jit_trace
 def sync_set_wait_odd_shape(
     a: pl.Tensor[[ROWS, K], pl.FP32],
     b: pl.Tensor[[ROWS, K], pl.FP32],
@@ -130,7 +130,7 @@ def sync_set_wait_odd_shape(
     return output
 
 
-@pl.jit
+@pl.jit_trace
 def sync_set_wait_odd_last_axis(
     input_tensor: pl.Tensor[[LR_ROWS, LR_COLS], pl.FP16],
     weight: pl.Tensor[[LR_CUBE_COLS, LR_OUTPUT_COLS], pl.FP16],
