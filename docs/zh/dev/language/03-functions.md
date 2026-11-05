@@ -342,6 +342,33 @@ valid-shape 循环；`host` / `graph` 入口及其逐 rank 分发与录制重放
 第四种是 host 字面量进入 staged 控制流：在 `pl.range` 下重新绑定 `factor = 1.0`
 会报错，携带标量需要类型化拼写 `pl.const(1.0, pl.FP32)`。
 
+#### 函数体拼接：`pl.jit_trace.body`
+
+`@pl.jit_trace.body` 声明一个可复用的**语句片段**，并像函数一样调用它。片段在调用处展开，
+因此内核读起来是 `scale_block(a, out, row0, k)`，而不是某个放置方法：**不会产生函数、
+`GlobalVar` 或 `ir.Call`** —— 程序只获得该函数体的语句。host 调用会被拒绝；函数体只在
+活跃的 trace 内展开。
+
+```python
+@pl.jit_trace.body
+def scale_block(a, out, row0, k):     # 没有 IR 注解：没有被调函数
+    tile = pl.load(a, [row0, 0], [16, 64])
+    pl.store(pl.mul(tile, k), [row0, 0], out)
+
+@pl.jit_trace
+def entry(a: pl.Tensor[[64, 64], pl.FP32], k: pl.Scalar[pl.FP32],
+          out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        for chunk in pl.range(4):
+            row0 = chunk * 16
+            scale_block(a, out, row0, k)
+    return out
+```
+
+放置策略随声明一起给出：`@pl.jit_trace.body(auto_scope=False)` 让手动编写的 scope 区域
+合法，而调用方自己的策略仍管辖其他一切；在调用处再传 `auto_scope=` 会被拒绝 —— 一个片段
+只有一种含义。这是内核作者的拼写；下面的框架作者拼写保留显式的放置。
+
 #### 函数体拼接：`pl.authoring.body(...).splice(...)`
 
 `pl.authoring.body` 一次性预备一个 Python 函数（源码重写与编译）并返回可复用的函数体；`.splice(...)`
@@ -349,13 +376,18 @@ valid-shape 循环；`host` / `graph` 入口及其逐 rank 分发与录制重放
 `ir.Call`** —— 程序只获得该函数体的语句。host 调用会被拒绝；该放置仅在活跃的 trace
 内执行。
 
+这是框架作者的拼写：它让放置保持可见（`.splice` / `.inline` / `.incore`），适用于需要多种
+放置的同一个函数体。`@pl.jit_trace.body` 是它之上的一种策略 —— 一个以 `ctx.splice_body`
+为函数体的 `@pl.authoring.recipe` —— 因此本仓库之外的框架也能用公开的 authoring 表层构造
+出同一个面向内核的拼写。
+
 因为没有被调函数，也就没有 ABI，所以**注解不起作用**：`def twice(x)` 无需
 `pl.Tensor[[...]]` 声明，而同一个函数体可以服务多种参数类型（一次出现是 `Tensor`，
 下一次是 `Tile`）。这正是它与 `@pl.jit_trace.inline` 的差别：后者收集一次函数体、
 发出调用，因此必须声明参数与结果类型。
 
 ```python
-@pl.authoring.body
+@pl.jit_trace.body
 def twice(x):                 # 没有 IR 注解：没有被调函数
     return pl.add(x, x)
 
@@ -363,8 +395,8 @@ def twice(x):                 # 没有 IR 注解：没有被调函数
 def entry(a: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile = pl.load(a, [0, 0], [64, 64])
-        pl.store(twice.splice(tile), [0, 0], out)
-        out[:, :] = twice.splice(a)     # 同一个函数体，第二种参数类型
+        pl.store(twice(tile), [0, 0], out)
+        out[:, :] = twice(a)            # 同一个函数体，第二种参数类型
     return out
 ```
 
@@ -374,7 +406,9 @@ def entry(a: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP
 的 `pl.const` 拼写）。
 
 本波次每个 trace 只允许一次拼接：拼接另一个函数体的函数体（嵌套或 host 递归）会被明确
-拒绝，而不是错误拼接。函数体自有的 scope 策略随函数体一起传递：
+拒绝，而不是错误拼接。`@pl.jit_trace.body` 用自己的词汇报告这一拒绝（一个函数体不能在
+另一个函数体内被调用），它要复用的语句应写进调用它的函数体，或声明为
+`@pl.jit_trace.inline` 被调函数。函数体自有的 scope 策略随函数体一起传递：
 `body.splice(..., auto_scope=False)` 让手动编写的 scope 区域合法，而调用方自己的策略
 仍管辖其他一切 —— 这就是 `@pl.jit_trace.inline(auto_scope=False)` 的拼接写法。
 

@@ -159,6 +159,29 @@ created → collecting → finalized
 
 推导签名（无 `params=` 压入的单元）来自 staged 实参的类型 —— 每个实参必须是 staged 且静态形状的；host 值或动态_extent 需要显式 `FunctionContract`。
 
+### 标准库作为参考客户端：`@pl.jit_trace.body`
+
+面向内核的拼接拼写就建在这一层上，而它正是本层最锐利的验收测试：一个只花四行公开表层的策略，而不是一条特权路径。内核作者只声明一种含义，然后像函数一样调用：
+
+```python
+@pl.jit_trace.body
+def scale_block(a, out, row0, k): ...
+
+scale_block(a, out, row0, k)          # 面向内核的拼写
+```
+
+仓库之外的框架仅凭本页就能得到同一个下降：
+
+```python
+prepared = pl.authoring.body(kernel)
+
+@pl.authoring.recipe
+def expand(ctx, *args, **kwargs):
+    return ctx.splice_body(prepared, *args, **kwargs)
+```
+
+标准库在其上增加的是策略而非能力：装饰器形式、body 从内核保留的 `__name__`/`__doc__` 元数据、声明处的放置策略（`auto_scope=`），以及用 “body” 而非 “splice” 词汇表达的拒绝。如果某个面向内核的拼写需要本表层不具备的能力，修复应落在本层 —— 而不是绕过它的私有捷径。
+
 ## 控制能力
 
 `ctx.control` 将语义终结符与转移暴露为上下文操作 —— 为棘手的用户自定义 hook 提供的逃生舱，与框架集成而非裸露：

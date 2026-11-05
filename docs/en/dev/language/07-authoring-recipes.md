@@ -214,6 +214,37 @@ Derived signatures (a unit pushed without `params=`) come from the staged
 arguments' types — every argument must be staged and statically shaped; a
 host value or a dynamic extent needs an explicit `FunctionContract`.
 
+### The Stdlib As A Reference Client: `@pl.jit_trace.body`
+
+The kernel-facing spelling of the splice is built here, and it is the tier's
+sharpest acceptance test: a policy that costs four lines of public surface,
+not a privileged path. Kernel authors declare one meaning and call it as a
+function:
+
+```python
+@pl.jit_trace.body
+def scale_block(a, out, row0, k): ...
+
+scale_block(a, out, row0, k)          # the kernel-facing spelling
+```
+
+An external framework reaches the same lowering from this page alone:
+
+```python
+prepared = pl.authoring.body(kernel)
+
+@pl.authoring.recipe
+def expand(ctx, *args, **kwargs):
+    return ctx.splice_body(prepared, *args, **kwargs)
+```
+
+What the stdlib adds on top is policy, not capability: the decorator form, the
+`__name__`/`__doc__` metadata a body keeps from its kernel, the placement
+policy on the declaration (`auto_scope=`), and a refusal that speaks "body"
+rather than "splice". If a kernel-facing spelling ever needs a capability this
+surface does not have, the fix belongs in the tier — never in a private
+shortcut past it.
+
 ## Control Capabilities
 
 `ctx.control` exposes the semantic terminators and transfers as context

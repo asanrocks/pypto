@@ -427,6 +427,37 @@ A host literal carried into staged control flow is a fourth: `factor = 1.0`
 rebound under `pl.range` raises, and the typed spelling `pl.const(1.0, pl.FP32)`
 is what a carried scalar needs.
 
+#### Body splice: `pl.jit_trace.body`
+
+`@pl.jit_trace.body` declares a reusable **statement fragment** and calls it
+like a function. The fragment is placed where it is called, so the kernel
+reads as `scale_block(a, out, row0, k)` rather than as a placement method:
+**no function, `GlobalVar`, or `ir.Call` is emitted** — the program gains the
+body's statements and nothing else. A host call is refused; the body only
+expands inside an active trace.
+
+```python
+@pl.jit_trace.body
+def scale_block(a, out, row0, k):     # no IR annotation: there is no callee
+    tile = pl.load(a, [row0, 0], [16, 64])
+    pl.store(pl.mul(tile, k), [row0, 0], out)
+
+@pl.jit_trace
+def entry(a: pl.Tensor[[64, 64], pl.FP32], k: pl.Scalar[pl.FP32],
+          out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
+    with pl.at(level=pl.Level.CORE_GROUP):
+        for chunk in pl.range(4):
+            row0 = chunk * 16
+            scale_block(a, out, row0, k)
+    return out
+```
+
+The declaration carries the placement policy: `@pl.jit_trace.body(auto_scope=False)`
+keeps a hand-scoped fragment's explicit regions legal while the caller's own
+policy governs everything else, and passing `auto_scope=` at a call site is
+refused — one meaning per fragment. This is the kernel-author spelling; the
+framework-author spelling below keeps the placement explicit.
+
 #### Body splice: `pl.authoring.body(...).splice(...)`
 
 `pl.authoring.body` prepares a Python function once (source rewrite and compile) and
@@ -436,6 +467,12 @@ or `ir.Call` is emitted** — the program gains the body's statements and
 nothing else. A host call is refused; the placement only executes inside an
 active trace.
 
+This is the framework-author spelling: it keeps the placement visible
+(`.splice` / `.inline` / `.incore`) for a body that serves several placements.
+`@pl.jit_trace.body` is one policy over it — a `@pl.authoring.recipe` whose
+body is `ctx.splice_body` — so a framework outside this repository can build
+the same kernel-facing spelling from the public authoring surface.
+
 Because there is no callee there is no ABI, so **annotations play no role**:
 `def twice(x)` needs no `pl.Tensor[[...]]` declaration, and one body serves
 several argument types (a `Tensor` at one occurrence, a `Tile` at the next).
@@ -443,7 +480,7 @@ This is the difference from `@pl.jit_trace.inline`, which collects one body,
 emits calls, and therefore must declare its parameter and result types.
 
 ```python
-@pl.authoring.body
+@pl.jit_trace.body
 def twice(x):                 # no IR annotation: there is no callee
     return pl.add(x, x)
 
@@ -451,8 +488,8 @@ def twice(x):                 # no IR annotation: there is no callee
 def entry(a: pl.Tensor[[64, 64], pl.FP32], out: pl.Out[pl.Tensor[[64, 64], pl.FP32]]):
     with pl.at(level=pl.Level.CORE_GROUP):
         tile = pl.load(a, [0, 0], [64, 64])
-        pl.store(twice.splice(tile), [0, 0], out)
-        out[:, :] = twice.splice(a)     # the same body, a second argument type
+        pl.store(twice(tile), [0, 0], out)
+        out[:, :] = twice(a)            # the same body, a second argument type
     return out
 ```
 
@@ -465,6 +502,9 @@ enclosing function.
 
 This wave allows one splice at a time per trace: a body that splices another
 body — nesting or host recursion — is refused loudly rather than mis-spliced.
+A `@pl.jit_trace.body` reports that refusal in its own vocabulary (a body
+cannot be called from inside another body), and the statements it reuses
+belong in the body that calls them or in a `@pl.jit_trace.inline` callee.
 The body's authored scope policy travels with it:
 `body.splice(..., auto_scope=False)` keeps a hand-scoped body's explicit
 regions legal while the caller's own policy still governs everything else,
