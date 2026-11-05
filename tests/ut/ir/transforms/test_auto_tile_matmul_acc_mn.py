@@ -79,7 +79,7 @@ BOX_CAP_K_TOTAL = 256
 BOX_CAP_K_TILE = 128
 
 
-@pl.jit
+@pl.jit_trace
 def issue_2232_repro(
     a: pl.Tensor[[M, K_TOTAL], pl.INT8],
     b: pl.Tensor[[K_TOTAL, N_TOTAL], pl.INT8],
@@ -101,7 +101,7 @@ def issue_2232_repro(
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def issue_2232_repro_predicated(
     a: pl.Tensor[[M, K_TOTAL], pl.INT8],
     b: pl.Tensor[[K_TOTAL, N_TOTAL], pl.INT8],
@@ -120,7 +120,7 @@ def issue_2232_repro_predicated(
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def canonical_split_k_mn(
     a: pl.Tensor[[WIDE_M, WIDE_K_TOTAL], pl.INT8],
     b: pl.Tensor[[WIDE_K_TOTAL, WIDE_N], pl.INT8],
@@ -141,7 +141,7 @@ def canonical_split_k_mn(
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def canonical_split_k_mn_predicated(
     a: pl.Tensor[[WIDE_M, WIDE_K_TOTAL], pl.INT8],
     b: pl.Tensor[[WIDE_K_TOTAL, WIDE_N], pl.INT8],
@@ -159,7 +159,7 @@ def canonical_split_k_mn_predicated(
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def canonical_split_k_n_boundary_retiles_k(
     a: pl.Tensor[[WIDE_M, COMPOSE_K_TOTAL], pl.INT8],
     b: pl.Tensor[[COMPOSE_K_TOTAL, WIDE_N], pl.INT8],
@@ -180,7 +180,7 @@ def canonical_split_k_n_boundary_retiles_k(
     return c
 
 
-@pl.jit
+@pl.jit_trace
 def canonical_split_k_n_boundary_retiles_k_predicated(
     a: pl.Tensor[[WIDE_M, COMPOSE_K_TOTAL], pl.INT8],
     b: pl.Tensor[[COMPOSE_K_TOTAL, WIDE_N], pl.INT8],
@@ -325,8 +325,7 @@ def _incore_bodies(program):
 
 def _jit_program(kernel):
     """Specialize a fully annotated JIT function without running passes."""
-    _, _, tensor_meta, scalar_dtypes, cx, per_func_dyn = kernel._bind_args_from_signature({})
-    return kernel._compile_to_program(tensor_meta, scalar_dtypes, cx, per_func_dyn, pl)
+    return kernel.specialize()
 
 
 def _lower_to_auto_tile_input(program):

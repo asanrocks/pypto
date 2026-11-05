@@ -210,7 +210,7 @@ class NzMatmul:
         return out
 
 
-@pl.jit
+@pl.jit_trace
 def _batched_nz_mm(
     x: pl.Tensor[[64, 512], pl.INT8],
     w: pl.Tensor[[4, 256, 512], pl.INT8, pl.NZ],
@@ -267,8 +267,7 @@ def test_leading_dims_are_preserved():
     rank-3 tile, which ``tile.matmul`` rejects at parse time — before this pass
     ever runs.
     """
-    _, _, tm, sd, cx, dyn = _batched_nz_mm._bind_args_from_signature({})
-    program = _batched_nz_mm._compile_to_program(tm, sd, cx, dyn, pl)
+    program = _batched_nz_mm.specialize()
     param_type = _nz_param(_run(program))
     assert _values(param_type.shape) == [4, 16, 16, 16, 32]
 
@@ -333,7 +332,7 @@ def test_maps_an_spmd_derived_slice_offset():
     `nb * 16` — see `test_does_not_reassociate_the_offset_arithmetic`.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _spmd_offset(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -347,8 +346,7 @@ def test_maps_an_spmd_derived_slice_offset():
             out[0:64, n0 : n0 + 256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _spmd_offset._bind_args_from_signature({})
-    call = _nz_load(_run(_spmd_offset._compile_to_program(tm, sd, cx, dyn, pl)))
+    call = _nz_load(_run(_spmd_offset.specialize()))
     batch_off, col_off, row_off, in_fractal_row, in_c0_line = _elements(call.args[1])
     assert _const(batch_off) == 0
     assert _const(col_off) == 0
@@ -375,7 +373,7 @@ def test_does_not_reassociate_the_offset_arithmetic():
     multiply by the reduced factor 256/16 was synthesized.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _no_reassoc(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -389,8 +387,7 @@ def test_does_not_reassociate_the_offset_arithmetic():
             out[0:64, n0 : n0 + 256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _no_reassoc._bind_args_from_signature({})
-    after = _run(_no_reassoc._compile_to_program(tm, sd, cx, dyn, pl))
+    after = _run(_no_reassoc.specialize())
     # Blocked offsets are [batch, C/c0, R/16, 0, 0] — index 2 is the row axis.
     row_off = _elements(_nz_load(after).args[1])[2]
 
@@ -423,7 +420,7 @@ def test_maps_a_loop_variable_slice_offset():
     answer, and it is exact precisely because the divisibility was proven first.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _loop_offset(
         x: pl.Tensor[[64, 1024], pl.INT8],
         w: pl.Tensor[[256, 1024], pl.INT8, pl.NZ],
@@ -438,8 +435,7 @@ def test_maps_a_loop_variable_slice_offset():
             out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _loop_offset._bind_args_from_signature({})
-    after = _run(_loop_offset._compile_to_program(tm, sd, cx, dyn, pl))
+    after = _run(_loop_offset.specialize())
 
     # Two NZ loads share the weight: the k0 = 0 prologue and the loop body.
     offsets = [_elements(call.args[1]) for call in _nz_loads(after)]
@@ -528,7 +524,7 @@ def test_codegen_emits_the_divided_offset():
     offset the kernel computed, divided, rather than a re-derived index.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _spmd_offset(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -542,8 +538,7 @@ def test_codegen_emits_the_divided_offset():
             out[0:64, n0 : n0 + 256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _spmd_offset._bind_args_from_signature({})
-    text = _emit_pto(_spmd_offset._compile_to_program(tm, sd, cx, dyn, pl))
+    text = _emit_pto(_spmd_offset.specialize())
     lines = text.splitlines()
 
     nz_view_line = next(line for line in lines if "make_tensor_view" in line and "layout<nz>" in line)
@@ -596,7 +591,7 @@ def test_folds_leading_axes_into_the_batch_slot():
     strides it multiplies back in.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _rank4_nz(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[2, 4, 256, 512], pl.INT8, pl.NZ],
@@ -609,8 +604,7 @@ def test_folds_leading_axes_into_the_batch_slot():
             out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _rank4_nz._bind_args_from_signature({})
-    after = _run(_rank4_nz._compile_to_program(tm, sd, cx, dyn, pl))
+    after = _run(_rank4_nz.specialize())
     assert _values(_nz_param(after).shape) == [8, 16, 16, 16, 32]
     call = _nz_load(after)
     # [1, 3, 0, 0] into [2, 4, ...] addresses batch 1*4 + 3 = 7.
@@ -626,7 +620,7 @@ def test_blocks_a_leading_axis_slice():
     batch offset carried through.
     """
 
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def _sliced_nz(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[4, 256, 512], pl.INT8, pl.NZ],
@@ -640,8 +634,7 @@ def test_blocks_a_leading_axis_slice():
                 out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _sliced_nz._bind_args_from_signature({})
-    after = _run(_sliced_nz._compile_to_program(tm, sd, cx, dyn, pl))
+    after = _run(_sliced_nz.specialize())
     slices = _nz_slices(after)
     assert len(slices) == 1
     assert _values(_elements(slices[0].args[1])) == [2, 16, 16, 16, 32]  # shapes
@@ -661,7 +654,7 @@ def test_rejects_a_leading_window_under_a_spanning_axis():
     ones.
     """
 
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def _two_windows(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[2, 4, 256, 512], pl.INT8, pl.NZ],
@@ -675,8 +668,7 @@ def test_rejects_a_leading_window_under_a_spanning_axis():
                 out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _two_windows._bind_args_from_signature({})
-    program = _two_windows._compile_to_program(tm, sd, cx, dyn, pl)
+    program = _two_windows.specialize()
     with pytest.raises(ValueError, match="a window on one leading axis only"):
         _run(program)
 
@@ -689,7 +681,7 @@ def test_rejects_a_slice_inside_the_fractal_plane():
     row-major stride cannot describe.
     """
 
-    @pl.jit(auto_scope=False)
+    @pl.jit_trace(auto_scope=False)
     def _row_sliced_nz(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -703,9 +695,8 @@ def test_rejects_a_slice_inside_the_fractal_plane():
                 out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _row_sliced_nz._bind_args_from_signature({})
     with pytest.raises(ValueError, match="slicing the leading axes only"):
-        _run(_row_sliced_nz._compile_to_program(tm, sd, cx, dyn, pl))
+        _run(_row_sliced_nz.specialize())
 
 
 def test_rejects_unaligned_rows():
@@ -784,7 +775,7 @@ def test_rejects_a_slice_offset_whose_alignment_cannot_be_proven():
     diagnostic anywhere downstream.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _unprovable(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -798,8 +789,7 @@ def test_rejects_a_slice_offset_whose_alignment_cannot_be_proven():
             out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _unprovable._bind_args_from_signature({})
-    program = _unprovable._compile_to_program(tm, sd, cx, dyn, pl)
+    program = _unprovable.specialize()
     with pytest.raises(ValueError, match=r"offset on shape\[-2\] to be a multiple of 16"):
         _run(program)
 
@@ -815,7 +805,7 @@ def test_rejects_a_slice_offset_whose_sign_cannot_be_proven():
     written inline and waved through once bound to a name.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _maybe_negative(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[512, 512], pl.INT8, pl.NZ],
@@ -829,8 +819,7 @@ def test_rejects_a_slice_offset_whose_sign_cannot_be_proven():
             out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _maybe_negative._bind_args_from_signature({})
-    program = _maybe_negative._compile_to_program(tm, sd, cx, dyn, pl)
+    program = _maybe_negative.specialize()
     with pytest.raises(ValueError, match=r"offset on shape\[-2\] to be non-negative"):
         _run(program)
 
@@ -844,7 +833,7 @@ def test_maps_a_split_k_offset_built_from_a_remainder():
     is refused.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _split_k(
         x: pl.Tensor[[64, 1024], pl.INT8],
         w: pl.Tensor[[256, 1024], pl.INT8, pl.NZ],
@@ -866,8 +855,7 @@ def test_maps_a_split_k_offset_built_from_a_remainder():
             out[:, n0 : n0 + 128] = acc
         return out
 
-    _, _, tm, sd, cx, dyn = _split_k._bind_args_from_signature({})
-    call = _nz_load(_run(_split_k._compile_to_program(tm, sd, cx, dyn, pl)))
+    call = _nz_load(_run(_split_k.specialize()))
     # Both trailing offsets are divided; neither is refused for an unprovable sign.
     assert len(_elements(call.args[1])) == 5
 
@@ -882,7 +870,7 @@ def test_flattens_a_whole_nz_tensor():
     DeepSeek V4 o-projection weights do while they stream.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _flatten(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[256, 512], pl.INT8, pl.NZ],
@@ -898,8 +886,7 @@ def test_flattens_a_whole_nz_tensor():
             pl.store(pl.load(w_flat, [0], [512], target_memory=pl.Mem.Vec), [0], head)
         return out, head
 
-    _, _, tm, sd, cx, dyn = _flatten._bind_args_from_signature({})
-    program = _run(_flatten._compile_to_program(tm, sd, cx, dyn, pl))
+    program = _run(_flatten.specialize())
     flatten = _nz_reshapes(program)
     assert len(flatten) == 1
     # The target shape is untouched, and the source now carries the blocked type.
@@ -920,7 +907,7 @@ def test_rejects_a_reshape_that_is_not_a_whole_tensor_flatten():
     rather than silently addressed as ND.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _partial(
         w: pl.Tensor[[256, 512], pl.INT8, pl.NZ],
         head: pl.Out[pl.Tensor[[512], pl.INT8]],
@@ -930,8 +917,7 @@ def test_rejects_a_reshape_that_is_not_a_whole_tensor_flatten():
             pl.store(pl.load(w_half, [0, 0], [1, 512], target_memory=pl.Mem.Vec), [0], head)
         return head
 
-    _, _, tm, sd, cx, dyn = _partial._bind_args_from_signature({})
-    program = _partial._compile_to_program(tm, sd, cx, dyn, pl)
+    program = _partial.specialize()
     with pytest.raises(ValueError, match="whole-tensor 'tensor.reshape' flatten"):
         _run(program)
 
@@ -944,7 +930,7 @@ def test_rejects_a_remainder_of_an_unproven_dividend():
     difference proves no sign, so the whole offset remains unproven.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _unproven_dividend(
         x: pl.Tensor[[64, 1024], pl.INT8],
         w: pl.Tensor[[128, 1024], pl.INT8, pl.NZ],
@@ -956,8 +942,7 @@ def test_rejects_a_remainder_of_an_unproven_dividend():
             out[0:64, 0:128] = pl.reshape(acc, [64, 128])
         return out
 
-    _, _, tm, sd, cx, dyn = _unproven_dividend._bind_args_from_signature({})
-    program = _unproven_dividend._compile_to_program(tm, sd, cx, dyn, pl)
+    program = _unproven_dividend.specialize()
     with pytest.raises(ValueError, match=r"offset on shape\[-1\] to be non-negative"):
         _run(program)
 
@@ -972,7 +957,7 @@ def test_maps_an_offset_from_a_strided_loop_that_starts_at_the_block_index():
     could be symbolic this offset was refused for its sign.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _strided(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[1024, 512], pl.INT8, pl.NZ],
@@ -986,8 +971,7 @@ def test_maps_an_offset_from_a_strided_loop_that_starts_at_the_block_index():
                 out[0:64, o0 : o0 + 256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _strided._bind_args_from_signature({})
-    program = _run(_strided._compile_to_program(tm, sd, cx, dyn, pl))
+    program = _run(_strided.specialize())
     assert len(_elements(_nz_loads(program)[0].args[1])) == 5
 
 
@@ -1000,7 +984,7 @@ def test_blocks_a_ragged_tail_whose_valid_rows_are_a_min():
     fractals -- the one axis left dynamic in the blocked valid shape.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _ragged(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[800, 512], pl.INT8, pl.NZ],
@@ -1015,8 +999,7 @@ def test_blocks_a_ragged_tail_whose_valid_rows_are_a_min():
                 out[0:64, o0 : o0 + 256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _ragged._bind_args_from_signature({})
-    program = _run(_ragged._compile_to_program(tm, sd, cx, dyn, pl))
+    program = _run(_ragged.specialize())
     load = _nz_loads(program)[0]
     valid = _elements(load.args[3])
     assert len(valid) == 5
@@ -1033,7 +1016,7 @@ def test_rejects_a_ragged_tail_that_ends_inside_a_fractal():
     blocked form, so the load is refused rather than rounded.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _mid_fractal(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[800, 512], pl.INT8, pl.NZ],
@@ -1048,8 +1031,7 @@ def test_rejects_a_ragged_tail_that_ends_inside_a_fractal():
                 out[0:64, o0 : o0 + 256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _mid_fractal._bind_args_from_signature({})
-    program = _mid_fractal._compile_to_program(tm, sd, cx, dyn, pl)
+    program = _mid_fractal.specialize()
     with pytest.raises(ValueError, match=r"dynamic valid_shape\[-2\] to be a provable multiple of 16"):
         _run(program)
 
@@ -1062,7 +1044,7 @@ def test_rejects_a_loop_variable_whose_step_breaks_alignment():
     the start alone would silently mis-address every later iteration.
     """
 
-    @pl.jit
+    @pl.jit_trace
     def _bad_step(
         x: pl.Tensor[[64, 512], pl.INT8],
         w: pl.Tensor[[256, 512], pl.INT8, pl.NZ],
@@ -1076,8 +1058,7 @@ def test_rejects_a_loop_variable_whose_step_breaks_alignment():
                 out[0:64, 0:256] = pl.reshape(acc, [64, 256])
         return out
 
-    _, _, tm, sd, cx, dyn = _bad_step._bind_args_from_signature({})
-    program = _bad_step._compile_to_program(tm, sd, cx, dyn, pl)
+    program = _bad_step.specialize()
     with pytest.raises(ValueError, match=r"offset on shape\[-1\] to be a multiple of c0 = 32"):
         _run(program)
 

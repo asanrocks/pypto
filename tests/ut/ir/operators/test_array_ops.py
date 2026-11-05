@@ -199,7 +199,7 @@ def test_host_item_assignment_rebinds_the_wrapper():
 
     after = arr.unwrap()
     assert isinstance(after, ir.Call)
-    assert after.op.name == "array.update_element"
+    assert after.op.name == ir.get_op("array.update_element").name
     assert after is not before
 
 

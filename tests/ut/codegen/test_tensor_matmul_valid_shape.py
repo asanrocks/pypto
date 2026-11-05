@@ -27,7 +27,7 @@ def test_explicit_tensor_matmul_valid_shape(tmp_path, ascend_backend, a_trans, b
     a_shape = (128, 32) if a_trans else (32, 128)
     b_shape = (32, 128) if b_trans else (128, 32)
 
-    @pl.jit
+    @pl.jit_trace
     def explicit_matmul(
         a: pl.Tensor[[a0, a1], pl.FP16],
         b: pl.Tensor[[b0, b1], pl.FP16],
