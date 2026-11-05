@@ -18,8 +18,6 @@ miscompile. This test asserts both branch producers write the one phi handle and
 that handle is declared exactly once.
 """
 
-# pyright: reportUndefinedVariable=false
-
 import re
 from pathlib import Path
 

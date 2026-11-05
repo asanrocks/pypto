@@ -35,7 +35,6 @@ that outlined path.
 
 # DSL function bodies are parsed as AST, not executed — suppress pyright errors
 # from type-checking annotations that reference module-level names.
-# pyright: reportUndefinedVariable=false
 
 import pypto.language as pl
 import pytest

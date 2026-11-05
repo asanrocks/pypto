@@ -10,12 +10,22 @@
 """Tensor wrapper type for PyPTO Language DSL."""
 
 from collections.abc import Sequence
-from typing import Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, cast, overload
 
 from pypto.pypto_core import DataType
-from pypto.pypto_core.ir import Expr, MemRef, TensorLayout
+from pypto.pypto_core.ir import ConstInt, Expr, MemRef, TensorLayout, TensorType, Var
+
+if TYPE_CHECKING:
+    from pypto.language.typing.dynamic import DynVar
+    from pypto.language.typing.scalar import Scalar
 
 TensorT = TypeVar("TensorT", bound="Tensor")
+
+# A subscript key: one axis (index or slice) or a tuple of them. Quoted —
+# Scalar is a TYPE_CHECKING-only import to avoid the facade cycle.
+_SubscriptKey: TypeAlias = (
+    "int | Scalar | Expr | slice[Any, Any, Any] | tuple[int | Scalar | Expr | slice[Any, Any, Any], ...]"
+)
 
 
 def _validate_tensor_meta_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
@@ -149,6 +159,12 @@ class TensorMeta(type):
 class Tensor(metaclass=TensorMeta):
     """Tensor type for PyPTO Language DSL.
 
+    The declared ``shape`` below is annotation-only (no class attribute is
+    created, so ``getattr(pl.Tensor, "shape", None)`` still answers
+    ``None`` for the bare class): a facade has two modes, and the static
+    declaration serves the one a traced body executes against — the
+    expr-wrapping facade whose ``.shape`` lowers lazily on read.
+
     This class serves dual purposes:
     1. Type annotation helper for function signatures
     2. Runtime wrapper around IR Expr/Call objects
@@ -169,6 +185,8 @@ class Tensor(metaclass=TensorMeta):
         ...     result: pl.Tensor[[64, 128], pl.FP32] = pl.create_tensor([64, 128], dtype=pl.FP32)
         ...     return result
     """
+
+    shape: Any
 
     def __init__(
         self,
@@ -197,7 +215,6 @@ class Tensor(metaclass=TensorMeta):
             self._expr = None
         elif expr is not None:
             self._expr = expr
-            self.shape = None
             self.dtype = None
             self.layout = None
             self.memref = None
@@ -206,6 +223,38 @@ class Tensor(metaclass=TensorMeta):
                 "Tensor must be initialized with either (shape, dtype) for "
                 "annotations or expr for runtime wrapping"
             )
+
+    def __getattr__(self, name: str) -> Any:
+        """The lazily lowered ``shape`` of an expr-wrapping facade.
+
+        ``x.shape`` in a traced body lowers exactly when the body reads it,
+        mirroring the parser's ``parse_attribute`` contract: a static extent
+        folds to its constant, a dynamic one becomes a runtime
+        ``pl.tensor.dim`` read (which folds onto a param-declared extent
+        symbol at bind time inside an orchestration body, the same hook the
+        spelled ``pl.tensor.dim`` uses). A facade whose ``.shape`` is never
+        read never emits the reads.
+
+        Deliberately an instance-level miss rather than a class attribute:
+        ``getattr(pl.Tensor, "shape", None)`` must keep answering ``None``
+        for the bare class, because the call-boundary guards use that read
+        to tell a bare annotation from a shape-carrying one. Annotation
+        mode sets ``self.shape`` directly and never lands here.
+        """
+        if name == "shape":
+            expr = self.__dict__.get("_expr")
+            if expr is not None:
+                ty = expr.type
+                if isinstance(ty, TensorType):
+                    # Local import: the op tier imports this facade module.
+                    from pypto.language.op import tensor as _tensor_dsl  # noqa: PLC0415
+
+                    return tuple(
+                        int(extent.value) if isinstance(extent, ConstInt) else _tensor_dsl.dim(self, axis)
+                        for axis, extent in enumerate(ty.shape)
+                    )
+            return None
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
     def unwrap(self) -> Expr:
         """Get underlying IR expression.
@@ -230,56 +279,133 @@ class Tensor(metaclass=TensorMeta):
         """
         raise NotImplementedError
 
-    def bind_dynamic(self, dim: int, var: Any) -> None:
-        """Mark a tensor dimension as runtime-dynamic for @pl.jit specialization.
+    def bind_dynamic(self, dim: int, var: "DynVar") -> None:
+        """Declare that dimension ``dim`` is runtime-dynamic — loud under
+        the tracing frontend.
 
-        This is a no-op at runtime.  The @pl.jit specializer reads this call
-        statically from the AST to determine which dimensions should be
-        represented as DynVar nodes (ir.Var) in the generated type annotation
-        rather than as compile-time constants.
+        Tracing executes the call, so the check runs here:
 
-        Use ``bind_dynamic`` with bare ``pl.Tensor`` parameters, where the
-        annotation carries no shape to hold the DynVar.  When a parameter is
-        already annotated with an explicit shape, prefer placing the
-        ``pl.dynamic()`` variable directly in the annotation instead — that
-        form matches ``@pl.program`` and needs no ``bind_dynamic`` call::
-
-            M = pl.dynamic("M")
-
-            @pl.jit
-            def kernel(
-                a: pl.Tensor[[M, 128], pl.FP32],          # dim 0 dynamic via annotation
-                c: pl.Out[pl.Tensor[[M, 128], pl.FP32]],  # shares the same DynVar
-            ):
-                K = pl.tensor.dim(a, 1)                    # dim 1 stays constant (128)
-                ...
-
-        Both forms are honoured and may be combined; the dynamic dimensions
-        are the union of the two sources.
+        * the dimension is already dynamic (the annotation-embedded
+          ``pl.dynamic()`` form — ``pl.Tensor[[M, 128], pl.FP32]``) → a
+          benign no-op (redundant with the annotation);
+        * the dimension is static → ``NotImplementedError``: the override
+          form (static shape + ``bind_dynamic``) has no tracing semantics.
+          Declare the dimension dynamic in the annotation instead; the
+          parsing frontend (``@pl.jit``) accepts the method-call form.
 
         Args:
             dim: Zero-based dimension index to mark as dynamic.
-            var: The DynVar object (created with pl.dynamic()) to bind.
-
-        Example::
-
-            @pl.jit
-            def kernel(a: pl.Tensor, c: pl.Out[pl.Tensor]):
-                M = pl.dynamic("M")
-                a.bind_dynamic(0, M)   # dim 0 of a is runtime-dynamic
-                c.bind_dynamic(0, M)   # dim 0 of c shares the same DynVar
-                K = a.shape[1]         # dim 1 is compile-time constant
-                ...
+            var: The DynVar object (created with ``pl.dynamic()``) the
+                dimension is bound to.
         """
-        return None
+        if self._expr is not None:
+            # Runtime mode (inside a trace): the wrapped expr's type is
+            # the minted param type — its shape entry is the extent.
+            ty = self._expr.type
+            if not isinstance(ty, TensorType):
+                raise TypeError(f"bind_dynamic on a value of non-tensor type {ty} — tag a tensor dimension")
+            extent: object = ty.shape[dim]
+        elif self.shape is not None:
+            # Annotation mode: the shape entry is the DynVar (or a static int).
+            extent = self.shape[dim]
+        else:
+            raise TypeError("bind_dynamic on a facade with neither a shape nor a wrapped expr")
+        # Dynamic ⇔ an ir.Var (runtime-mode / minted extent) or a DynVar
+        # (annotation-mode shape entry); anything else (int, ConstInt) is static.
+        if isinstance(extent, Var) or hasattr(extent, "_ir_var"):
+            return None  # already dynamic — the benign redundancy
+        raise NotImplementedError(
+            f"bind_dynamic: dimension {dim} of this tensor is static ({extent!r}); the "
+            "override form (static shape + bind_dynamic) has no tracing semantics — "
+            "declare the dimension dynamic in the annotation instead "
+            f"(pl.Tensor[[{getattr(var, 'name', 'M')}, ...], dtype] with "
+            "M = pl.dynamic(...)). The parsing frontend (@pl.jit) accepts the "
+            "method-call form."
+        )
 
-    def __getitem__(self, indices: Any) -> Any:
-        """Subscript syntax for tensor slicing/reading (only valid inside @pl.function)."""
-        raise NotImplementedError("Tensor subscript syntax is only available inside @pl.function")
+    @overload
+    def __getitem__(self, indices: "slice[Any, Any, Any] | tuple[slice[Any, Any, Any], ...]") -> "Tensor": ...
 
-    def __setitem__(self, indices: Any, value: Any) -> None:
-        """Subscript-write sugar for tensor.assemble (only valid inside @pl.function, pre-SSA)."""
-        raise NotImplementedError("Tensor subscript-write syntax is only available inside @pl.function")
+    @overload
+    def __getitem__(self, indices: _SubscriptKey) -> "Tensor | Scalar": ...
+
+    def __getitem__(self, indices: _SubscriptKey) -> "Tensor | Scalar":
+        """Numpy-style subscript read: all-scalar full-rank
+        → a scalar ``tensor.read``; partial / sliced / rank-reducing → a
+        ``tensor.slice`` view carrying ``drop_dims`` (the AST's
+        ``_parse_tensor_subscript`` surface).
+
+        The overloads mirror that runtime split where it is statically
+        knowable: a key made only of slices always takes the slice path, so
+        it is typed ``Tensor``. Any other key is rank-dependent — ``t[i, j]``
+        is a scalar only at full rank, ``t[i]`` is a rank-reducing view
+        above it — and the operand rank lives in the IR type, so the honest
+        static result is the union. Narrow with ``isinstance`` when the
+        context needs one flavor.
+        """
+        from pypto.language.typing._subscript import subscript_read  # noqa: PLC0415 - local: avoid the cycle
+
+        return subscript_read(self, indices, tile=False)
+
+    def __setitem__(
+        self,
+        key: _SubscriptKey,
+        value: "Tensor",
+    ) -> None:
+        """``t[i:j] = src`` → ``tensor.assemble(t, src, offsets)`` (functional rebind).
+
+        The traced frontend's subscript-write sugar for tensor targets (the
+        AST's ``_parse_subscript_assignment`` surface): the source rewriter
+        leaves the statement as a plain Python item assignment on the
+        facade, so this hook fires during the trace, asks the
+        active Frame (``active_frame()``) to resolve the
+        target ``ir.Var``, and routes the resulting source-name bind through
+        the trace interpreter. The written indices follow the numpy rule
+        (offsets always full-rank: a bare ``t[:]`` expands to every axis,
+        dims past the written indices are implicit full slices); scalar-index
+        rank-reducing writes are loud — the AST's full rank-lifting surface
+        is not ported.
+        """
+        from pypto.language.ambient import active_frame  # noqa: PLC0415
+        from pypto.language.op import tensor as _tensor_dsl  # noqa: PLC0415
+        from pypto.language.typing._subscript import subscript_write_offsets  # noqa: PLC0415
+
+        frame = active_frame()
+        if frame is None:
+            raise TypeError(
+                "Tensor item assignment is only supported inside a traced kernel (the tracing frontend)"
+            )
+        offsets = subscript_write_offsets(self.unwrap(), key, kind="Tensor", source=value.unwrap())
+        new = _tensor_dsl.assemble(self, value, offsets)
+        owner, name = frame.resolve_staged_local(self.unwrap())
+        if owner is None:
+            raise TypeError(
+                "Tensor item-assignment target must be a bound local name, "
+                f"got an expression-backed Tensor ({self!r})"
+            )
+        owner.rt_bind(name, new, via=frame)
+
+    # Comparison operators — mirror Scalar's, delegating to tensor_ops.cmp
+    # (cmp_type: 0=eq, 1=ne, 2=lt, 3=le, 4=gt, 5=ge).
+    def __gt__(self, other: "int | float | Scalar | Tensor") -> "Tensor":
+        from pypto.language.op import tensor as _t  # noqa: PLC0415 - avoid the op-module cycle
+
+        return _t.cmp(self, other, cmp_type=4)
+
+    def __lt__(self, other: "int | float | Scalar | Tensor") -> "Tensor":
+        from pypto.language.op import tensor as _t  # noqa: PLC0415 - avoid the op-module cycle
+
+        return _t.cmp(self, other, cmp_type=2)
+
+    def __ge__(self, other: "int | float | Scalar | Tensor") -> "Tensor":
+        from pypto.language.op import tensor as _t  # noqa: PLC0415 - avoid the op-module cycle
+
+        return _t.cmp(self, other, cmp_type=5)
+
+    def __le__(self, other: "int | float | Scalar | Tensor") -> "Tensor":
+        from pypto.language.op import tensor as _t  # noqa: PLC0415 - avoid the op-module cycle
+
+        return _t.cmp(self, other, cmp_type=3)
 
     def __repr__(self) -> str:
         """String representation."""
@@ -290,4 +416,56 @@ class Tensor(metaclass=TensorMeta):
         return f"Tensor[[{self.shape}], {self.dtype}]"
 
 
-__all__ = ["Tensor"]
+class NoDepMarker(Tensor):
+    """The runtime wrapper for ``pl.no_dep(t)`` (a parser-recognized marker).
+
+    Wraps the same IR expr as ``t`` so it is indistinguishable from ``t``
+    everywhere except the traced sub-kernel call path: ``Marker.__call__``
+    recognizes the marker and threads the argument slot into the Call's
+    ``arg_direction_overrides`` attrs — mirroring the AST parser's
+    ``_strip_call_arg_markers`` (the marker's per-arg override is
+    parser-level syntax; the tracing frontend must route it at trace time).
+    Outside a call argument list it behaves as the wrapped tensor (the
+    parser contract's no-op), because it IS a ``Tensor``.
+
+    Constructed as ``NoDepMarker(expr=t.unwrap())`` — the ``TensorMeta``
+    funnel routes the keyword ``expr=`` form to expr wrapping, so no
+    custom ``__init__`` is needed.
+    """
+
+
+class DumpTagMarker(Tensor):
+    """The runtime wrapper for ``pl.dump_tag(t)`` (a parser-recognized marker).
+
+    Wraps the same IR expr as ``t``. The traced ``bare_stmt`` recognizes the
+    marker, records the tagged Var in the current function's forward-sticky
+    dump set (mirroring the AST parser's ``_handle_dump_tag``), and emits no
+    IR; every *subsequent* kernel call that consumes that exact Var gets it
+    merged into the Call's ``dump_vars`` attr (``Marker.__call__``). Outside
+    a statement position it behaves as the wrapped tensor, because it IS a
+    ``Tensor``. Constructed as ``DumpTagMarker(expr=t.unwrap())`` (see
+    ``NoDepMarker``).
+    """
+
+
+class CachePolicyDecl:
+    """The runtime marker for ``pl.set_cache_policy(t, policy)``.
+
+    A plain host object, never a value: ``pl.set_cache_policy`` returns it
+    only inside a trace, and the traced ``bare_stmt`` recognizes it and
+    routes the declaration to the enclosing deferred scope — the scope's
+    attrs are fixed at ``begin_scope``, so the declaration must join them
+    before the scope's first statement opens it (mirroring the AST parser,
+    which hoists the markers before building the scope). Carries the
+    declared ``Var`` (identity-tracked) and the ``CachePolicy`` as ``int``
+    (the form the scope attr and the ``tile.load`` ``cache`` kwarg hold).
+    """
+
+    __slots__ = ("var", "policy")
+
+    def __init__(self, var: Var, policy: int) -> None:
+        self.var = var
+        self.policy = policy
+
+
+__all__ = ["Tensor", "NoDepMarker", "DumpTagMarker", "CachePolicyDecl"]

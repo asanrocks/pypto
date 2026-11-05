@@ -48,9 +48,6 @@ and emit DeprecationWarning. New Python code should use backend_type and
 execution_mode; see docs/en/dev/08-entry-points.md#legacy-platform-examples.
 """
 
-# DSL function bodies are parsed as AST — dynamic var names look undefined to pyright.
-# pyright: reportUndefinedVariable=false
-
 import argparse
 
 import pypto.language as pl

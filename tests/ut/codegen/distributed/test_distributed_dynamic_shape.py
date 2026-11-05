@@ -9,8 +9,6 @@
 
 """PTO codegen: dynamic shape vars on DistributedTensor parameters."""
 
-# pyright: reportUndefinedVariable=false
-
 import re
 
 import pypto.language as pl

@@ -11,7 +11,6 @@
 
 # DSL function bodies are parsed as AST, not executed — suppress pyright errors
 # from type-checking the annotations and kwargs inside @pl.function bodies.
-# pyright: reportUndefinedVariable=false
 
 import ast
 from typing import TYPE_CHECKING, Any
@@ -1554,7 +1553,7 @@ class TestDynamicShapeEdgeCases:
         with pytest.raises(NameError, match=r"shaep|Cannot resolve|Unknown|undefined"):
 
             @pl.function
-            def func(x: pl.Tensor[shaep, pl.FP32]) -> pl.Tensor[shaep, pl.FP32]:  # noqa: F821
+            def func(x: pl.Tensor[shaep, pl.FP32]) -> pl.Tensor[shaep, pl.FP32]:  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
                 return x
 
     def test_non_list_shape_variable_raises_error(self):

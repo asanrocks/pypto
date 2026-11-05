@@ -36,7 +36,6 @@ reached through ``@pl.jit``, where the specializer must leave the in-DSL
 
 # DSL function bodies are parsed as AST, not executed — suppress pyright errors
 # from type-checking annotations that reference module-level names.
-# pyright: reportUndefinedVariable=false
 
 import importlib
 import re

@@ -13,10 +13,19 @@ Tile represents a tile in unified buffer memory, used for tile-level programming
 """
 
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast, overload
 
 from pypto.pypto_core import DataType
 from pypto.pypto_core.ir import Expr, MemorySpace, MemRef, TileView
+
+if TYPE_CHECKING:
+    from pypto.language.typing.scalar import Scalar
+
+# A subscript key: one axis (index or slice) or a tuple of them. Quoted —
+# Scalar is a TYPE_CHECKING-only import to avoid the facade cycle.
+_SubscriptKey: TypeAlias = (
+    "int | Scalar | Expr | slice[Any, Any, Any] | tuple[int | Scalar | Expr | slice[Any, Any, Any], ...]"
+)
 
 
 class TileMeta(type):
@@ -35,8 +44,9 @@ class TileMeta(type):
         Returns:
             Tile instance with shape, dtype, and optional memref / memory space / tile view
         """
-        # The implicit ``cls`` is typed as the metaclass object — rebind to
-        # the Tile-family class it actually is.
+        # The implicit ``cls`` is typed as the metaclass object, which the
+        # ``__call__`` overloads (``cls: type[TensorT]``) cannot bind — rebind
+        # to the Tile-family class it actually is.
         tile_cls = cast("type[Tile]", cls)
         # A non-tuple subscript (``pl.Tile[4]``) must reach the notation
         # diagnostic, not a bare ``len()`` TypeError.
@@ -227,13 +237,69 @@ class Tile(metaclass=TileMeta):
         """
         raise NotImplementedError
 
-    def __getitem__(self, indices: Any) -> Any:
-        """Subscript syntax for tile slicing (only valid inside @pl.function)."""
-        raise NotImplementedError("Tile subscript syntax is only available inside @pl.function")
+    @overload
+    def __getitem__(self, indices: "slice[Any, Any, Any] | tuple[slice[Any, Any, Any], ...]") -> "Tile": ...
 
-    def __setitem__(self, indices: Any, value: Any) -> None:
-        """Subscript-write sugar for tile.assemble (only valid inside @pl.function, pre-SSA)."""
-        raise NotImplementedError("Tile subscript-write syntax is only available inside @pl.function")
+    @overload
+    def __getitem__(self, indices: _SubscriptKey) -> "Tile | Scalar": ...
+
+    def __getitem__(self, indices: _SubscriptKey) -> "Tile | Scalar":
+        """Numpy-style subscript read: all-scalar full-rank
+        → a scalar ``tile.read``; partial / sliced / rank-reducing → a
+        ``tile.slice`` view with ``drop_dims`` and the valid-shape
+        intersection + 2D clamp (the AST's ``_parse_tile_subscript``
+        surface).
+
+        The overloads mirror that runtime split where it is statically
+        knowable: a key made only of slices always takes the slice path, so
+        it is typed ``Tile``. Any other key is rank-dependent — ``t[i, j]``
+        is a scalar only at full rank, ``t[i]`` is a rank-reducing view
+        above it — and the operand rank lives in the IR type, so the honest
+        static result is the union. Narrow with ``isinstance`` when the
+        context needs one flavor.
+        """
+        from pypto.language.typing._subscript import subscript_read  # noqa: PLC0415 - local: avoid the cycle
+
+        return subscript_read(self, indices, tile=True)
+
+    def __setitem__(
+        self,
+        key: _SubscriptKey,
+        value: "Tile",
+    ) -> None:
+        """``t[i:j] = src`` → ``tile.assemble(t, src, offsets)`` (functional rebind).
+
+        The traced frontend's subscript-write sugar for tile targets (the
+        AST's ``_parse_subscript_assignment`` tile path): the source rewriter
+        leaves the statement as a plain Python item assignment on the
+        facade, so this hook fires during the trace, asks the
+        active Frame (``active_frame()``) to resolve the target ``ir.Var``,
+        and routes the resulting source-name bind through the trace
+        interpreter. The written indices follow the numpy rule (offsets
+        always full-rank: a bare ``t[:]`` expands to every axis, dims past
+        the written indices are implicit full slices); scalar-index
+        rank-reducing writes are loud — the AST's full rank-lifting surface
+        (unit-axis padding for the tile 2D floor) is not ported. Mirrors
+        ``Tensor.__setitem__``.
+        """
+        from pypto.language.ambient import active_frame  # noqa: PLC0415
+        from pypto.language.op import tile as _tile_dsl  # noqa: PLC0415
+        from pypto.language.typing._subscript import subscript_write_offsets  # noqa: PLC0415
+
+        frame = active_frame()
+        if frame is None:
+            raise TypeError(
+                "Tile item assignment is only supported inside a traced kernel (the tracing frontend)"
+            )
+        offsets = subscript_write_offsets(self.unwrap(), key, kind="Tile", source=value.unwrap())
+        new = _tile_dsl.assemble(self, value, offsets)
+        owner, name = frame.resolve_staged_local(self.unwrap())
+        if owner is None:
+            raise TypeError(
+                "Tile item-assignment target must be a bound local name, "
+                f"got an expression-backed Tile ({self!r})"
+            )
+        owner.rt_bind(name, new, via=frame)
 
     def __repr__(self) -> str:
         """String representation."""

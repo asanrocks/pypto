@@ -16,6 +16,10 @@ asserting that the pass declines to rewrite (``..._stays_baseline`` /
 test. Never build a golden by running OptimizeOrchTensors itself: a regression
 in the baseline would then change both sides and the test would stay green.
 """
+# Traced/DSL kernel bodies: the unified facade returns `Tensor | Scalar`
+# (and `Tuple` for multi-value returns), which a body cannot narrow; the
+# rules below are the resulting expression-shape noise, not a bug signal.
+# pyright: reportReturnType=false
 
 import time
 

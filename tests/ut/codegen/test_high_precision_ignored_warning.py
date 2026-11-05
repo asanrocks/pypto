@@ -28,9 +28,6 @@ rejects ``pl.rsqrt(tile, high_precision=True)`` outright, which is what keeps it
 away from this path.
 """
 
-# DSL function bodies are parsed as AST, not executed — suppress pyright errors.
-# pyright: reportUndefinedVariable=false
-
 import re
 from pathlib import Path
 

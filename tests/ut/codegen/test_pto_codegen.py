@@ -47,7 +47,6 @@ from pypto.ir.op import tile
 PTOCodegen = codegen.PTOCodegen
 
 # Dynamic shape variables for wrapper dispatch tests
-# pyright: reportUndefinedVariable=false
 _TH = pl.dynamic("TH")
 _TW = pl.dynamic("TW")
 

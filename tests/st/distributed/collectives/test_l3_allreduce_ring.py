@@ -33,8 +33,6 @@ e.g. ``--device=0,1,2,3`` or ``--device=0-3``).  P=8 / P=16 are valid
 (``256 % P == 0``) and can be added to the parametrize list.
 """
 
-# pyright: reportUndefinedVariable=false
-
 import sys
 
 import pypto.language as pl

@@ -20,9 +20,6 @@ use fixed-address parent subviews for co-live loop slots at ``--pto-level=level3
 single-live-slot schedules can retain multi-buffer regions.
 """
 
-# DSL function bodies are parsed as AST, not executed — suppress pyright errors.
-# pyright: reportUndefinedVariable=false
-
 import math
 import re
 

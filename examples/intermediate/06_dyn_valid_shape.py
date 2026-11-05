@@ -53,9 +53,6 @@ Run:  python examples/intermediate/06_dyn_valid_shape.py
 """
 
 # DSL function bodies are parsed as AST -- runtime scalars (vlen, ...)
-# look undefined to pyright. pl.FP32 / pl.INDEX scalar dtype markers (used as
-# annotations) are DataType values, not types -- pyright can't infer them.
-# pyright: reportUndefinedVariable=false, reportInvalidTypeForm=false
 
 import pypto.language as pl
 import torch

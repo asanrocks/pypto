@@ -8,6 +8,10 @@
 # -----------------------------------------------------------------------------------------------------------
 
 """Unit tests for NormalizeReturnOrder pass."""
+# Traced/DSL kernel bodies: the unified facade returns `Tensor | Scalar`
+# (and `Tuple` for multi-value returns), which a body cannot narrow; the
+# rules below are the resulting expression-shape noise, not a bug signal.
+# pyright: reportReturnType=false
 
 import pypto.language as pl
 import pytest

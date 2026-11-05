@@ -32,8 +32,6 @@ devices, e.g. ``--device=0,1,2,3`` or ``--device=0-3``). One program body
 for both.
 """
 
-# pyright: reportUndefinedVariable=false
-
 import sys
 
 import pypto.language as pl

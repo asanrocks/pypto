@@ -31,6 +31,10 @@ Plus regressions:
   to dispatch time — without a ``worker=`` kwarg AND without an
   ``allocate_domain`` wrapper.
 """
+# Traced/DSL kernel bodies: the unified facade returns `Tensor | Scalar`
+# (and `Tuple` for multi-value returns), which a body cannot narrow; the
+# rules below are the resulting expression-shape noise, not a bug signal.
+# pyright: reportReturnType=false
 
 import ast
 import operator

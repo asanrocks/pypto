@@ -8,7 +8,6 @@
 # -----------------------------------------------------------------------------------------------------------
 
 # ruff: noqa: F841
-# pyright: reportAttributeAccessIssue=false
 
 """Before/Expected tests for the ExpandManualPhaseFence pass.
 
