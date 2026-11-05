@@ -9,6 +9,8 @@
 
 """Tile element-wise arithmetic, comparisons, and scalar dispatch."""
 
+from typing import Any
+
 from pypto.ir.op import tile_ops as _ir_ops
 from pypto.ir.utils import (
     _get_span_or_capture,
@@ -19,22 +21,33 @@ from pypto.pypto_core.ir import (
     Expr,
 )
 
-from ..typing import Scalar, Tile
+from ..typing import Scalar, Tile, to_expr
+from ..typing._host import coerce_host_scalar
 
 
 def _unwrap_rhs(rhs: int | float | Expr | Tile | Scalar) -> int | float | Expr:
-    """Unwrap rhs operands into the IR-layer representation."""
-    return rhs.unwrap() if isinstance(rhs, (Tile, Scalar)) else rhs
+    """Unwrap rhs operands into the IR-layer representation.
+
+    A raw host scalar is reified at the operand boundary via the canonical
+    rule (``coerce_host_scalar`` — int→INDEX, float→FP32, bool→ConstBool),
+    matching ``_scalar_operand_to_expr`` and the AST
+    parser's plain-int-literal dtype, so round-tripped programs don't
+    sprout spurious casts on otherwise-equivalent constants.
+    """
+    if isinstance(rhs, (Tile, Scalar)):
+        return rhs.unwrap()
+    return coerce_host_scalar(rhs, "tile op", "rhs")
 
 
-def _scalar_operand_to_expr(value: int | Scalar | Expr) -> Expr:
+def _scalar_operand_to_expr(value: int | float | Scalar | Expr) -> Expr:
     """Coerce a scalar-binary operand to an ``Expr``.
 
     Used by ``min`` / ``max``: ``Scalar`` is unwrapped to its inner ``Expr``, raw
-    ``Expr`` is forwarded as-is, and a bare ``int`` is materialized as
-    ``ConstInt(.., INDEX)`` with the span pinned by the parser if any (so error
+    ``Expr`` is forwarded as-is, and a bare host literal is materialized as a
+    typed Const with the span pinned by the parser if any (so error
     messages and dumps point at the user's source line, not this wrapper).
-    ``INDEX`` matches the dtype the parser uses for plain int literals, so
+    ``int``→``ConstInt(.., INDEX)`` and ``float``→``ConstFloat(..,
+    DEFAULT_CONST_FLOAT)`` match the parser's ``parse_constant`` rule, so
     round-tripped programs don't sprout spurious casts on otherwise-equivalent
     constants.
     """
@@ -42,10 +55,18 @@ def _scalar_operand_to_expr(value: int | Scalar | Expr) -> Expr:
         return value.unwrap()
     if isinstance(value, Expr):
         return value
-    return _ir_core.ConstInt(value, DataType.INDEX, _get_span_or_capture())
+    span = _get_span_or_capture()
+    if isinstance(value, float):
+        return _ir_core.ConstFloat(value, DataType.DEFAULT_CONST_FLOAT, span)
+    return _ir_core.ConstInt(value, DataType.INDEX, span)
 
 
-def add(lhs: Tile, rhs: Tile | int | float | Scalar | Expr) -> Tile:
+def add(
+    lhs: Tile,
+    rhs: Tile | int | float | Scalar | Expr,
+    *,
+    attrs: dict[str, Any] | None = None,
+) -> Tile:
     """Element-wise addition of tile and tile or scalar.
 
     Supports broadcasting when both operands are tiles. A scalar ``rhs``
@@ -54,11 +75,16 @@ def add(lhs: Tile, rhs: Tile | int | float | Scalar | Expr) -> Tile:
     Args:
         lhs: Left-hand side tile
         rhs: Right-hand side tile or scalar
+        attrs: Machine-only call attrs round-tripped through the printer
+            (e.g. ``pipeline_membership``) — re-attached to the Call via
+            ``ir.set_call_attrs`` (the AST parser's ``_attach_op_attrs``).
 
     Returns:
         Tile wrapping the add operation
     """
     call_expr = _ir_ops.add(lhs.unwrap(), _unwrap_rhs(rhs))
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -191,16 +217,21 @@ def neg(tile: Tile) -> Tile:
     return Tile(expr=call_expr)
 
 
-def exp(tile: Tile) -> Tile:
+def exp(tile: Tile, *, attrs: dict[str, Any] | None = None) -> Tile:
     """Element-wise exponential.
 
     Args:
         tile: Input tile
+        attrs: Machine-only call attrs round-tripped through the printer
+            (e.g. ``pipeline_membership``) — re-attached to the Call via
+            ``ir.set_call_attrs`` (the AST parser's ``_attach_op_attrs``).
 
     Returns:
         Tile wrapping the exp operation
     """
     call_expr = _ir_ops.exp(tile.unwrap())
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -424,12 +455,12 @@ def cmps(lhs: Tile, rhs: int | float | Expr | Scalar, cmp_type: int = 0) -> Tile
     Returns:
         Tile wrapping a packed predicate mask. Use tile.sel with an explicit tmp tile to materialize values.
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.cmps(lhs.unwrap(), rhs_expr, cmp_type)
     return Tile(expr=call_expr)
 
 
-def max(lhs: Scalar | int | Expr, rhs: Scalar | int | Expr) -> Scalar:
+def max(lhs: Scalar | int | float | Expr, rhs: Scalar | int | float | Expr) -> Scalar:
     """Scalar max of two values.
 
     Tile reductions are direction-specific — use [`row_max`][pypto.language.tile.row_max] (collapses the
@@ -445,7 +476,7 @@ def max(lhs: Scalar | int | Expr, rhs: Scalar | int | Expr) -> Scalar:
     return Scalar(expr=_ir_core.max_(_scalar_operand_to_expr(lhs), _scalar_operand_to_expr(rhs)))
 
 
-def min(lhs: Scalar | int | Expr, rhs: Scalar | int | Expr) -> Scalar:
+def min(lhs: Scalar | int | float | Expr, rhs: Scalar | int | float | Expr) -> Scalar:
     """Scalar min of two values.
 
     Tile reductions are direction-specific — use [`row_min`][pypto.language.tile.row_min] (collapses the
@@ -502,7 +533,7 @@ def rems(lhs: Tile, rhs: int | float | Expr | Scalar, tmp: Tile) -> Tile:
     Returns:
         Tile wrapping the rems operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.rems(lhs.unwrap(), rhs_expr, tmp.unwrap())
     return Tile(expr=call_expr)
 
@@ -610,7 +641,7 @@ def fmods(lhs: Tile, rhs: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the fmods operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.fmods(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -643,7 +674,7 @@ def ands(lhs: Tile, rhs: int | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the ands operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.ands(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -676,7 +707,7 @@ def ors(lhs: Tile, rhs: int | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the ors operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.ors(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -711,7 +742,7 @@ def xors(lhs: Tile, rhs: int | Expr | Scalar, tmp: Tile) -> Tile:
     Returns:
         Tile wrapping the xors operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.xors(lhs.unwrap(), rhs_expr, tmp.unwrap())
     return Tile(expr=call_expr)
 
@@ -748,7 +779,7 @@ def shls(lhs: Tile, rhs: int | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the shls operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.shls(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -785,7 +816,7 @@ def shrs(lhs: Tile, rhs: int | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the shrs operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.shrs(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -802,7 +833,7 @@ def maximums(lhs: Tile, rhs: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the maximums operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.maximums(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -819,7 +850,7 @@ def minimums(lhs: Tile, rhs: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the minimums operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.minimums(lhs.unwrap(), rhs_expr)
     return Tile(expr=call_expr)
 
@@ -903,7 +934,7 @@ def addsc(lhs: Tile, rhs: int | float | Expr | Scalar, rhs2: Tile) -> Tile:
     Returns:
         Tile wrapping the addsc operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.addsc(lhs.unwrap(), rhs_expr, rhs2.unwrap())
     return Tile(expr=call_expr)
 
@@ -921,7 +952,7 @@ def subsc(lhs: Tile, rhs: int | float | Expr | Scalar, rhs2: Tile) -> Tile:
     Returns:
         Tile wrapping the subsc operation
     """
-    rhs_expr = rhs.unwrap() if isinstance(rhs, Scalar) else rhs
+    rhs_expr = to_expr(rhs)
     call_expr = _ir_ops.subsc(lhs.unwrap(), rhs_expr, rhs2.unwrap())
     return Tile(expr=call_expr)
 
@@ -938,7 +969,7 @@ def lrelu(tile: Tile, slope: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the lrelu operation
     """
-    slope_expr = slope.unwrap() if isinstance(slope, Scalar) else slope
+    slope_expr = to_expr(slope)
     call_expr = _ir_ops.lrelu(tile.unwrap(), slope_expr)
     return Tile(expr=call_expr)
 
@@ -977,7 +1008,7 @@ def sels(mask: Tile, src: Tile, tmp: Tile, scalar: int | float | Expr | Scalar) 
     Returns:
         Tile wrapping the sels operation
     """
-    scalar_expr = scalar.unwrap() if isinstance(scalar, Scalar) else scalar
+    scalar_expr = to_expr(scalar)
     call_expr = _ir_ops.sels(mask.unwrap(), src.unwrap(), tmp.unwrap(), scalar_expr)
     return Tile(expr=call_expr)
 
@@ -1029,3 +1060,8 @@ def select(
 
     call_expr = _ir_ops.select(cond.unwrap(), _unwrap(on_true), _unwrap(on_false))
     return Tile(expr=call_expr)
+
+
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

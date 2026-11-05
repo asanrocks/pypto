@@ -113,7 +113,7 @@ from pypto.ir.utils import (
 )
 from pypto.pypto_core import DataType
 from pypto.pypto_core import ir as _ir_core
-from pypto.pypto_core.ir import AtomicType, PadValue
+from pypto.pypto_core.ir import AtomicType, MemorySpace, PadValue
 
 from ..typing import BoolLike, IntLike, Scalar, Tensor, Tile
 from . import tensor_ops as _tensor
@@ -299,6 +299,36 @@ def _is_scalar_like(v: object) -> TypeGuard[Scalar | int | float | _ir_core.Expr
     return isinstance(v, _ir_core.Expr) and isinstance(v.type, _ir_core.ScalarType)
 
 
+def _int_scalar_like(v: object, op_name: str) -> TypeGuard[int | Scalar | _ir_core.Expr]:
+    """Narrow a scalar-like to the integer ops' operand set.
+
+    The bitwise/shift wrappers route a scalar ``rhs`` to their ``*s`` forms,
+    whose C++ operands are integer scalars — a ``float`` is a bad value, not
+    a missing feature, so it is rejected loudly here (the TypeGuard then
+    narrows to the accepted set for the static surface)."""
+    if isinstance(v, float):
+        raise TypeError(f"pl.{op_name}: bitwise and shift ops take an integer scalar, got a float")
+    return _is_scalar_like(v)
+
+
+def _unify_operand(v: Any) -> Any:
+    """Normalize a facade operand for type dispatch.
+
+    Mirrors the parser frontend, whose parse-time typing flows from the arg
+    exprs, never from a wrapper class. Returns ``v`` unchanged;
+    the round-trip ``_YieldFacade`` (the historical wrapper subclass) is
+    deleted, so there is nothing to unwrap here."""
+    return v
+
+
+# The runtime dispatch surface of the unified wrappers: any facade operand,
+# Python scalar, or raw scalar-typed ``Expr`` (parser-shaped operands — see
+# ``_is_scalar_like``). The overloads advertise the supported pairwise
+# combinations; these implementation annotations state the accepted superset
+# the dispatch branches narrow over, so pyright keeps checking each branch.
+_BinaryOperand = Tensor | Tile | Scalar | int | float | _ir_core.Expr
+
+
 def _to_scalar_expr(v: Any) -> _ir_core.Expr:
     """Coerce a scalar-like value to an ``Expr``.
 
@@ -333,6 +363,7 @@ def add(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
 def add(lhs: Scalar, rhs: Scalar | int | float) -> Scalar: ...
 def add(lhs: object, rhs: object) -> Tensor | Tile | Scalar:
     """Element-wise addition, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.add(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -355,6 +386,7 @@ def sub(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
 def sub(lhs: Scalar, rhs: Scalar | int | float) -> Scalar: ...
 def sub(lhs: object, rhs: object) -> Tensor | Tile | Scalar:
     """Element-wise subtraction, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.sub(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -377,6 +409,7 @@ def mul(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
 def mul(lhs: Scalar, rhs: Scalar | int | float) -> Scalar: ...
 def mul(lhs: object, rhs: object) -> Tensor | Tile | Scalar:
     """Element-wise multiplication, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.mul(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -421,6 +454,7 @@ def div(lhs: object, rhs: object, high_precision: bool = False) -> Tensor | Tile
             falling back. Honoured only on A5: A2/A3 PTO-ISA ignores it and
             returns the default result, which compilation warns about.
     """
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.div(lhs, rhs, high_precision=high_precision)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -446,6 +480,7 @@ def part_add(lhs: Tensor, rhs: Tensor) -> Tensor: ...
 def part_add(lhs: Tile, rhs: Tile) -> Tile: ...
 def part_add(lhs: object, rhs: object) -> Tensor | Tile:
     """Partial element-wise add, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, Tensor):
         return _tensor.part_add(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -459,6 +494,7 @@ def part_mul(lhs: Tensor, rhs: Tensor) -> Tensor: ...
 def part_mul(lhs: Tile, rhs: Tile) -> Tile: ...
 def part_mul(lhs: object, rhs: object) -> Tensor | Tile:
     """Partial element-wise multiply, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, Tensor):
         return _tensor.part_mul(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -472,6 +508,7 @@ def part_max(lhs: Tensor, rhs: Tensor) -> Tensor: ...
 def part_max(lhs: Tile, rhs: Tile) -> Tile: ...
 def part_max(lhs: object, rhs: object) -> Tensor | Tile:
     """Partial element-wise max, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, Tensor):
         return _tensor.part_max(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -485,6 +522,7 @@ def part_min(lhs: Tensor, rhs: Tensor) -> Tensor: ...
 def part_min(lhs: Tile, rhs: Tile) -> Tile: ...
 def part_min(lhs: object, rhs: object) -> Tensor | Tile:
     """Partial element-wise min, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, Tensor):
         return _tensor.part_min(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -511,6 +549,7 @@ def fmod(lhs: object, rhs: object, high_precision: bool = False) -> Tensor | Til
     only on A5: A2/A3 PTO-ISA ignores it and returns the default result, which
     compilation warns about.
     """
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         if high_precision:
             raise TypeError("pl.fmod: high_precision is supported only for Tile operands")
@@ -533,11 +572,10 @@ def fmods(lhs: Tensor, rhs: int | float | Scalar) -> Tensor: ...
 def fmods(lhs: Tile, rhs: int | float | Scalar) -> Tile: ...
 def fmods(lhs: object, rhs: int | float | Scalar) -> Tensor | Tile:
     """Element-wise truncating remainder with a scalar, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor):
         return _tensor.fmods(lhs, rhs)
-    if isinstance(lhs, Tile):
-        return _tile.fmods(lhs, rhs)
-    _raise_type_dispatch_error("fmods", lhs, rhs)
+    return _tile.fmods(lhs, rhs)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +589,7 @@ def maximum(lhs: Tensor, rhs: Tensor | int | float | Scalar) -> Tensor: ...
 def maximum(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
 def maximum(lhs: object, rhs: object) -> Tensor | Tile:
     """Element-wise maximum, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.maximum(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -566,6 +605,7 @@ def minimum(lhs: Tensor, rhs: Tensor | int | float | Scalar) -> Tensor: ...
 def minimum(lhs: Tile, rhs: Tile | int | float | Scalar) -> Tile: ...
 def minimum(lhs: object, rhs: object) -> Tensor | Tile:
     """Element-wise minimum, dispatched by input type."""
+    lhs, rhs = _unify_operand(lhs), _unify_operand(rhs)
     if isinstance(lhs, Tensor) and isinstance(rhs, (Tensor, int, float, Scalar, _ir_core.Expr)):
         return _tensor.minimum(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
@@ -581,11 +621,10 @@ def exp(input: Tensor) -> Tensor: ...
 def exp(input: Tile) -> Tile: ...
 def exp(input: object) -> Tensor | Tile:
     """Element-wise exponential, dispatched by input type."""
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.exp(input)
-    if isinstance(input, Tile):
-        return _tile.exp(input)
-    raise TypeError(f"pl.exp: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.exp(input)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
@@ -601,11 +640,13 @@ def log(input: object, high_precision: bool = False) -> Tensor | Tile:
             only on A5: A2/A3 PTO-ISA ignores it and returns the default result,
             which compilation warns about.
     """
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.log(input, high_precision=high_precision)
-    if isinstance(input, Tile):
-        return _tile.log(input, high_precision=high_precision)
-    raise TypeError(f"pl.log: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.log(
+        input,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        high_precision=high_precision,
+    )
 
 
 @overload
@@ -640,11 +681,10 @@ def neg(input: Tensor) -> Tensor: ...
 def neg(input: Tile) -> Tile: ...
 def neg(input: object) -> Tensor | Tile:
     """Element-wise negation, dispatched by input type."""
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.neg(input)
-    if isinstance(input, Tile):
-        return _tile.neg(input)
-    raise TypeError(f"pl.neg: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.neg(input)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
@@ -653,11 +693,10 @@ def abs(input: Tensor) -> Tensor: ...
 def abs(input: Tile) -> Tile: ...
 def abs(input: object) -> Tensor | Tile:
     """Element-wise absolute value, dispatched by input type."""
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.abs(input)
-    if isinstance(input, Tile):
-        return _tile.abs(input)
-    raise TypeError(f"pl.abs: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.abs(input)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
@@ -673,11 +712,13 @@ def recip(input: object, high_precision: bool = False) -> Tensor | Tile:
             (FP16/FP32 only). Honoured only on A5: A2/A3 PTO-ISA ignores it and
             returns the default result, which compilation warns about.
     """
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.recip(input, high_precision=high_precision)
-    if isinstance(input, Tile):
-        return _tile.recip(input, high_precision=high_precision)
-    raise TypeError(f"pl.recip: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.recip(
+        input,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        high_precision=high_precision,
+    )
 
 
 @overload
@@ -686,11 +727,10 @@ def sqrt(input: Tensor) -> Tensor: ...
 def sqrt(input: Tile) -> Tile: ...
 def sqrt(input: object) -> Tensor | Tile:
     """Element-wise square root, dispatched by input type."""
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.sqrt(input)
-    if isinstance(input, Tile):
-        return _tile.sqrt(input)
-    raise TypeError(f"pl.sqrt: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.sqrt(input)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
@@ -707,12 +747,12 @@ def rsqrt(input: object, high_precision: bool = False) -> Tensor | Tile:
     ``high_precision=True`` with a Tile raises rather than silently yielding the
     low-precision path.
     """
+    input = _unify_operand(input)
     if isinstance(input, Tensor):
         return _tensor.rsqrt(input, high_precision=high_precision)
     if isinstance(input, Tile):
         _reject_unsupported("rsqrt", "Tile", high_precision=(high_precision, _TILE_RSQRT_PRECISION_REMEDY))
-        return _tile.rsqrt(input)
-    raise TypeError(f"pl.rsqrt: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.rsqrt(input)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
@@ -940,9 +980,10 @@ def expands(target: object, scalar: int | float | Scalar) -> Tensor | Tile:
     """
     if isinstance(target, Tensor):
         return _tensor.expands(target, scalar)
-    if isinstance(target, Tile):
-        return _tile.expands(target, scalar)
-    raise TypeError(f"pl.expands: expected Tensor or Tile, got {type(target).__name__}")
+    return _tile.expands(
+        target,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        scalar,
+    )
 
 
 @overload
@@ -962,17 +1003,34 @@ def reshape(input: object, shape: Sequence[IntLike]) -> Tensor | Tile:
     """
     if isinstance(input, Tensor):
         return _tensor.reshape(input, shape)
-    if isinstance(input, Tile):
-        return _tile.reshape(input, shape)
-    raise TypeError(f"pl.reshape: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.reshape(
+        input,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        shape,
+    )
 
 
 @overload
-def reinterpret_view(data: Tensor, dtype: DataType, *, shape: Sequence[IntLike] | None = None) -> Tensor: ...
-@overload
-def reinterpret_view(data: Tile, dtype: DataType, *, shape: Sequence[IntLike] | None = None) -> Tile: ...
 def reinterpret_view(
-    data: object, dtype: DataType, *, shape: Sequence[IntLike] | None = None
+    data: Tensor,
+    dtype: DataType,
+    *,
+    shape: Sequence[IntLike] | None = None,
+    attrs: dict[str, Any] | None = None,
+) -> Tensor: ...
+@overload
+def reinterpret_view(
+    data: Tile,
+    dtype: DataType,
+    *,
+    shape: Sequence[IntLike] | None = None,
+    attrs: dict[str, Any] | None = None,
+) -> Tile: ...
+def reinterpret_view(
+    data: object,
+    dtype: DataType,
+    *,
+    shape: Sequence[IntLike] | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> Tensor | Tile:
     """Reinterpret the same bytes with a different dtype.
 
@@ -987,15 +1045,21 @@ def reinterpret_view(
         shape: Optional byte-equivalent target shape. When omitted, the
             physically contiguous dimension is scaled according to the
             source/target dtype byte ratio.
+        attrs: Machine-only call attrs (e.g. ``pipeline_membership``)
+            round-tripped through the printer — forwarded to the
+            tensor/tile facades.
 
     Returns:
         A zero-copy view of the same kind as ``data``.
     """
     if isinstance(data, Tensor):
-        return _tensor.reinterpret_view(data, dtype, shape=shape)
-    if isinstance(data, Tile):
-        return _tile.reinterpret_view(data, dtype, shape=shape)
-    raise TypeError(f"pl.reinterpret_view: expected Tensor or Tile, got {type(data).__name__}")
+        return _tensor.reinterpret_view(data, dtype, shape=shape, attrs=attrs)
+    return _tile.reinterpret_view(
+        data,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        dtype,
+        shape=shape,
+        attrs=attrs,
+    )  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
@@ -1015,9 +1079,11 @@ def transpose(input: object, axis1: int, axis2: int) -> Tensor | Tile:
     """
     if isinstance(input, Tensor):
         return _tensor.transpose(input, axis1, axis2)
-    if isinstance(input, Tile):
-        return _tile.transpose(input, axis1, axis2)
-    raise TypeError(f"pl.transpose: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.transpose(
+        input,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        axis1,
+        axis2,
+    )
 
 
 @overload
@@ -1112,9 +1178,10 @@ def fillpad(value: object, pad_value: PadValue | int | float = PadValue.zero) ->
     """
     if isinstance(value, Tensor):
         return _tensor.fillpad(value, pad_value)
-    if isinstance(value, Tile):
-        return _tile.fillpad(value, pad_value)
-    raise TypeError(f"pl.fillpad: expected Tensor or Tile, got {type(value).__name__}")
+    return _tile.fillpad(
+        value,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        pad_value,
+    )
 
 
 @overload
@@ -1138,9 +1205,11 @@ def fillpad_expand(
     """
     if isinstance(value, Tensor):
         return _tensor.fillpad_expand(value, shape, pad_value)
-    if isinstance(value, Tile):
-        return _tile.fillpad_expand(value, shape, pad_value)
-    raise TypeError(f"pl.fillpad_expand: expected Tensor or Tile, got {type(value).__name__}")
+    return _tile.fillpad_expand(
+        value,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        shape,
+        pad_value,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1488,11 +1557,12 @@ def col_sum(input: object, tmp_tile: Tile | None = None, is_binary: bool = False
     if isinstance(input, Tensor):
         _reject_tmp_for_tensor("col_sum", tmp_tile, "tmp_tile")
         return _tensor.col_sum(input, is_binary=is_binary)
-    if isinstance(input, Tile):
-        if is_binary:
-            raise TypeError("pl.col_sum is_binary is Tensor-only; pass tmp_tile for Tile inputs")
-        return _tile.col_sum(input, tmp_tile)
-    _raise_type_dispatch_error("col_sum", input)
+    if is_binary:
+        raise TypeError("pl.col_sum is_binary is Tensor-only; pass tmp_tile for Tile inputs")
+    return _tile.col_sum(
+        input,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        tmp_tile,
+    )
 
 
 @overload
@@ -1506,9 +1576,7 @@ def col_max(input: object) -> Tensor | Tile:
     """
     if isinstance(input, Tensor):
         return _tensor.col_max(input)
-    if isinstance(input, Tile):
-        return _tile.col_max(input)
-    _raise_type_dispatch_error("col_max", input)
+    return _tile.col_max(input)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
@@ -1522,9 +1590,7 @@ def col_min(input: object) -> Tensor | Tile:
     """
     if isinstance(input, Tensor):
         return _tensor.col_min(input)
-    if isinstance(input, Tile):
-        return _tile.col_min(input)
-    _raise_type_dispatch_error("col_min", input)
+    return _tile.col_min(input)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
@@ -1538,9 +1604,7 @@ def col_prod(input: object) -> Tensor | Tile:
     """
     if isinstance(input, Tensor):
         return _tensor.col_prod(input)
-    if isinstance(input, Tile):
-        return _tile.col_prod(input)
-    _raise_type_dispatch_error("col_prod", input)
+    return _tile.col_prod(input)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
@@ -1649,8 +1713,8 @@ def cast(
 
 @overload
 def cast(
-    input: Scalar,
-    target_type: int | DataType,
+    input: Scalar | int | float,
+    target_type: DataType,
     mode: str | int = "round",
     *,
     saturation_mode: str | int | None = None,
@@ -1755,8 +1819,8 @@ def and_(lhs: object, rhs: object) -> Tensor | Tile:
         return _tensor.and_(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
         return _tile.and_(lhs, rhs)
-    if isinstance(lhs, Tile) and _is_scalar_like(rhs):
-        return _tile.ands(lhs, rhs)  # type: ignore[reportArgumentType]  # out-of-contract rhs (float / garbage) delegates to the op's own loud rejection
+    if isinstance(lhs, Tile) and _int_scalar_like(rhs, "and_"):
+        return _tile.ands(lhs, rhs)
     _raise_type_dispatch_error("and_", lhs, rhs)
 
 
@@ -1783,8 +1847,8 @@ def or_(lhs: object, rhs: object) -> Tensor | Tile:
         return _tensor.or_(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
         return _tile.or_(lhs, rhs)
-    if isinstance(lhs, Tile) and _is_scalar_like(rhs):
-        return _tile.ors(lhs, rhs)  # type: ignore[reportArgumentType]  # out-of-contract rhs (float / garbage) delegates to the op's own loud rejection
+    if isinstance(lhs, Tile) and _int_scalar_like(rhs, "or_"):
+        return _tile.ors(lhs, rhs)
     _raise_type_dispatch_error("or_", lhs, rhs)
 
 
@@ -1819,8 +1883,8 @@ def xor(lhs: object, rhs: object, tmp: Tile | None = None) -> Tensor | Tile:
         tmp = _require_tmp_for_tile("xor", tmp, _tmp_scratch_requirement("xor"))
         if isinstance(rhs, Tile):
             return _tile.xor(lhs, rhs, tmp)
-        if _is_scalar_like(rhs):
-            return _tile.xors(lhs, rhs, tmp)  # type: ignore[reportArgumentType]  # out-of-contract rhs (float / garbage) delegates to the op's own loud rejection
+        if _int_scalar_like(rhs, "xor"):
+            return _tile.xors(lhs, rhs, tmp)
     _raise_type_dispatch_error("xor", lhs, rhs)
 
 
@@ -1865,8 +1929,8 @@ def shl(lhs: object, rhs: object) -> Tensor | Tile:
         return _tensor.shl(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
         return _tile.shl(lhs, rhs)
-    if isinstance(lhs, Tile) and _is_scalar_like(rhs):
-        return _tile.shls(lhs, rhs)  # type: ignore[reportArgumentType]  # out-of-contract rhs (float / garbage) delegates to the op's own loud rejection
+    if isinstance(lhs, Tile) and _int_scalar_like(rhs, "shl"):
+        return _tile.shls(lhs, rhs)
     _raise_type_dispatch_error("shl", lhs, rhs)
 
 
@@ -1893,8 +1957,8 @@ def shr(lhs: object, rhs: object) -> Tensor | Tile:
         return _tensor.shr(lhs, rhs)
     if isinstance(lhs, Tile) and isinstance(rhs, Tile):
         return _tile.shr(lhs, rhs)
-    if isinstance(lhs, Tile) and _is_scalar_like(rhs):
-        return _tile.shrs(lhs, rhs)  # type: ignore[reportArgumentType]  # out-of-contract rhs (float / garbage) delegates to the op's own loud rejection
+    if isinstance(lhs, Tile) and _int_scalar_like(rhs, "shr"):
+        return _tile.shrs(lhs, rhs)
     _raise_type_dispatch_error("shr", lhs, rhs)
 
 
@@ -1926,9 +1990,34 @@ def set_validshape(input: object, valid_rows: IntLike, valid_cols: IntLike) -> T
     """
     if isinstance(input, Tensor):
         return _tensor.set_validshape(input, valid_rows, valid_cols)
-    if isinstance(input, Tile):
-        return _tile.set_validshape(input, valid_rows, valid_cols)
-    raise TypeError(f"pl.set_validshape: expected Tensor or Tile, got {type(input).__name__}")
+    return _tile.set_validshape(
+        input,  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
+        valid_rows,
+        valid_cols,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tile-only ops promoted to unified namespace
+# ---------------------------------------------------------------------------
+
+
+def create_tile(
+    shape: Sequence[IntLike],
+    dtype: DataType,
+    target_memory: MemorySpace | None = None,
+    transpose: bool | None = None,
+    *,
+    flat_layout: bool | None = None,
+) -> Tile:
+    """Create a tile at specific memory space.
+
+    Signature-transparent promotion of :func:`pypto.language.op.tile_ops.create`
+    (aliased there as ``create_tile``) so ``pl.create_tile`` and
+    ``pypto.language.op.create_tile`` stay the same callable — the
+    ``pl.create_tile(shape, dtype)`` default keeps working.
+    """
+    return _tile.create(shape, dtype, target_memory, transpose, flat_layout=flat_layout)
 
 
 # ---------------------------------------------------------------------------
@@ -1953,28 +2042,30 @@ def read(src: object, offset: IntLike | Sequence[IntLike]) -> Scalar:
     """
     if isinstance(src, Tensor):
         return _tensor.read(src, offset)
-    if isinstance(src, Tile):
-        return _tile.read(src, offset)
-    raise TypeError(f"pl.read: expected Tensor or Tile, got {type(src).__name__}")
+    return _tile.read(src, offset)  # type: ignore[reportArgumentType]  # out-of-contract delegates to the callee's own loud rejection
 
 
 @overload
 def write(
     dst: Tensor,
     offset: IntLike | Sequence[IntLike],
-    value: Scalar,
-) -> _ir_core.Expr: ...
+    value: Scalar | _ir_core.Expr | int | float,
+) -> Tensor: ...
+
+
 @overload
 def write(
     dst: Tile,
     offset: IntLike | Sequence[IntLike],
-    value: Scalar,
-) -> _ir_core.Expr: ...
+    value: Scalar | _ir_core.Expr | int | float,
+) -> Tile: ...
+
+
 def write(
     dst: object,
     offset: IntLike | Sequence[IntLike],
-    value: Scalar,
-) -> _ir_core.Expr:
+    value: Scalar | _ir_core.Expr | int | float,
+) -> Tensor | Tile:
     """Write a scalar value to a tensor or tile at given indices.
 
     Args:
@@ -1984,8 +2075,9 @@ def write(
         value: Scalar value to write
 
     Returns:
-        Underlying ``tensor.write`` / ``tile.write`` call expression. Direct
-        callers ignore it; the DSL parser surfaces it as an ``EvalStmt``.
+        The destination Tensor or Tile facade wrapping the write call. The
+        result can be chained or carried; bare callers still lower it as an
+        ``EvalStmt``.
     """
     if isinstance(dst, Tensor):
         return _tensor.write(dst, offset, value)
@@ -2224,3 +2316,10 @@ def mrgsort(
     ):
         return _tile.mrgsort(src0, src1, src2, src3, tmp, exhausted, block_len=block_len)
     raise TypeError(f"pl.mrgsort: expected Tensor or Tile, got {type(src0).__name__}")
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see _validation.py).
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

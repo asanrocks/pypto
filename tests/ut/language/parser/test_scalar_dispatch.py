@@ -15,8 +15,39 @@ when called with scalar arguments.
 
 import pypto.language as pl
 import pytest
-from pypto.language.diagnostics import InvalidOperationError
+from pypto.language.parser.diagnostics import InvalidOperationError
 from pypto.pypto_core import ir
+
+
+def test_typed_bool_constant_builds_const_bool():
+    """The ``pl.const`` facade builds a ConstBool; the parser keeps its rule.
+
+    ``pl.const`` is a shared facade, so the runtime (tracing-lane) spelling
+    builds a ``ConstBool`` and rejects a dtype mismatch loudly. Inside a
+    parsed body the parsing frontend keeps its upstream numeric-literal rule:
+    a bool is an int, so ``pl.const(True, pl.BOOL)`` is a ``ConstInt`` exactly
+    as before — the lanes agree on the value and differ only in the node the
+    facade versus the parser builds.
+    """
+
+    value = pl.const(True, pl.BOOL)
+    assert isinstance(value.unwrap(), ir.ConstBool)
+
+    with pytest.raises(TypeError, match="boolean constants require"):
+        pl.const(False, pl.INT64)
+
+    program = pl.parse_program(
+        """
+@pl.program
+class Program:
+    @pl.function
+    def main(self) -> pl.Scalar[pl.BOOL]:
+        return pl.const(True, pl.BOOL)
+"""
+    )
+    func = list(program.functions.values())[0]
+    assert isinstance(func.body, ir.ReturnStmt)
+    assert isinstance(func.body.value[0], ir.ConstInt)
 
 
 class TestScalarMin:
@@ -463,9 +494,13 @@ class TestScalarUnsupportedOpHint:
     """Verify the catch-all error message points users at Python operators."""
 
     def test_unsupported_op_hint_mentions_python_operators(self):
-        # `pl.exp` is a unified op (tile/tensor) with no scalar dispatch — hits
-        # the catch-all path that surfaces the improved hint.
-        with pytest.raises(InvalidOperationError, match=r"pl\.exp.*expected.*got Scalar") as exc_info:
+        # `pl.exp` is a unified op (tile/tensor) with no scalar dispatch. The
+        # dispatch trusts its annotations, so a Scalar falls through to the
+        # tile path and the IR-level validator rejects it — still wrapped by
+        # the parser's catch-all with the Python-operators hint.
+        with pytest.raises(
+            InvalidOperationError, match=r"pl operation 'exp'.*tile\.exp.*ScalarType"
+        ) as exc_info:
 
             @pl.program
             class Bad:

@@ -14,7 +14,7 @@ from pypto.pypto_core.ir import (
     Expr,
 )
 
-from ..typing import Scalar, Tile
+from ..typing import Scalar, Tile, to_expr
 
 
 def row_max(tile: Tile, tmp_tile: Tile) -> Tile:
@@ -500,6 +500,11 @@ def expands(target: Tile, scalar: int | float | Expr | Scalar) -> Tile:
     Returns:
         Tile wrapping the expands operation
     """
-    scalar_expr = scalar.unwrap() if isinstance(scalar, Scalar) else scalar
+    scalar_expr = to_expr(scalar)
     call_expr = _ir_ops.expands(target.unwrap(), scalar_expr)
     return Tile(expr=call_expr)
+
+
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

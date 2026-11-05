@@ -19,6 +19,10 @@ Call's ``dump_vars`` (seeded by ``pl.dump_tag``) as a ``dumps=[...]`` kwarg, the
 same way it surfaces a Submit's. The forward-sticky ``pl.dump_tag`` statement
 itself is covered in ``test_dump_tag_dsl.py``.
 """
+# Traced/DSL kernel bodies: the unified facade returns `Tensor | Scalar`
+# (and `Tuple` for multi-value returns), which a body cannot narrow; the
+# rules below are the resulting expression-shape noise, not a bug signal.
+# pyright: reportArgumentType=false
 
 import ast
 

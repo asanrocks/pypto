@@ -179,5 +179,36 @@ def test_pl_function_with_array_indexing():
     assert op_names.count("array.get_element") == 2
 
 
+# ----------------------------------------------------------------------------
+# Host-mode facade behavior (no trace, no parser)
+# ----------------------------------------------------------------------------
+
+
+def test_host_item_assignment_rebinds_the_wrapper():
+    """``arr[i] = v`` on a facade outside a trace keeps the upstream behavior.
+
+    The tracing frontend routes the same statement through the active Frame,
+    but direct DSL use (tests, REPL-style construction) has no Frame: there
+    the wrapper rebinds to the updated expression, and the write is not a
+    silent no-op.
+    """
+    arr = pl.array.create(8, pl.INT32)
+    before = arr.unwrap()
+
+    arr[0] = 7
+
+    after = arr.unwrap()
+    assert isinstance(after, ir.Call)
+    assert after.op.name == "array.update_element"
+    assert after is not before
+
+
+def test_host_slice_assignment_is_loud():
+    """A slice has no ``update_element`` meaning, in either mode."""
+    arr = pl.array.create(8, pl.INT32)
+    with pytest.raises(TypeError, match="scalar index, not a slice"):
+        arr[0:2] = 7
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

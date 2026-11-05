@@ -123,6 +123,8 @@ from ._tile_indexing import gather_mask as gather_mask
 from ._tile_indexing import gatherb as gatherb
 from ._tile_indexing import mgather as mgather
 from ._tile_indexing import mrgsort as mrgsort
+from ._tile_indexing import mrgsort_format1 as mrgsort_format1
+from ._tile_indexing import mrgsort_format2 as mrgsort_format2
 from ._tile_indexing import mscatter as mscatter
 from ._tile_indexing import scatter as scatter
 from ._tile_indexing import scatter_mask as scatter_mask
@@ -351,6 +353,8 @@ __all__ = [
     "mgather",
     "MaskPattern",
     "mrgsort",
+    "mrgsort_format1",
+    "mrgsort_format2",
 ]
 
 

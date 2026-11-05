@@ -16,7 +16,7 @@ from pypto.pypto_core.ir import (
     AccPhase,
 )
 
-from ..typing import BoolLike, Tile, predicate_to_expr
+from ..typing import BoolLike, Tile, Tuple, predicate_to_expr
 
 # ============================================================================
 # MX Quantization Operations
@@ -64,11 +64,9 @@ def quant_mx(
     call_expr = _ir_ops.tquant_mx(
         src.unwrap(), dtype=dtype, group_axis=group_axis, quant_scale_alg=quant_scale_alg
     )
-    span = call_expr.span
-    return (
-        Tile(expr=_ir_core.TupleGetItemExpr(call_expr, 0, span)),
-        Tile(expr=_ir_core.TupleGetItemExpr(call_expr, 1, span)),
-    )
+    # The staged multi-result value: unpacking shares one _tuple_tmp temp
+    # (the parser's _bind_unpack_target shape), not a host (Tile, Tile).
+    return Tuple(expr=call_expr)
 
 
 def quant_mx_raw(
@@ -457,3 +455,8 @@ def gemv_bias(
     """
     call_expr = _ir_ops.gemv_bias(lhs.unwrap(), rhs.unwrap(), bias.unwrap(), acc_phase=acc_phase)
     return Tile(expr=call_expr)
+
+
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

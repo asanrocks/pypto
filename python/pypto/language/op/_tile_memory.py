@@ -11,13 +11,16 @@
 
 import warnings
 from collections.abc import Sequence
+from typing import Any
 
 from pypto.ir.op import tile_ops as _ir_ops
 from pypto.ir.utils import (
+    _get_span_or_capture,
     caller_warning_stacklevel,
     has_partial_valid_region,
 )
 from pypto.pypto_core import DataType
+from pypto.pypto_core import ir as _ir_core
 from pypto.pypto_core.ir import (
     AtomicType,
     CachePolicy,
@@ -28,9 +31,11 @@ from pypto.pypto_core.ir import (
     TileLayout,
 )
 
-from ..typing import IntLike, Ptr, Scalar, Tensor, Tile
+from ..typing import IntLike, Ptr, Scalar, Tensor, Tile, to_expr
+from ..typing._host import coerce_host_scalar, wrap_output_like
 from ._tile_common import _TensorT
 from ._utils import _normalize_intlike
+from ._validation import normalize_fillpad_pad_value
 
 
 def alloc(
@@ -48,7 +53,14 @@ def alloc(
 
     The result is a base ``Ptr`` (allocation identity token): the printer
     annotates the assignment target as ``pl.Ptr``, matching the IR design
-    where ``tile.alloc`` / ``tensor.alloc`` Calls carry ``PtrType``.
+    where ``tile.alloc`` / ``tensor.alloc`` Calls carry ``PtrType``. The new
+    frontend's collect tier needs a real facade, not a bare ``PtrType``
+    sentinel: the bind of ``buf: pl.Ptr = pl.tile.alloc(...)`` in the
+    re-parse must emit the ``AssignStmt`` (a non-facade RHS is a host bind
+    and is silently dropped, breaking the roundtrip structural equality).
+    The operands mirror the AST parser's ``_parse_printed_alloc_call`` —
+    ``ConstInt``/INDEX for both the memory space (the printer round-trips
+    the enum via ``pl.Mem.X``) and the byte size.
 
     Args:
         memory_space: Target memory space (e.g. ``pl.Mem.Vec``)
@@ -58,10 +70,20 @@ def alloc(
             its membership isolated from other allocations.
 
     Returns:
-        Opaque ``Ptr`` sentinel (unused at runtime — the parser intercepts the
-        call in the AST and never invokes this stub)
+        ``Ptr`` facade wrapping the detached ``tile.alloc`` Call.
     """
-    return Ptr()
+    span = _get_span_or_capture()
+    args = [
+        _ir_core.ConstInt(memory_space.value, DataType.INDEX, span),
+        _ir_core.ConstInt(size, DataType.INDEX, span),
+    ]
+    # ``pinned`` rides only when set: the C++ planners and the printer omit it
+    # for ordinary (unpinned) allocations, and structural comparison treats the
+    # kwarg as significant — emitting ``pinned=False`` unconditionally made every
+    # traced alloc unequal to its C++-synthesized counterpart.
+    alloc_kwargs = {"pinned": True} if pinned else {}
+    call = _ir_core.create_op_call("tile.alloc", args, alloc_kwargs, span)
+    return Ptr(expr=call)
 
 
 def create(
@@ -132,7 +154,7 @@ def read(tile: Tile, indices: IntLike | Sequence[IntLike]) -> Scalar:
     return Scalar(expr=call_expr)
 
 
-def write(tile: Tile, indices: IntLike | Sequence[IntLike], value: Scalar | Expr) -> Expr:
+def write(tile: Tile, indices: IntLike | Sequence[IntLike], value: Scalar | Expr | int | float) -> Tile:
     """Write a scalar value into a tile at given indices.
 
     Args:
@@ -142,13 +164,17 @@ def write(tile: Tile, indices: IntLike | Sequence[IntLike], value: Scalar | Expr
         value: Scalar value to write (DSL Scalar or raw Expr)
 
     Returns:
-        The underlying ``tile.write`` call expression. Direct callers
-        typically ignore it; the DSL parser surfaces it as an ``EvalStmt``.
+        The destination tile facade wrapping the ``tile.write`` call. The
+        result can be chained or carried; bare callers still lower it as an
+        ``EvalStmt``.
     """
     # Allow a bare IntLike as a flat 1-D index for backwards compatibility
     indices_seq: Sequence[IntLike] = [indices] if not isinstance(indices, Sequence) else indices
-    value_expr = value.unwrap() if isinstance(value, Scalar) else value
-    return _ir_ops.write(tile.unwrap(), _normalize_intlike(indices_seq), value_expr)
+    value_expr = (
+        value.unwrap() if isinstance(value, Scalar) else coerce_host_scalar(value, "tile.write", "value")
+    )
+    call_expr = _ir_ops.write(tile.unwrap(), _normalize_intlike(indices_seq), value_expr)
+    return wrap_output_like(tile, call_expr)
 
 
 def load(
@@ -159,6 +185,8 @@ def load(
     target_memory: MemorySpace | None = None,
     clamp: bool = False,
     cache: CachePolicy | None = None,
+    *,
+    attrs: dict[str, Any] | None = None,
 ) -> Tile:
     """Copy data from tensor to unified buffer (tile).
 
@@ -224,6 +252,8 @@ def load(
         clamp=clamp,
         cache=None if cache is None else int(cache),
     )
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -305,7 +335,7 @@ def store(
         pre_quant=pre_quant,
         pre_relu=pre_relu,
     )
-    return output_tensor.__class__(expr=call_expr)
+    return wrap_output_like(output_tensor, call_expr)
 
 
 def assemble(
@@ -317,6 +347,11 @@ def assemble(
     pre_relu: bool = False,
 ) -> Tile:
     """Write source tile data into target tile at specified offset.
+
+    The source must live in the target's memory space: a cube-produced
+    (``Acc``) source written into a ``Vec`` target needs an explicit
+    ``pl.tile.move`` first. The converting ``Acc`` → ``Mat`` writeback is the
+    one exception and is implemented by this op itself.
 
     Args:
         target: Target tile to update
@@ -468,6 +503,8 @@ def move(
     target_memory: MemorySpace,
     blayout: TileLayout | None = None,
     slayout: TileLayout | None = None,
+    *,
+    attrs: dict[str, Any] | None = None,
 ) -> Tile:
     """Move tile between memory levels.
 
@@ -477,6 +514,9 @@ def move(
             .LeftScale, .RightScale)
         blayout: Optional block layout for the destination tile
         slayout: Optional scatter layout for the destination tile
+        attrs: Machine-only call attrs round-tripped through the printer
+            (e.g. ``pipeline_membership``) — re-attached to the Call via
+            ``ir.set_call_attrs`` (the AST parser's ``_attach_op_attrs``).
 
     Returns:
         Tile wrapping the move operation
@@ -487,21 +527,33 @@ def move(
         blayout=blayout,
         slayout=slayout,
     )
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
-def full(shape: list[int], dtype: DataType, value: int | float) -> Tile:
+def full(
+    shape: list[int],
+    dtype: DataType,
+    value: int | float,
+    *,
+    attrs: dict[str, Any] | None = None,
+) -> Tile:
     """Create a tile from a shape and fill with value in Vec.
 
     Args:
         shape: Shape of the tile
         dtype: Data type of the tile
         value: filling scalar
+        attrs: Machine-only call attrs round-tripped through the printer
+            (e.g. ``pipeline_membership``) — re-attached to the Call.
 
     Returns:
         Tile wrapping the full operation
     """
     call_expr = _ir_ops.full(shape, dtype, value)
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -534,7 +586,7 @@ def ci(
     Returns:
         Tile wrapping the ci operation.
     """
-    start_expr = start.unwrap() if isinstance(start, Scalar) else start
+    start_expr = to_expr(start)
     call_expr = _ir_ops.ci(
         start_expr,
         list(shape),
@@ -621,23 +673,19 @@ def random(
     Returns:
         Tile wrapping the random operation.
     """
-
-    def _seed_expr(seed: int | Scalar) -> int | Expr:
-        return seed.unwrap() if isinstance(seed, Scalar) else seed
-
-    vshape = list(valid_shape) if valid_shape is not None else None
-    call_expr = _ir_ops.random(
-        _seed_expr(key0),
-        _seed_expr(key1),
-        _seed_expr(counter0),
-        _seed_expr(counter1),
-        _seed_expr(counter2),
-        _seed_expr(counter3),
-        list(shape),
-        valid_shape=vshape,
-        dtype=dtype,
-        rounds=rounds,
+    # A fixed-length tuple splat keeps the call statically 7-positional;
+    # a variable-length ``*list`` splat defeats pyright's arity matching
+    # for the trailing shape argument.
+    seeds = (
+        to_expr(key0),
+        to_expr(key1),
+        to_expr(counter0),
+        to_expr(counter1),
+        to_expr(counter2),
+        to_expr(counter3),
     )
+    vshape = list(valid_shape) if valid_shape is not None else None
+    call_expr = _ir_ops.random(*seeds, list(shape), valid_shape=vshape, dtype=dtype, rounds=rounds)
     return Tile(expr=call_expr)
 
 
@@ -654,7 +702,7 @@ def fillpad(tile: Tile, pad_value: PadValue | int | float = PadValue.zero) -> Ti
     Returns:
         Tile wrapping the fillpad operation
     """
-    call_expr = _ir_ops.fillpad(tile.unwrap(), pad_value=pad_value)
+    call_expr = _ir_ops.fillpad(tile.unwrap(), pad_value=normalize_fillpad_pad_value(pad_value))
     return Tile(expr=call_expr)
 
 
@@ -675,7 +723,7 @@ def fillpad_inplace(tile: Tile, pad_value: PadValue | int | float = PadValue.zer
     Returns:
         Tile with padding filled (shares memory with the input tile).
     """
-    call_expr = _ir_ops.fillpad_inplace(tile.unwrap(), pad_value=pad_value)
+    call_expr = _ir_ops.fillpad_inplace(tile.unwrap(), pad_value=normalize_fillpad_pad_value(pad_value))
     return Tile(expr=call_expr)
 
 
@@ -700,7 +748,11 @@ def fillpad_expand(
     Returns:
         Tile wrapping the fillpad_expand operation (a new, larger tile).
     """
-    call_expr = _ir_ops.fillpad_expand(tile.unwrap(), _normalize_intlike(shape), pad_value=pad_value)
+    call_expr = _ir_ops.fillpad_expand(
+        tile.unwrap(),
+        _normalize_intlike(shape),
+        pad_value=normalize_fillpad_pad_value(pad_value),
+    )
     return Tile(expr=call_expr)
 
 
@@ -809,6 +861,7 @@ def reinterpret_view(
     dtype: DataType,
     *,
     shape: Sequence[IntLike] | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> Tile:
     """Reinterpret a tile over the same bytes with a different dtype.
 
@@ -823,12 +876,16 @@ def reinterpret_view(
         shape: Optional byte-equivalent target shape. When omitted, the
             physically contiguous dimension is scaled according to the
             source/target dtype byte ratio.
+        attrs: Machine-only call attrs round-tripped through the printer
+            — re-attached to the Call.
 
     Returns:
         Tile wrapping the zero-copy reinterpret-view operation.
     """
     normalized_shape = None if shape is None else _normalize_intlike(shape)
     call_expr = _ir_ops.reinterpret_view(data.unwrap(), dtype, shape=normalized_shape)
+    if attrs:
+        call_expr = _ir_core.set_call_attrs(call_expr, attrs)
     return Tile(expr=call_expr)
 
 
@@ -891,7 +948,12 @@ def set_validshape(tile: Tile, valid_rows: IntLike, valid_cols: IntLike) -> Tile
         Tile with updated valid_shape metadata
     """
     tile_expr = tile.unwrap()
-    vr = valid_rows.unwrap() if isinstance(valid_rows, Scalar) else valid_rows
-    vc = valid_cols.unwrap() if isinstance(valid_cols, Scalar) else valid_cols
+    vr = to_expr(valid_rows)
+    vc = to_expr(valid_cols)
     call_expr = _ir_ops.set_validshape(tile_expr, vr, vc)
     return Tile(expr=call_expr)
+
+
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

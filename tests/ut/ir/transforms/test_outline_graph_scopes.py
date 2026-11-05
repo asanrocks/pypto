@@ -15,6 +15,10 @@ Graph function plus a Call either way, and none of it needs to know which surfac
 the user wrote. The tests assert that convergence, not just that something was
 outlined.
 """
+# Traced/DSL test bodies and helpers: the unified facade returns
+# `Tensor | Scalar` (and `Tuple` for multi-value returns), which a body cannot
+# narrow, and the tracing decorators' attribute forms are untyped. The rules
+# below are the resulting test-shape noise, not a bug signal.
 
 import pypto
 import pypto.language as pl
@@ -147,7 +151,7 @@ class TestOutlineGraphScopes:
         assert main.func_type == ir.FunctionType.Opaque
 
     def test_orchestration_parent_stays_orchestration(self):
-        """The real entry shape: a @pl.jit body keeps its type across the pass."""
+        """The real entry shape: a @pl.jit_trace body keeps its type across the pass."""
 
         @pl.program
         class Before:

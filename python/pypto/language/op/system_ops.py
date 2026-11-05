@@ -37,7 +37,7 @@ from pypto.ir.utils import _get_span_or_capture
 from pypto.pypto_core import DataType
 from pypto.pypto_core.ir import Call, ConstInt, Expr, PipeType, Span
 
-from ..typing import Array, IntLike, Scalar, Tensor, Tile
+from ..typing import Array, IntLike, Scalar, Tensor, Tile, to_expr
 
 __all__ = [
     "AUTO",
@@ -138,7 +138,7 @@ def sync_set(
             wants.
         span: Optional source span
     """
-    event_expr = event_id.unwrap() if isinstance(event_id, Scalar) else event_id
+    event_expr = to_expr(event_id)
     kernel = _kernel_or_none(core_type, "sync_set")
     return _ir_ops.sync_set(event_expr, pipe=pipe, ffts_mode=ffts_mode, core_type=kernel, span=span)
 
@@ -161,15 +161,13 @@ def sync_wait(
             wants.
         span: Optional source span
     """
-    event_expr = event_id.unwrap() if isinstance(event_id, Scalar) else event_id
+    event_expr = to_expr(event_id)
     kernel = _kernel_or_none(core_type, "sync_wait")
     return _ir_ops.sync_wait(event_expr, pipe=pipe, core_type=kernel, span=span)
 
 
-def set_ffts(workspace: object, *, span: Span | None = None) -> Call:
+def set_ffts(workspace: Tensor, *, span: Span | None = None) -> Call:
     """Declare the A3 FFTS setup operand for explicit cross-core synchronization."""
-    if not isinstance(workspace, Tensor):
-        raise TypeError(f"set_ffts workspace must be a Tensor, got {type(workspace).__name__}")
     return _ir_ops.set_ffts(workspace.unwrap(), span=span)
 
 
@@ -320,8 +318,8 @@ def cacheinvalid(
             "system.cacheinvalid region form requires both shapes and offsets "
             "(or pass no arguments for the whole-GM form)"
         )
-    shp = [s.unwrap() if isinstance(s, Scalar) else s for s in shapes]
-    off = [o.unwrap() if isinstance(o, Scalar) else o for o in offsets]
+    shp = [to_expr(s) for s in shapes]
+    off = [to_expr(o) for o in offsets]
     return _ir_ops.cacheinvalid(tensor.unwrap(), shp, off, span=span)
 
 
@@ -583,3 +581,10 @@ def available_aiv_count(*, span: Span | None = None) -> Scalar:
     """
     call = _ir_ops.available_aiv_count(span=span)
     return Scalar(DataType.INT32, call)
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see _validation.py).
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)

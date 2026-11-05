@@ -17,13 +17,13 @@ from pypto.ir.utils import (
     _normalize_expr,
 )
 from pypto.pypto_core import DataType
-from pypto.pypto_core import ir as _ir_core
 from pypto.pypto_core.ir import (
     Expr,
     MemorySpace,
 )
 
-from ..typing import Scalar, Tensor, Tile
+from ..typing import Scalar, Tensor, Tile, Tuple, to_expr
+from ..typing._host import wrap_output_like
 from ._tile_common import _TensorT
 
 
@@ -47,7 +47,7 @@ def scatter_update(input: Tile, *args: Any, **kwargs: Any) -> Tile:
     """
 
     def _unwrap(v: Any) -> Any:
-        return v.unwrap() if isinstance(v, (Tile, Scalar)) else v
+        return to_expr(v)
 
     fwd_args = tuple(_unwrap(a) for a in args)
     fwd_kwargs = {k: _unwrap(v) for k, v in kwargs.items()}
@@ -165,7 +165,7 @@ def gather_compare(
     offset: int = 0,
     out_cols: int,
     count_dtype: int | DataType | None = None,
-) -> tuple[Tile, Tile]:
+) -> Tuple:
     """Compare-form gather (tile-level): produce (dst, cdst) — gathered indices
     and per-row match counts.
 
@@ -212,11 +212,9 @@ def gather_compare(
         out_cols=out_cols,
         count_dtype=count_dtype,
     )
-    span = call_expr.span
-    return (
-        Tile(expr=_ir_core.TupleGetItemExpr(call_expr, 0, span)),
-        Tile(expr=_ir_core.TupleGetItemExpr(call_expr, 1, span)),
-    )
+    # The staged multi-result value: unpacking shares one _tuple_tmp temp
+    # (the parser's _bind_unpack_target shape), not a host (Tile, Tile).
+    return Tuple(expr=call_expr)
 
 
 def scatter(dst: Tile, src: Tile, indexes: Tile) -> Tile:
@@ -290,7 +288,7 @@ def mscatter(src: Tile, idx: Tile, output_tensor: _TensorT) -> _TensorT:
         >>> result = pl.tile.mscatter(src_tile, idx_tile, out_tensor)
     """
     call_expr = _ir_ops.mscatter(src.unwrap(), idx.unwrap(), output_tensor.unwrap())
-    return output_tensor.__class__(expr=call_expr)
+    return wrap_output_like(output_tensor, call_expr)
 
 
 @overload
@@ -406,21 +404,10 @@ def mrgsort(
 @overload
 def mrgsort(
     src0: Tile,
-    src1: Tile,
-    src2: Tile,
-    src3: Tile,
-    tmp: Tile,
-    exhausted: bool = ...,
-) -> Tile: ...
-
-
-@overload
-def mrgsort(
-    src0: Tile,
-    src1: Tile | None = ...,
-    src2: Tile | None = ...,
-    src3: Tile | None = ...,
-    tmp: Tile | None = ...,
+    src1: Tile | None,
+    src2: Tile | None,
+    src3: Tile | None,
+    tmp: Tile | None,
     exhausted: bool = ...,
     *,
     block_len: int | Scalar | None = ...,
@@ -477,7 +464,7 @@ def mrgsort(
                 "mrgsort() format1 (block_len=...) and format2 (src1, ..., tmp) "
                 "are mutually exclusive; do not pass format2 arguments with block_len"
             )
-        block_len_expr = block_len.unwrap() if isinstance(block_len, Scalar) else block_len
+        block_len_expr = to_expr(block_len)
         call_expr = _ir_ops.mrgsort(src0.unwrap(), block_len=block_len_expr)
         return Tile(expr=call_expr)
     # format2: 2-4 way merge
@@ -499,3 +486,31 @@ def mrgsort(
         exhausted=exhausted,
     )
     return Tile(expr=call_expr)
+
+
+def mrgsort_format1(src0: Tile, block_len: int | Scalar) -> Tile:
+    """Single-list merge sort (format1) — the parser's roundtrip alias.
+
+    The ``block_len`` is positional (the printer emits it that way).
+    Prefer ``mrgsort(src, block_len=...)`` in user code.
+    """
+    block_len_expr = to_expr(block_len)
+    call_expr = _ir_ops.mrgsort_format1(src0.unwrap(), block_len_expr)
+    return Tile(expr=call_expr)
+
+
+def mrgsort_format2(*args: Tile, exhausted: bool = False) -> Tile:
+    """2-4 way merge sort (format2) — the parser's roundtrip alias.
+
+    Positional args: ``(src0, src1[, src2[, src3]], tmp)`` — the last
+    positional arg is always ``tmp``.
+
+    Prefer ``mrgsort(src0, src1[, src2[, src3]], tmp=<tile>)`` in user code.
+    """
+    call_expr = _ir_ops.mrgsort_format2(*(a.unwrap() for a in args), exhausted=exhausted)
+    return Tile(expr=call_expr)
+
+
+from ._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)
