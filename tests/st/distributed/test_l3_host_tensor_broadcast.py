@@ -39,7 +39,7 @@ def _make_rank_inputs(n_ranks: int, round_offset: float = 0.0) -> torch.Tensor:
     return torch.stack(rows)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def publish_step(
     inp: pl.Tensor[[1, SIZE], pl.FP32],
     data: pl.InOut[pld.DistributedTensor[[1, SIZE], pl.FP32]],
@@ -51,7 +51,7 @@ def publish_step(
     return data
 
 
-@pl.jit
+@pl.jit_trace
 def publish_orch(
     inp: pl.Tensor[[1, SIZE], pl.FP32],
     data: pl.InOut[pld.DistributedTensor[[1, SIZE], pl.FP32]],
@@ -60,7 +60,7 @@ def publish_orch(
     return publish_step(inp, data, my_rank)
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def consume_step(
     data: pld.DistributedTensor[[1, SIZE], pl.FP32],
     out: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -69,7 +69,7 @@ def consume_step(
     return pl.store(acc, [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def consume_orch(
     data: pld.DistributedTensor[[1, SIZE], pl.FP32],
     out: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -77,7 +77,7 @@ def consume_orch(
     return consume_step(data, out)
 
 
-@pl.jit.host
+@pl.jit_trace.host
 def host_orch(
     inputs: pl.Tensor[[NR, 1, SIZE], pl.FP32],
     outputs: pl.Out[pl.Tensor[[NR, 1, SIZE], pl.FP32]],
@@ -107,7 +107,7 @@ def _build_host_broadcast_signal_reuse_program():
     """
     ROUNDS = 2
 
-    @pl.jit.incore
+    @pl.jit_trace.incore
     def publish_step(
         inp: pl.Tensor[[1, SIZE], pl.FP32],
         data: pl.InOut[pld.DistributedTensor[[1, SIZE], pl.FP32]],
@@ -118,7 +118,7 @@ def _build_host_broadcast_signal_reuse_program():
             return pl.store(local, [0, 0], data)
         return data
 
-    @pl.jit
+    @pl.jit_trace
     def publish_orch(
         inp: pl.Tensor[[1, SIZE], pl.FP32],
         data: pl.InOut[pld.DistributedTensor[[1, SIZE], pl.FP32]],
@@ -126,7 +126,7 @@ def _build_host_broadcast_signal_reuse_program():
     ) -> pld.DistributedTensor[[1, SIZE], pl.FP32]:
         return publish_step(inp, data, my_rank)
 
-    @pl.jit.incore
+    @pl.jit_trace.incore
     def consume_step(
         data: pld.DistributedTensor[[1, SIZE], pl.FP32],
         out: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
@@ -134,14 +134,14 @@ def _build_host_broadcast_signal_reuse_program():
         acc = pl.load(data, [0, 0], [1, SIZE])
         return pl.store(acc, [0, 0], out)
 
-    @pl.jit
+    @pl.jit_trace
     def consume_orch(
         data: pld.DistributedTensor[[1, SIZE], pl.FP32],
         out: pl.Out[pl.Tensor[[1, SIZE], pl.FP32]],
     ) -> pl.Tensor[[1, SIZE], pl.FP32]:
         return consume_step(data, out)
 
-    @pl.jit.host
+    @pl.jit_trace.host
     def host_orch(
         inputs: pl.Tensor[[ROUNDS, NR, 1, SIZE], pl.FP32],
         outputs: pl.Out[pl.Tensor[[ROUNDS, NR, 1, SIZE], pl.FP32]],
