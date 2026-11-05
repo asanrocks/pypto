@@ -644,7 +644,7 @@ class TestBindDynamic:
     def test_bind_dynamic_on_static_dim_is_loud(self):
         """bind_dynamic on a static dim raises: the override form's
         semantics lived in the specializer's AST scan (retired) — a silent
-        drop is forbidden; the quarantined pl.jit keeps the
+        drop is forbidden; the parsing-lane pl.jit keeps the
         old form."""
         t = pl.Tensor[[128, 64], pl.FP32]
         M = pl.dynamic("M")

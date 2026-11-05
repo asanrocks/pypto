@@ -40,7 +40,13 @@ from pypto.runtime.runner import RunConfig
 from pypto.runtime.tensor_spec import ScalarSpec
 
 from harness.core.harness import ALL_PLATFORM_IDS, PTOTestCase, TensorSpec
-from harness.core.kernel_source import IRKernel, JitKernel, KernelSource, ProgramKernel
+from harness.core.kernel_source import (
+    IRKernel,
+    JitKernel,
+    KernelSource,
+    ProgramKernel,
+    TracingJitKernel,
+)
 
 
 @dataclass(eq=False)
@@ -48,12 +54,12 @@ class Case:
     """One executable system-test case.
 
     Attributes:
-        kernel: Where the IR comes from — a :class:`JitKernel`,
-            :class:`ProgramKernel`, or :class:`IRKernel`.
+        kernel: Where the IR comes from — a jit source (:class:`JitKernel`,
+            :class:`TracingJitKernel`), :class:`ProgramKernel`, or :class:`IRKernel`.
         name: Identity of the case. Used for the artifact cache key and the
             pytest parametrize id, so it must be unique within a run.
         tensors: The case's tensors. ``None`` asks the kernel source to derive
-            them, which :class:`JitKernel` can do from its sample arguments.
+            them, which the jit sources can do from their sample arguments.
         golden: Called once in the parent process with a dict of all tensors by
             name. It returns the single output tensor, a dict of output name
             to tensor, or ``None`` after mutating *tensors* in place.
@@ -92,10 +98,10 @@ class Case:
     enable_buffer_ir: bool = True
 
     def __post_init__(self) -> None:
-        if not isinstance(self.kernel, (JitKernel, ProgramKernel, IRKernel)):
+        if not isinstance(self.kernel, (JitKernel, TracingJitKernel, ProgramKernel, IRKernel)):
             raise TypeError(
-                f"Case '{self.name}': kernel must be a JitKernel / ProgramKernel / IRKernel, "
-                f"got {type(self.kernel).__name__}"
+                f"Case '{self.name}': kernel must be a JitKernel / TracingJitKernel / "
+                f"ProgramKernel / IRKernel, got {type(self.kernel).__name__}"
             )
         if self.platform is not None and self.platform not in ALL_PLATFORM_IDS:
             raise ValueError(
@@ -106,8 +112,10 @@ class Case:
         if self.tensors is None:
             raise ValueError(
                 f"Case '{self.name}': no tensors. {self.kernel!r} cannot derive them "
-                "(a @pl.program source never can, and a JitKernel needs a sample tensor for "
-                "every tensor parameter), so pass tensors=[TensorSpec(...), ...]."
+                "(a @pl.program source never can, and a jit kernel needs a sample tensor "
+                "for every tensor parameter — the annotation-only form of a fully-shaped "
+                "declaration skips the samples but still leaves the buffers to the case), "
+                "so pass tensors=[TensorSpec(...), ...]."
             )
         outputs = [t for t in self.tensors if t.is_output]
         if not outputs:

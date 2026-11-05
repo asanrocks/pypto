@@ -9,7 +9,7 @@
 
 """Lane-neutral compile-identity contract for both jit frontends.
 
-Both the tracing ``pl.jit_trace`` and the quarantined AST specializer
+Both the tracing ``pl.jit_trace`` and the parsing-lane AST specializer
 (``pl.jit_specializer``) compile through ``ir.compile``. "Which call reuses
 which artifact" is therefore one contract: every artifact-affecting dimension
 must split both keys identically. ``pypto.runtime.jit_cache`` owns that

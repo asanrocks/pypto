@@ -20,7 +20,8 @@ three execution paths:
 ======================  =========================================
 Authoring surface       KernelSource
 ======================  =========================================
-``@pl.jit`` entry       :class:`JitKernel`
+``@pl.jit`` entry        :class:`JitKernel`
+``@pl.jit_trace`` entry  :class:`TracingJitKernel` (either construction mode)
 ``@pl.program`` class   :class:`ProgramKernel`
 an ``ir.Program``       :class:`IRKernel`
 ======================  =========================================
@@ -37,6 +38,11 @@ from typing import Any, Protocol, runtime_checkable
 
 import torch
 from pypto.jit import JITFunction
+from pypto.language.tracing.decorators.jit_trace import _eager_trace_record, _JitSpecializer
+from pypto.language.typing.arg_direction import param_directions
+from pypto.language.typing.tensor import Tensor as _TensorFacade
+from pypto.pypto_core import DataType as _PyptoDType
+from pypto.pypto_core import ir as _ir
 
 from harness.core.harness import DataType, TensorSpec
 
@@ -100,6 +106,12 @@ for _member in DataType:
 del _member
 
 
+# The IR dtype enum → harness DataType member name, keyed on enum identity.
+# The two enums spell their values differently ("bfloat16" vs "bf16"), so the
+# member name is the only shared spelling.
+_PYPTO_DTYPE_NAMES = {getattr(_PyptoDType, m.name): m.name for m in DataType if hasattr(_PyptoDType, m.name)}
+
+
 def datatype_from_torch(dtype: torch.dtype) -> DataType:
     """Return the harness :class:`DataType` matching a torch dtype.
 
@@ -115,12 +127,42 @@ def datatype_from_torch(dtype: torch.dtype) -> DataType:
 
 
 # ---------------------------------------------------------------------------
+# Sample-argument binding (shared by the two tracing jit lanes)
+# ---------------------------------------------------------------------------
+
+
+def _bind_samples(
+    names: "list[str]", label: str, args: tuple[Any, ...], kwargs: dict[str, Any], why: str
+) -> tuple[Any, ...]:
+    """Bind positional + by-name sample arguments to signature order.
+
+    The jit call itself is parser-aligned positional; the by-name form is
+    ``st.case(inputs=...)``, resolved here once. Every parameter must be bound
+    — *why* names the lane's reason.
+    """
+    unknown = sorted(set(kwargs) - set(names))
+    if unknown:
+        raise TypeError(f"{label}: not a parameter of the kernel: {unknown}")
+    bound: dict[str, Any] = dict(zip(names, args))
+    clashes = sorted(set(bound) & set(kwargs))
+    if clashes:
+        raise TypeError(
+            f"{label}: parameter(s) {clashes} got both a positional and a keyword sample argument"
+        )
+    bound.update(kwargs)
+    missing = [n for n in names if n not in bound]
+    if missing:
+        raise TypeError(f"{label}: no sample argument for parameter(s) {missing} — {why}")
+    return tuple(bound[n] for n in names)
+
+
+# ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
 
 
 class JitKernel:
-    """A ``@pl.jit`` entry plus the sample arguments that specialize it.
+    """A parsing-lane ``@pl.jit`` entry plus the sample arguments that specialize it.
 
     The sample arguments carry the shape/dtype contract, exactly as they do
     when a test calls the kernel directly.  They are the case's real inputs, so
@@ -138,8 +180,9 @@ class JitKernel:
         # and it must fail with a message that names the right source.
         if not isinstance(entry, JITFunction):
             raise TypeError(
-                f"JitKernel expects a @pl.jit function, got {type(entry).__name__}. "
-                "Use ProgramKernel for a @pl.program class or IRKernel for an ir.Program."
+                f"JitKernel expects a parsing-frontend @pl.jit function, got {type(entry).__name__}. "
+                "Use ProgramKernel for a @pl.program class, TracingJitKernel for a "
+                "@pl.jit_trace entry, or IRKernel for an ir.Program."
             )
         if "config" in kwargs:
             raise ValueError(
@@ -267,6 +310,278 @@ class JitKernel:
         return f"JitKernel({self.entry.__name__})"
 
 
+class TracingJitKernel:
+    """A tracing ``@pl.jit_trace`` entry plus the buffers a case runs it with.
+
+    One source, two constructions — chosen by what determines the program:
+
+    * **Declaration-driven** — every parameter carries a fully-shaped facade
+      annotation, so the jit traced the kernel at first use and exposes that
+      one trace as ``.fn``; the baked trace is the artifact. The samples may
+      be omitted entirely (a fully-shaped declaration is a self-sufficient
+      contract — the case states its buffers through ``tensors=`` instead,
+      the same rule the parsing lane's :class:`JitKernel` follows) or
+      supplied as the case's real inputs; either way they specialize
+      nothing and are cross-checked against the baked signature, because
+      a baked signature cannot be resized by a sample.
+    * **Sample-driven** — a bare or unannotated parameter forces re-tracing
+      from the call arguments, so every parameter needs a sample; the
+      samples carry the shape/dtype contract exactly as they do when a test
+      calls the kernel directly.
+
+    A bare ``ir.Function`` (a caller that already resolved ``.fn``, or a
+    ``pl.function``-traced kernel) constructs declaration-driven too: its
+    signature is baked, and when the jit produced it its record keeps the
+    callees the trace collected.
+
+    The boundary every mode shares: :meth:`build_program` hands the harness
+    the complete pre-pass program — the entry plus every callee its trace
+    reached — through the jit's own assembly route; the case owns the
+    compile knobs (``config=`` is refused here) and runs ``ir.compile()``
+    once, so no source runs a pass pipeline of its own.
+    """
+
+    def __init__(self, entry: Any, *args: Any, **kwargs: Any):
+        # ``entry`` is typed Any because the guard below is what test authors
+        # actually hit: passing a @pl.program class or a parsing-lane
+        # ``@pl.jit`` function must fail with a message that names the right
+        # source, not deep inside the trace.
+        jit: _JitSpecializer | None = None
+        baked: _ir.Function | None = None
+        if isinstance(entry, _JitSpecializer):
+            # One public jit object covers both modes: a decoration trace
+            # (``.fn``) exists exactly when the declaration determined the
+            # trace — the property is loud on the sample-driven mode by
+            # design, so the probe is the mode test. The jit object is the
+            # assembly route either way.
+            jit = entry
+            try:
+                baked = entry.fn
+            except AttributeError:
+                baked = None
+        elif isinstance(entry, _ir.Function):
+            # A bare ir.Function that *is* a decoration trace keeps its record,
+            # and with it the callees ``.fn`` alone does not name.
+            record = _eager_trace_record(entry)
+            jit = record.specializer() if record is not None else None
+            baked = entry
+        else:
+            raise TypeError(
+                f"TracingJitKernel expects a tracing @pl.jit_trace function or its "
+                f"traced-out ir.Function, got {type(entry).__name__}. "
+                "Use JitKernel for the parsing-lane @pl.jit, ProgramKernel for a "
+                "@pl.program class or IRKernel for an ir.Program."
+            )
+        label = baked.name if baked is not None else entry.__name__
+        if "config" in kwargs:
+            raise ValueError(
+                f"TracingJitKernel({label}) does not take config=: compile knobs "
+                "(strategy, memory_planner, platform) belong on the Case, which applies "
+                "them to ir.compile() for every source alike."
+            )
+        self._jit = jit
+        self._baked = baked
+        self.entry: Any = baked if baked is not None else entry
+        if baked is not None:
+            self._names: list[str] = [p.name_hint for p in baked.params]
+            self._directions: set[Any] = set(baked.param_directions)
+            # All-or-none, mirroring the jit's own sample binding: either
+            # every parameter's buffer is bound, or none is and the baked
+            # declaration alone determines the program (annotation-only
+            # construction).
+            self._annotation_only = not args and not kwargs
+            self.args: tuple[Any, ...] = (
+                ()
+                if self._annotation_only
+                else _bind_samples(
+                    self._names,
+                    f"TracingJitKernel({label})",
+                    args,
+                    kwargs,
+                    "the sample is the parameter's run-time buffer — pass every "
+                    "buffer, or none and declare the case's tensors= instead",
+                )
+            )
+        else:
+            self._names = list(entry.param_names)
+            self._directions = set(param_directions(entry.kernel))
+            # The declaration leaves shapes unknown, so the samples
+            # specialize the kernel: every parameter needs one.
+            self._annotation_only = False
+            self.args = _bind_samples(
+                self._names,
+                f"TracingJitKernel({label})",
+                args,
+                kwargs,
+                "the tracing jit specializes from the call arguments",
+            )
+
+    def build_program(self) -> Any:
+        with program_build_lock:
+            # The jit's own assembly route: ``specialize`` returns the trace's
+            # program — the entry plus every callee its body reached
+            # (``.fn`` alone would leave those calls dangling) — before any
+            # pass runs, which is exactly the pass-less ``ir.Program`` the
+            # harness's compile step requires. A bare ``ir.Function`` with
+            # no record has no callees to lose: the one function is the
+            # whole program.
+            if self._jit is not None:
+                return self._jit.specialize(*self.args)
+            baked = self._baked
+            assert baked is not None
+            return _ir.Program([baked], baked.name, baked.span)
+
+    def tensor_specs(self) -> list[TensorSpec] | None:
+        """Derive the tensor list, in whichever mode the declaration left.
+
+        Sample-driven, the bridged argument for a parameter is its
+        annotation-mode facade, so it says which parameters own a tensor slot
+        without an AST scan: a host knob (a Python scalar annotation) bridges
+        to itself and owns no slot. Declaration-driven, the traced parameter
+        types already carry each tensor's dtype and its constant extents, so
+        the samples are cross-checked against those — a baked signature
+        cannot be resized by a sample, and a mismatched buffer would
+        otherwise only fail on the device. A dynamic extent is bound at
+        dispatch from the real buffer, so it is exempt and the sample's
+        concrete shape becomes the spec's.
+
+        **Every** tensor is seeded from its sample argument, outputs included,
+        for the same reason :meth:`JitKernel.tensor_specs` gives: the sample is
+        the buffer the test itself prepared, so its contents are the test's
+        statement of what the kernel starts from.
+
+        Returns ``None`` when a tensor parameter's sample is not a torch
+        tensor, and outright for annotation-only construction (no buffer was
+        bound, so the case's ``tensors=`` declaration is the whole tensor
+        list) — the case declares its tensors in those cases.
+        """
+        if self._baked is not None:
+            return self._declaration_specs()
+        return self._sample_specs()
+
+    def _sample_specs(self) -> list[TensorSpec] | None:
+        jit = self._jit
+        assert jit is not None
+        bridged, _ = jit._bridge_args(self.args)
+        specs: list[TensorSpec] = []
+        for name, arg, annotation in zip(self._names, self.args, bridged):
+            if not isinstance(annotation, _TensorFacade):
+                continue
+            if not isinstance(arg, torch.Tensor):
+                return None
+            specs.append(
+                TensorSpec(
+                    name=name,
+                    shape=list(arg.shape),
+                    dtype=datatype_from_torch(arg.dtype),
+                    init_value=arg,
+                    is_output=name in self._directions,
+                )
+            )
+        return specs
+
+    def _declaration_specs(self) -> list[TensorSpec] | None:
+        baked = self._baked
+        assert baked is not None
+        if self._annotation_only:
+            return None
+        specs: list[TensorSpec] = []
+        for name, arg, param, direction in zip(self._names, self.args, baked.params, baked.param_directions):
+            if not isinstance(arg, torch.Tensor):
+                return None
+            dtype = datatype_from_torch(arg.dtype)
+            # A dynamic extent traces as a Var, not a ConstInt — it is bound at
+            # dispatch from the real buffer, so only constant extents are
+            # cross-checkable and the sample's concrete shape is the spec's.
+            traced_shape = [getattr(d, "value", None) for d in param.type.shape]
+            traced_dtype = _PYPTO_DTYPE_NAMES.get(param.type.dtype)
+            unsigned_twin = _UNSIGNED_TWINS.get(dtype.name)
+            mismatch = traced_dtype not in (dtype.name, unsigned_twin) or any(
+                expected is not None and got != expected for expected, got in zip(traced_shape, arg.shape)
+            )
+            if len(arg.shape) != len(traced_shape) or mismatch:
+                raise TypeError(
+                    f"TracingJitKernel({baked.name}): sample for {name!r} is "
+                    f"{list(arg.shape)}x{dtype.name}, but the traced parameter is "
+                    f"{traced_shape}x{traced_dtype} — a declaration-driven kernel baked "
+                    "its signature at decoration and cannot be resized by a sample"
+                )
+            specs.append(
+                TensorSpec(
+                    name=name,
+                    shape=list(arg.shape),
+                    dtype=dtype,
+                    init_value=arg,
+                    is_output=direction in (_ir.ParamDirection.Out, _ir.ParamDirection.InOut),
+                )
+            )
+        return specs
+
+    def cache_id(self) -> str:
+        """Stable identity for this kernel's compiled artifact.
+
+        Sample-driven, every bound argument shapes the specialized program —
+        same contract as :meth:`JitKernel.cache_id`, type included so ``1``
+        and ``1.0`` never collide — so every one is recorded. Declaration-
+        driven, the samples only pick the buffers; the id records their
+        shapes/dtypes (never values) to stay descriptive without implying
+        they specialize anything. The annotation-only form has no buffers to
+        record, so the baked signature stands in: the same shape/dtype
+        facts, read from the traced parameter types instead of the samples.
+        """
+        if self._baked is not None:
+            return self._declaration_cache_id()
+        parts = [self.entry.__name__]
+        for name, value in zip(self._names, self.args):
+            if isinstance(value, torch.Tensor):
+                shape = "x".join(str(d) for d in value.shape)
+                parts.append(f"{name}_{shape}_{datatype_from_torch(value.dtype).value}")
+            else:
+                parts.append(f"{name}_{type(value).__name__}_{value}")
+        return "__".join(parts)
+
+    def _declaration_cache_id(self) -> str:
+        baked = self._baked
+        assert baked is not None
+        parts = [baked.name]
+        if self._annotation_only:
+            for name, param in zip(self._names, baked.params):
+                if isinstance(param.type, _ir.TensorType):
+                    shape = "x".join(_extent_text(d) for d in param.type.shape)
+                    dtype = _PYPTO_DTYPE_NAMES.get(param.type.dtype) or str(param.type.dtype)
+                    parts.append(f"{name}_{shape}_{dtype}")
+                else:
+                    parts.append(f"{name}_scalar")
+            return "__".join(parts)
+        for name, value in zip(self._names, self.args):
+            if isinstance(value, torch.Tensor):
+                shape = "x".join(str(d) for d in value.shape)
+                parts.append(f"{name}_{shape}_{datatype_from_torch(value.dtype).value}")
+            else:
+                parts.append(f"{name}_{type(value).__name__}")
+        return "__".join(parts)
+
+    def __repr__(self) -> str:
+        name = self.entry.name if isinstance(self.entry, _ir.Function) else self.entry.__name__
+        return f"TracingJitKernel({name})"
+
+
+# The torch→harness dtype map is many-to-one (torch.int32 is both INT32 and
+# UINT32), so the unsigned twin of the torch-resolved member is an equally
+# valid reading of the same bits for the declaration-driven sample cross-check.
+_UNSIGNED_TWINS = {"INT32": "UINT32", "INT16": "UINT16", "INT8": "UINT8"}
+
+
+def _extent_text(dim: Any) -> str:
+    """A traced extent as cache-id text: its constant, or ``?`` when dynamic.
+
+    A dynamic extent is bound at dispatch, so it is deliberately not part of
+    the identity — every concrete dispatch shape shares one artifact.
+    """
+    value = getattr(dim, "value", None)
+    return str(value) if isinstance(value, int) else "?"
+
+
 class ProgramKernel:
     """A ``@pl.program`` class (or a zero-argument factory returning one)."""
 
@@ -325,6 +640,7 @@ __all__ = [
     "JitKernel",
     "KernelSource",
     "ProgramKernel",
+    "TracingJitKernel",
     "datatype_from_torch",
     "program_build_lock",
 ]

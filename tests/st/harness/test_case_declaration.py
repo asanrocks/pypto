@@ -11,7 +11,7 @@
 
 Covers the three things a case has to get right before any card is involved:
 
-1. a ``@pl.jit`` kernel and a ``@pl.program`` class produce the *same* compiled
+1. a ``@pl.jit_trace`` kernel and a ``@pl.program`` class produce the *same* compiled
    artifact — the claim that lets one execution path serve both;
 2. the tensor list a JIT case derives from its sample arguments matches what a
    hand-written ``define_tensors()`` would have declared;
@@ -43,7 +43,12 @@ from pypto.runtime.runner import RunConfig, validate_persisted_outputs
 from harness import st
 from harness.core.case import Case, from_legacy
 from harness.core.harness import DataType, PTOTestCase, TensorSpec
-from harness.core.kernel_source import JitKernel, ProgramKernel, datatype_from_torch
+from harness.core.kernel_source import (
+    JitKernel,
+    ProgramKernel,
+    TracingJitKernel,
+    datatype_from_torch,
+)
 from harness.core.test_runner import (
     _case_comparator,
     _compare_persisted_outputs,
@@ -133,6 +138,53 @@ def _jit_case(**kwargs: Any) -> Case:
     kwargs.setdefault("name", "abs_jit")
     kwargs.setdefault("golden", lambda t: torch.abs(t["a"]))
     return st.case(orchestrator, torch.randn(M, N), torch.zeros(M, N), **kwargs)
+
+
+# The two tracing ``@pl.jit_trace`` constructions. ``st.case`` accepts either
+# one with the same sample-argument declaration a legacy ``pl.jit`` entry
+# uses: the sample-driven kernel re-traces per call from those samples, the
+# declaration-driven one has already baked its declaration at first use and
+# so only needs the samples that fill its buffers.
+
+
+@pl.jit_trace
+def tracing_abs_entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
+    """Lazy lane: bare annotations defer the trace to the call."""
+    tile_a = pl.load(a, [0, 0], [M, N])
+    pl.store(pl.tile.abs(tile_a), [0, 0], out)
+    return out
+
+
+@pl.jit_trace
+def tracing_abs_eager(
+    a: pl.Tensor[[M, N], pl.FP32],
+    out: pl.Out[pl.Tensor[[M, N], pl.FP32]],
+):
+    """Eager lane: fully-shaped annotations determine the trace."""
+    tile_a = pl.load(a, [0, 0], [M, N])
+    pl.store(pl.tile.abs(tile_a), [0, 0], out)
+    return out
+
+
+@pl.jit_trace.incore
+def tracing_abs_incore(
+    a: pl.Tensor[[M, N], pl.FP32],
+    out: pl.Out[pl.Tensor[[M, N], pl.FP32]],
+):
+    """A declaration-driven callee: a separate function in the built program."""
+    tile_a = pl.load(a, [0, 0], [M, N])
+    pl.store(pl.tile.abs(tile_a), [0, 0], out)
+    return out
+
+
+@pl.jit_trace
+def tracing_composed_eager(
+    a: pl.Tensor[[M, N], pl.FP32],
+    out: pl.Out[pl.Tensor[[M, N], pl.FP32]],
+):
+    """An eager entry whose body calls the incore helper above."""
+    tracing_abs_incore(a, out)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +326,145 @@ class TestDerivedTensorSpecs:
         """A @pl.program cannot derive its tensors, and the error says so."""
         with pytest.raises(ValueError, match="pass tensors="):
             st.case(AbsProgram, name="no_tensors", golden=lambda t: t["a"])
+
+
+class TestTracingJitDeclaration:
+    """``st.case`` accepts both tracing ``@pl.jit_trace`` constructions (device-free).
+
+    Sample-driven (a bare or unannotated parameter, so the samples specialize
+    every call) and declaration-driven (fully-shaped annotations, so one baked
+    trace serves every call) both declare through the same source as the
+    parsing lane's ``JitKernel``.
+    """
+
+    def test_sample_driven_derives_its_specs(self):
+        case = st.case(tracing_abs_entry, torch.randn(M, N), torch.zeros(M, N), name="tracing_abs")
+        assert isinstance(case.kernel, TracingJitKernel)
+        assert [(s.name, s.is_output) for s in case.tensor_specs] == [("a", False), ("out", True)]
+
+    def test_sample_driven_builds_its_program(self):
+        source = TracingJitKernel(tracing_abs_entry, torch.randn(M, N), torch.zeros(M, N))
+        assert [f.name for f in source.build_program().functions] == ["tracing_abs_entry"]
+
+    def test_sample_driven_missing_sample_is_loud(self):
+        with pytest.raises(TypeError, match="no sample argument"):
+            TracingJitKernel(tracing_abs_entry, torch.randn(M, N))
+
+    def test_sample_driven_cache_id_agrees_across_binding_styles(self):
+        a, out = torch.randn(M, N), torch.zeros(M, N)
+        assert TracingJitKernel(tracing_abs_entry, a, out).cache_id() == (
+            TracingJitKernel(tracing_abs_entry, a, out=out).cache_id()
+        )
+
+    def test_declaration_driven_derives_its_specs(self):
+        case = st.case(tracing_abs_eager, torch.randn(M, N), torch.zeros(M, N), name="eager_abs")
+        assert isinstance(case.kernel, TracingJitKernel)
+        assert [(s.name, s.shape, s.is_output) for s in case.tensor_specs] == [
+            ("a", [M, N], False),
+            ("out", [M, N], True),
+        ]
+
+    def test_declaration_driven_sample_mismatch_is_loud(self):
+        """The signature was baked at first use; a buffer of the wrong shape
+        must fail at declaration, not on the device."""
+        source = TracingJitKernel(tracing_abs_eager, torch.randn(M + 1, N), torch.zeros(M, N))
+        with pytest.raises(TypeError, match="baked its signature at decoration"):
+            source.tensor_specs()
+
+    def test_declaration_driven_builds_the_one_function_program(self):
+        source = TracingJitKernel(tracing_abs_eager, torch.randn(M, N), torch.zeros(M, N))
+        assert [f.name for f in source.build_program().functions] == ["tracing_abs_eager"]
+
+    def test_declaration_driven_keeps_the_callees_its_trace_collected(self):
+        """A helper call is a real function in the program, not a dangling name.
+
+        ``.fn`` names the entry only; the callees live in the trace's
+        assembly. Rebuilding the program from ``.fn`` alone dropped them and
+        the pipeline failed at ``InlineFunctions`` with "Dangling Call to
+        function 'tracing_abs_incore'".
+        """
+        source = TracingJitKernel(tracing_composed_eager, torch.randn(M, N), torch.zeros(M, N))
+        assert {f.name for f in source.build_program().functions.values()} == {
+            "tracing_composed_eager",
+            "tracing_abs_incore",
+        }
+
+    def test_declaration_driven_composed_program_compiles(self):
+        """The kept callee survives the pipeline the harness feeds it to."""
+        source = TracingJitKernel(tracing_composed_eager, torch.randn(M, N), torch.zeros(M, N))
+        lowered = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(source.build_program())
+        assert "tracing_abs_incore" in {f.name for f in lowered.functions.values()}
+
+    def test_bare_function_keeps_its_record_callees(self):
+        """``st.case`` accepts an ``ir.Function``; an eager trace keeps its closure."""
+        source = TracingJitKernel(tracing_composed_eager.fn, torch.randn(M, N), torch.zeros(M, N))
+        assert {f.name for f in source.build_program().functions.values()} == {
+            "tracing_composed_eager",
+            "tracing_abs_incore",
+        }
+
+    def test_declaration_driven_constructs_without_samples(self):
+        """Annotation-only construction: a fully-shaped declaration is
+        self-sufficient, so a ``TensorSpec``-declared case needs no samples —
+        the same rule the parsing lane's ``JitKernel`` follows.
+        """
+        case = st.case(
+            tracing_abs_eager,
+            tensors=[
+                TensorSpec("a", [M, N], DataType.FP32, init_value=torch.randn(M, N)),
+                TensorSpec("out", [M, N], DataType.FP32, is_output=True),
+            ],
+            name="eager_abs_annotation_only",
+        )
+        assert isinstance(case.kernel, TracingJitKernel)
+        # The kernel source derives nothing — the case's declaration stands.
+        assert case.kernel.tensor_specs() is None
+        assert [(s.name, s.shape, s.is_output) for s in case.tensor_specs] == [
+            ("a", [M, N], False),
+            ("out", [M, N], True),
+        ]
+
+    def test_annotation_only_builds_the_sampled_program(self):
+        """The baked trace is the artifact either way: with no samples the
+        program is structurally the one the sampled form builds."""
+        a, out = torch.randn(M, N), torch.zeros(M, N)
+        annotation_only = TracingJitKernel(tracing_abs_eager).build_program()
+        sampled = TracingJitKernel(tracing_abs_eager, a, out).build_program()
+        assert annotation_only.as_python() == sampled.as_python()
+
+    def test_annotation_only_keeps_the_callees_its_trace_collected(self):
+        """The no-argument route is the jit's own declaration-driven mode, so
+        the collected callees ride along exactly as they do with samples."""
+        source = TracingJitKernel(tracing_composed_eager)
+        assert {f.name for f in source.build_program().functions.values()} == {
+            "tracing_composed_eager",
+            "tracing_abs_incore",
+        }
+
+    def test_annotation_only_program_runs_the_pipeline(self):
+        source = TracingJitKernel(tracing_composed_eager)
+        lowered = PassManager.get_strategy(OptimizationStrategy.Default).run_passes(source.build_program())
+        assert "tracing_abs_incore" in {f.name for f in lowered.functions.values()}
+
+    def test_annotation_only_cache_id_reads_the_baked_signature(self):
+        """With no buffers bound, the id falls back to the baked signature —
+        the same shape/dtype facts the sampled form records, and stable."""
+        first = TracingJitKernel(tracing_abs_eager).cache_id()
+        assert first == TracingJitKernel(tracing_abs_eager).cache_id()
+        assert f"a_{M}x{N}_FP32" in first and f"out_{M}x{N}_FP32" in first
+
+    def test_annotation_only_without_tensors_is_rejected(self):
+        """No samples and no declared tensors: nothing states the buffers."""
+        with pytest.raises(ValueError, match="pass tensors="):
+            st.case(tracing_abs_eager, name="eager_abs_no_tensors")
+
+    def test_declaration_driven_partial_samples_are_loud(self):
+        """Buffers are all-or-nothing: a partial set names the alternative."""
+        with pytest.raises(TypeError, match="declare the case's tensors="):
+            TracingJitKernel(tracing_abs_eager, torch.randn(M, N))
+
+    def test_parsing_lane_is_unchanged(self):
+        assert isinstance(_jit_case().kernel, JitKernel)
 
 
 class TestGoldenAdaptation:

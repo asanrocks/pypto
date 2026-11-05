@@ -11,15 +11,17 @@
 
 A case declared with ``@st.cases(...)`` has to survive the whole route:
 collection reads it out of ``callspec.params``, the pre-compile pool builds its
-IR from the ``@pl.jit`` entry, the golden runs in this process, and the device
+IR from the ``@pl.jit_trace`` entry, the golden runs in this process, and the device
 step is batched like any other case.
 
-The discovery half is what this file actually guards, and it is guarded by
-assertion rather than by inspection: a case the pipeline picked up has a
-published artifact directory, and one that fell through to the per-case inline
-path does not.  Before ``st.cases`` existed, a ``@pl.jit`` test could not be
-discovered at all — it silently took the inline path — so a regression here
-would otherwise show up only as CI getting slower.
+Both kernel-source lanes of that route are covered: a ``@pl.jit_trace`` entry, and
+a ``@pl.program`` class (the ``ProgramKernel`` lane), whose case declares its
+tensors explicitly because a program class states shapes in annotations only.
+
+The discovery half is guarded by assertion rather than by inspection: a case the
+pipeline picked up has a published artifact directory, and one that fell through
+to the per-case inline path does not.  A declaration that silently takes the
+inline path therefore fails an assertion instead of merely making CI slower.
 
 Runs card-free under ``--codegen-only``; on a device it is one small kernel in
 the batched pool.
@@ -34,18 +36,19 @@ import torch
 
 from harness import st
 from harness.core import test_runner as tr
+from harness.core.harness import DataType, TensorSpec
 
 M = 16
 N = 16
 
 
-@pl.jit.incore
+@pl.jit_trace.incore
 def _abs_kernel(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     tile_a = pl.load(a, [0, 0], [M, N])
     return pl.store(pl.tile.abs(tile_a), [0, 0], out)
 
 
-@pl.jit
+@pl.jit_trace
 def _abs_entry(a: pl.Tensor, out: pl.Out[pl.Tensor]):
     out = _abs_kernel(a, out)
     return out
@@ -98,6 +101,52 @@ def test_declared_case_runs(case_run, request):
             "pytest_collection_finish did not read it from callspec.params"
         )
         assert (case_run.work_dir / "golden.py").exists()
+
+
+@pl.program
+class _AbsProgram:
+    """The same abs kernel, authored as a ``@pl.program`` class.
+
+    ``st.case`` cannot derive this source's tensors from sample arguments (a
+    ``@pl.program`` declares shapes only in its annotations), so the case
+    declares them explicitly — exercising the ``ProgramKernel`` declaration
+    path alongside the jit lane above.
+    """
+
+    @pl.function(type=pl.FunctionType.InCore)
+    def kernel(
+        self,
+        a: pl.Tensor[[M, N], pl.FP32],
+        out: pl.Out[pl.Tensor[[M, N], pl.FP32]],
+    ) -> pl.Tensor[[M, N], pl.FP32]:
+        tile_a = pl.load(a, [0, 0], [M, N])
+        out = pl.store(pl.tile.abs(tile_a), [0, 0], out)
+        return out
+
+    @pl.function(type=pl.FunctionType.Orchestration)
+    def orchestrator(
+        self,
+        a: pl.Tensor[[M, N], pl.FP32],
+        out: pl.Out[pl.Tensor[[M, N], pl.FP32]],
+    ) -> pl.Tensor[[M, N], pl.FP32]:
+        out = self.kernel(a, out)
+        return out
+
+
+@st.cases(
+    st.case(
+        _AbsProgram,
+        name="harness_pipeline_abs_program",
+        tensors=[
+            TensorSpec("a", [M, N], DataType.FP32, init_value=_A.clone()),
+            TensorSpec("out", [M, N], DataType.FP32, is_output=True),
+        ],
+        golden=lambda tensors: torch.abs(tensors["a"]),
+    )
+)
+def test_declared_program_case_runs(case_run):
+    """The ``@pl.program`` kernel source runs the same Case→compile→run route."""
+    case_run.assert_passed()
 
 
 class TestSharedRun:
