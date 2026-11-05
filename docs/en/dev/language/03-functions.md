@@ -278,6 +278,10 @@ one per definition. `@pl.jit` parses the body, as described above.
 operations that run. Importing `pypto.language` changes neither: a definition
 keeps the lane its own decorator names.
 
+Where that trace ends and the shared compiler begins — the lanes, the program
+assembly, and what migration parity evidence measures — is
+[Tracing Frontend Boundaries](08-tracing-frontends.md).
+
 ```python
 @pl.jit_trace
 def scale_relu(

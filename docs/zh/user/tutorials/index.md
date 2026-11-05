@@ -1,8 +1,8 @@
 # 教程
 
-六篇手把手，每篇结束时你都能得到一个跑得起来的东西。
+七篇手把手，每篇结束时你都能得到一个跑得起来的东西。
 
-> **前置**：[语言](../language/index.md) —— 至少读过 [类型](../language/00-types.md)、[函数](../language/01-functions.md) 与 [作用域与放置](../language/04-scopes.md)。
+> **前置**：[语言](../language/index.md) —— 至少读过 [类型](../language/00-types.md)、[函数](../language/01-functions.md) 与 [作用域与放置](../language/04-scopes.md)。第 06 线另需[值与暂存](../language/07-staging.md)。
 
 ## 本章与其余各章的区别
 
@@ -10,7 +10,7 @@
 
 这意味着各页会**有意**重复彼此的特性。想要 `pl.at` 的完整面，去读 [作用域与放置](../language/04-scopes.md)；想写一个 matmul，读 [分块 matmul](02-matmul.md) —— 它会用 `pl.at`，但不会把它讲全。
 
-## 两条线
+## 三条线
 
 **写算子**（00–03）—— 怎么表达计算。
 
@@ -28,15 +28,27 @@
 | [塑形任务图](04-task-graph.md) | 一个依赖图完全可控的多任务程序 | 约 30 分钟 |
 | [调度调优](05-scheduling-tuning.md) | 一套能套用到自己 kernel 上的度量流程 | 约 40 分钟 |
 
+**复用你写的东西**（06）—— 同一个 kernel 如何变得更好维护。
+
+| 页面 | 最终得到 | 阅读时间 |
+| ---- | -------- | -------- |
+| [元编程一个 kernel](06-metaprogramming.md) | 一个按行缩放的 kernel 走过五步：两种值世界、host 控制流、对象、语句 body，以及三个 kernel 共用的分块策略 | 约 30 分钟 |
+
+这第三条线是唯一离开 parser 前端的：它用 `@pl.jit_trace` 写 kernel，所以只需要一个 kernel 的词汇量，
+而不是整趟 tile 之旅。它的前置也最硬 —— [值与暂存](../language/07-staging.md) 是它立足的那一页，
+跳过它，每一步都会看起来像要死记的语法。
+
 ## 阅读顺序
 
 ```text
 00-elementwise ──► 01-reduction-softmax ──► 02-matmul ──► 03-mixed-kernel
       │                                                          │
       └──────────────────────────► 04-task-graph ──► 05-scheduling-tuning
+
+00-elementwise ──► 06-metaprogramming      (needs one kernel, not the tile tour)
 ```
 
-算子线是累积的 —— 每页都假定你已掌握前一页的 tile 词汇。调度线只需要 `00`：它讲的是 kernel **之间**那张图的形状，与任何单个 kernel 算什么无关。
+算子线是累积的 —— 每页都假定你已掌握前一页的 tile 词汇。调度线只需要 `00`：它讲的是 kernel **之间**那张图的形状，与任何单个 kernel 算什么无关。元编程线需要 `00` 与[一个值世界](../language/07-staging.md)，其余不需要。
 
 ## 你的算子跑在哪个单元上
 

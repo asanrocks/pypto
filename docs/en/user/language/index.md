@@ -16,13 +16,16 @@ start to finish. It is also not an API reference: for signatures, see the
 [the catalog](../ops/01-catalog.md).
 
 Conventionally, `import pypto.language as pl` — every name on these pages is reached
-through that alias.
+through that alias. Where a rule is frontend-specific — the parsing frontend's or the
+tracing one's — the page says so where the rule appears; [Values and Staging](07-staging.md)
+owns the value model both frontends share.
 
 ## Contents
 
 | Page | What it covers |
 | ---- | -------------- |
 | [Types](00-types.md) | dtypes, `Tensor` / `Tile` / `Scalar` / `Array` / `Tuple`, layouts, dynamic shapes, parameter directions |
+| [Values and Staging](07-staging.md) | host versus staged values, and how the domain of a predicate or iterable decides what the program contains |
 | [Functions and Programs](01-functions.md) | `@pl.jit` family, `@pl.function`, `@pl.program`, `@pl.inline`, cross-function calls, external kernels |
 | [Control Flow](02-control-flow.md) | `pl.range` / `parallel` / `unroll` / `pipeline` / `while_`, carried values, `yield_`, `cond`, SSA |
 | [Memory and Data Movement](03-memory.md) | the memory spaces, `load` / `store` / `move`, `valid_shape` and `fillpad`, L1 residency |
@@ -32,14 +35,16 @@ through that alias.
 
 ## Reading order
 
-Read [Types](00-types.md) and [Functions and Programs](01-functions.md) first — every
-other page assumes both. After that the pages are independent:
+Read [Types](00-types.md), [Values and Staging](07-staging.md) and
+[Functions and Programs](01-functions.md) first — every other page assumes them. Staging
+explains what a traced kernel body does with each value; skip it only if every kernel you
+write stays on the parsing frontend. After that the pages are independent:
 
 ```text
-00-types ──► 01-functions ──┬─► 02-control-flow
-                            ├─► 03-memory
-                            ├─► 04-scopes   ← the widest gap if you are
-                            └─► 05-directives           coming from single-kernel code
+00-types ──► 07-staging ──► 01-functions ──┬─► 02-control-flow
+                                           ├─► 03-memory
+                                           ├─► 04-scopes   ← the widest gap if you are
+                                           └─► 05-directives           coming from single-kernel code
 ```
 
 [Scopes and Placement](04-scopes.md) is the page most readers have not seen

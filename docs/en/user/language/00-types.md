@@ -32,6 +32,12 @@ graph rather than a compile error.
 Shapes are static by default and checked at parse time. `pl.dynamic()` opts a dimension
 out of that, at the cost of everything the compiler could have concluded from knowing it.
 
+A parameter's annotation also decides its **world** — whether the caller passes it at run
+time or bakes it while the kernel is built. `pl.Scalar[dtype]`, `pl.Tensor`, `pl.Tile` and
+the direction wrappers are runtime parameters; a plain Python type such as `float` or
+`int` is a compile-time knob. [Values and Staging](07-staging.md) covers what that
+implies for the body.
+
 ## Register annotations (IR infrastructure)
 
 `pl.Reg[L, dtype]` describes a register value with a static positive logical lane

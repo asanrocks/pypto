@@ -280,3 +280,5 @@ a separate backend over the same IR.
 
 - [Construct Recipes](06-construct-recipes.md) — the constrained region protocol over the same session.
 - [Functions and Program Structure](03-functions.md) — the function kinds contracts describe.
+- `examples/tracing/advanced/06_recipe_policy.py` — this page executed: three placements of one body, and the kernel-facing decorator rebuilt from these effects.
+- [Functions and Programs § reusing code](../../user/language/01-functions.md) — the kernel-author spellings these recipes stand behind.

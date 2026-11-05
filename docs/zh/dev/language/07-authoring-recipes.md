@@ -202,3 +202,5 @@ def expand(ctx, *args, **kwargs):
 
 - [Construct Recipes](06-construct-recipes.md) —— 同一会话上的受约束 region 协议。
 - [Functions and Program Structure](03-functions.md) —— contract 所描述的函数类别。
+- `examples/tracing/advanced/06_recipe_policy.py` —— 本页的可执行版本：一个 body 的三种放置，以及用这些效果重建出的 kernel 侧装饰器。
+- [函数与程序 § 复用代码](../../user/language/01-functions.md) —— 这些 recipe 所支撑的 kernel 作者拼写。

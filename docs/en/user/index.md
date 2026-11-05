@@ -53,7 +53,7 @@ cross-rank overlap.
 | [Development Container](04-dev-container.md) | The prebuilt Ascend A2/A3 image — host prerequisites, pulling and running it, selecting cards, and device troubleshooting |
 | [Quickstart](02-quickstart.md) | Tensor-level kernels with `@pl.jit` — no manual data movement — plus loops, splitting work across functions, compiling and reading the IR |
 | [Programming Model](03-programming-model.md) | Tensor / Tile / Block levels, control vs. execution plane, the pass pipeline, memory hierarchy, execution model |
-| [Language Guide](language/index.md) | The full language, one topic per page: types, functions, control flow, memory, scopes and tasks, directives |
+| [Language Guide](language/index.md) | The full language, one topic per page: types, values and staging, functions, control flow, memory, scopes and tasks, directives |
 | [Operations](ops/index.md) | Choosing between the `pl.*`, `pl.tensor.*`, and `pl.tile.*` namespaces, plus the operator catalog |
 | [Compiling a Program](execution/00-compile.md) | `ir.compile()` and `JITFunction.compile()`, and inspecting the result |
 | [Running on Device](execution/01-run.md) | Resident device tensors, explicit dispatch, and the `RunConfig` fields that affect dispatch |

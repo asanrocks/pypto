@@ -1,10 +1,11 @@
 # Tutorials
 
-Six walkthroughs, each ending in something that runs.
+Seven walkthroughs, each ending in something that runs.
 
 > **Prerequisites:** [The Language](../language/index.md) — at least
 > [Types](../language/00-types.md), [Functions](../language/01-functions.md) and
-> [Scopes and Placement](../language/04-scopes.md).
+> [Scopes and Placement](../language/04-scopes.md). Track 06 additionally needs
+> [Values and Staging](../language/07-staging.md).
 
 ## How this chapter differs from the rest
 
@@ -18,7 +19,7 @@ of `pl.at`, read [Scopes and Placement](../language/04-scopes.md). If you want t
 matmul, read [Tiled matmul](02-matmul.md) — it will use `pl.at` without explaining all
 of it.
 
-## Two tracks
+## Three tracks
 
 **Writing operators** (00–03) — how to express the computation.
 
@@ -36,17 +37,31 @@ of it.
 | [Shaping the task graph](04-task-graph.md) | A multi-task program whose dependency graph you control | ~30 min |
 | [Tuning the schedule](05-scheduling-tuning.md) | A measurement loop you can re-run on your own kernel | ~40 min |
 
+**Reusing what you write** (06) — how the same kernel gets easier to maintain.
+
+| Page | You end up with | Reading time |
+| ---- | --------------- | ------------ |
+| [Metaprogramming a kernel](06-metaprogramming.md) | One row-scaling kernel through five steps: two value worlds, host control flow, objects, statement bodies, and a tiling policy three kernels share | ~30 min |
+
+This third track is the only one that leaves the parsing frontend: it writes its kernels
+with `@pl.jit_trace`, so it needs one kernel's worth of vocabulary rather than the tile tour.
+It also has the strictest prerequisite — [Values and Staging](../language/07-staging.md) is
+the page it builds on, and skipping it makes every step look like syntax to memorize.
+
 ## Reading order
 
 ```text
 00-elementwise ──► 01-reduction-softmax ──► 02-matmul ──► 03-mixed-kernel
       │                                                          │
       └──────────────────────────► 04-task-graph ──► 05-scheduling-tuning
+
+00-elementwise ──► 06-metaprogramming      (needs one kernel, not the tile tour)
 ```
 
 The operator track is cumulative — each page assumes the tile vocabulary of the one
 before. The scheduling track only needs `00`: it is about the shape of the graph between
-kernels, not about what any one kernel computes.
+kernels, not about what any one kernel computes. The metaprogramming track needs `00` and
+[a value world](../language/07-staging.md), and nothing else.
 
 ## Which unit runs your operator
 

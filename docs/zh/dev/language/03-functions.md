@@ -246,6 +246,9 @@ def scale_relu(
 解析器路径的循环拼写（`pl.while_`、`pl.cond`）在追踪中同样报错——追踪方言
 使用普通 Python `while`。
 
+trace 在哪里结束、共享的编译器从哪里开始 —— 四条通道、程序组装，以及迁移等价性证据度量的是什么 —— 见
+[Tracing 前端边界](08-tracing-frontends.md)。
+
 ### 收集时机与复用
 
 装饰时不追踪任何内容。第一次结构化使用——`.fn`、`.specialize()`、`.lower()`、

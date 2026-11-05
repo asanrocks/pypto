@@ -3,6 +3,12 @@
 `@pl.authoring.construct` — authoring new `with` and `for` constructs without touching
 the tracer.
 
+Most kernels only ever *consume* a construct: they write the `with` block, read its
+handle, and never import `pl.authoring`. Nothing on this page is required to use one —
+[Functions and Programs](../../user/language/01-functions.md) covers the value side, and
+`examples/tracing/05_block_recipe.py` shows three kernels sharing one grid before it shows
+the recipe.
+
 A **construct recipe** declares how one construct lowers: a generator
 function whose code before the `yield` opens the construct's regions, whose
 `yield` hands the body its value, and whose code after it finalizes. The
@@ -27,6 +33,12 @@ with blocked_spmd((tokens, heads), (1, HEAD_TILE)) as block:
     token, head = block.axes
     q = block.region(query).load()
 ```
+
+`BlockGrid` here is the recipe's own handle — a `pl.authoring.ConstructHandle` subclass
+that decodes this block's coordinates and exposes its regions. Runnable versions of the
+same recipe live in `examples/tracing/05_block_recipe.py` (`row_blocks`, one axis, with the
+consumer's view first) and `tests/ut/language/tracing/test_recipe.py` (`blocked_spmd`,
+shape/tile axes, alongside the IR-parity assertion).
 
 ## The Layering
 
@@ -219,4 +231,6 @@ to `for i in pl.spmd(n)`), with no import below `pypto.language`.
 
 - [Authoring Recipes](07-authoring-recipes.md) — the general tier beneath: `pypto.language.authoring` is the canonical import root for both protocols.
 - [Statements and Control Flow](01-statements.md) — the scope context managers recipes compose.
+- `examples/tracing/05_block_recipe.py` — one policy, three kernels, and the recipe; the kernel author's half of this page.
+- `examples/tracing/advanced/06_recipe_policy.py` — the same tier below: three placements of one body, and `@pl.jit_trace.body` rebuilt from it.
 - [Manual Dependency Primitives](02-manual_dependencies.md) — `deps=` edges and the TaskId capture channel.

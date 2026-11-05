@@ -2,6 +2,10 @@
 
 `@pl.authoring.construct` —— 无需触碰 tracer 即可编写新的 `with` 与 `for` 构造。
 
+大多数 kernel 只是**消费**构造：写出 `with` 块、读取它的 handle，从不 import `pl.authoring`。
+使用一个构造并不需要本页的任何内容 —— 值域一侧见 [函数与程序](../../user/language/01-functions.md)，
+`examples/tracing/05_block_recipe.py` 先给出三个 kernel 共用同一个 grid，再给出 recipe 本身。
+
 **构造配方（construct recipe）**声明一个构造如何下降：一个生成器函数，
 `yield` 之前的代码打开构造的区域（region），`yield` 把值交给主体（body），
 之后的代码负责收尾。其余一切都归 tracer —— 执行、栈纪律、IR 构造。
@@ -25,6 +29,11 @@ with blocked_spmd((tokens, heads), (1, HEAD_TILE)) as block:
     token, head = block.axes
     q = block.region(query).load()
 ```
+
+这里的 `BlockGrid` 是这个 recipe 自己的 handle —— 一个 `pl.authoring.ConstructHandle` 子类，负责解码本
+block 的坐标并提供其区域。同一 recipe 的可运行版本见 `examples/tracing/05_block_recipe.py`
+（`row_blocks`，单轴，先给消费者的视角）与 `tests/ut/language/tracing/test_recipe.py`
+（`blocked_spmd`，shape/tile 轴，并附 IR 等价断言）。
 
 ## 分层
 
@@ -187,3 +196,5 @@ for 形式的独立描述符路径（其 `begin`/`__trace_exit__` 分支与 carr
 - [授权配方](07-authoring-recipes.md) —— 之下的通用层：`pypto.language.authoring` 是两个协议的规范导入根。
 - [语句与控制流](01-statements.md) —— 配方所组合的作用域上下文管理器。
 - [手工依赖原语](02-manual_dependencies.md) —— `deps=` 边与 TaskId 捕获通道。
+- `examples/tracing/05_block_recipe.py` —— 一个策略、三个 kernel、以及 recipe 本身；本页在 kernel 作者一侧的另一半。
+- `examples/tracing/advanced/06_recipe_policy.py` —— 同一层的下方：一个 body 的三种放置，以及从该层重建出的 `@pl.jit_trace.body`。

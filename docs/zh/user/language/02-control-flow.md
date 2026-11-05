@@ -15,6 +15,8 @@ PyPTO 的 IR 是 **SSA**：每个绑定只被写一次。在直线代码里这�
 
 你并不总需要自己写 `yield_`。在循环里重新绑定一个名字就是常规的累加写法，解析器会替你把它变成携带值 —— `init_values=` 加 `yield_` 是同一件事的显式拼写，且只有 `pl.while_` 强制要求。而产生值的分支则**必须**在两个分支都 yield。本页其余内容都是这些规则的变体。
 
+先说明适用范围，因为这条规则是分前端的：本页讲的是 **parser** 前端，循环是**语法**，携带值要由解析器重新推导。`@pl.jit_trace` kernel 则是被执行的，所以一个语句是循环、是分支还是两者都不是，由它主体的域决定 —— 见[值与暂存](07-staging.md)。下面的循环**形式**（`pl.range` 及其同类）在 traced kernel 里不变；变的是携带值如何到达 IR，见下面的追踪小节。
+
 四种循环构造共用一套语法，区别只在于告诉了编译器什么：
 
 ```text
@@ -123,6 +125,17 @@ for i, (prev,) in pl.range(4, init_values=(init,)):
 ```
 
 一个分支 yield 了，另一个也必须 yield。没有值要产生的分支则两边都不 yield。
+
+### Traced kernel：主体决定控制流
+
+traced kernel 保留这些循环形式，但不再需要携带值的**记账**：在循环前绑定 staged 状态（或用
+`pl.const(...)`），在函数体内重新绑定 —— trace 会推导携带关系，因此永远不必写
+`init_values=` / `pl.yield_`。某个 `for` / `if` / `while` 是否是 staged 构造，由它的**主体**
+决定；这条规则 —— 以及让猜错变响亮的守护 —— 由
+[值与暂存](07-staging.md)负责陈述。
+
+有两种拼写不适用：`pl.while_` 与 `pl.cond` 是 parse 期语法，在 trace 内会抛错；staged 条件上的
+普通 `while` 才是 tracing 的拼写，它记录一个 `WhileStmt`，并在函数体内重绑携带值。
 
 ### SSA，以及你何时需要在意它
 

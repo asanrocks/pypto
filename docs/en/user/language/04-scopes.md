@@ -455,6 +455,27 @@ pl.system.sync_wait(0, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)    # 
 | **A peer's signal counter reads twice what it should** | Both AIV lanes ran the same `pld.system.notify` — **not diagnosed** | Shard the notify by `aiv_id`, or guard it with `if aiv_id == 0:` |
 | **A rank reads stale data after its `pld.system.wait` returns** | Either the double-notify above, or an incomplete cache-publication/fence/barrier/invalidation sequence between the cube and vector phases | Shard the notify; add the full GM handoff sequence |
 
+## Using a construct someone else wrote
+
+Most kernels *consume* placement policy rather than define it. A library construct is a
+`with` (or `for`) block whose regions the recipe opened for you: you state the policy's
+inputs, read its handle, and write the body.
+
+```python
+with row_blocks(ROWS, TILE_ROWS, name_hint="scale") as grid:
+    row0 = grid.row_offset                       # this block's rows, from the policy
+    tile = pl.load(a, [row0, 0], [grid.tile_rows, COLS])
+    pl.store(pl.mul(tile, 2.0), [row0, 0], out)
+```
+
+The handle is ordinary Python, not a staged value: it can carry host fields
+(`grid.tile_rows`) and properties that build staged operands (`grid.row_offset` reads the
+block index). Nothing here needs `pl.authoring` — that namespace is for the person writing
+the policy. `examples/tracing/05_block_recipe.py` walks both sides: two kernels that
+hand-write the grid, three that state it once, then the recipe itself. A policy's own
+validation fires at your call site, so a grid that does not divide the rows raises before
+anything lowers.
+
 ## Writing your own scope construct
 
 When the built-in scopes do not spell your lowering, author the construct
@@ -478,6 +499,12 @@ def blocked_spmd(ctx, shape, tile, *, name_hint=""):
 with blocked_spmd((tokens, heads), (1, HEAD_TILE)) as block:
     q = block.region(query).load()
 ```
+
+`BlockGrid` is the recipe's own handle: a `pl.authoring.ConstructHandle` subclass that decodes
+this block's coordinates and exposes its regions. Runnable versions are
+`row_blocks` in `examples/tracing/05_block_recipe.py` (one axis, the consumer's view
+first) and `blocked_spmd` in `tests/ut/language/tracing/test_recipe.py` (shape/tile axes,
+with the IR parity assertion).
 
 The same generator serves the `for` spelling (`for i in blocked_spmd(...)`,)
 yielding `ctx.loop_var()`. No builder, no tracer internals — the capability
