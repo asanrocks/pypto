@@ -21,7 +21,9 @@ foundation exposes exactly:
 The executable litmus contract: a user can implement equivalents of
 ``pl.function``, ``pl.program``, and compatibility ``pl.jit`` on top of this
 module without importing private collector, Sema, Frame, or decorator
-helpers.
+helpers. Tracing-time body splicing is the authoring tier's splice effect
+(``pl.authoring.body(...).splice(...)`` — :mod:`pypto.language.authoring`), built on
+the foundation's prepared bodies.
 
 The submodules above the foundation are framework libraries, not foundation
 surface: :mod:`~pypto.language.tracing.entry.annotation` (the standard annotation

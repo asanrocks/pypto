@@ -202,12 +202,18 @@ reportAssignmentType = false
 reportRedeclaration = false
 reportGeneralTypeIssues = false
 
-# The tracing tree validates caller-supplied values at its public boundaries:
-# declarations, invocations and expansions can be driven by generated or
-# otherwise untyped code, so an ``isinstance`` guard is the runtime contract
-# even where the annotation already states the expected type. That is the only
-# strict rule this tree switches off — everything else, including the
-# unknown-type family, is checked.
+# The authoring tier and the tracing tree validate caller-supplied values at
+# their public boundaries: declarations, invocations and expansions can be
+# driven by generated or otherwise untyped code, so an ``isinstance`` guard is
+# the runtime contract even where the annotation already states the expected
+# type. That is the only strict rule these trees switch off — everything else,
+# including the unknown-type family, is checked. ``authoring`` is the tracing
+# tree's authoring slice, so it carries the same doctrine.
+
+[[tool.pyright.executionEnvironments]]
+root = "python/pypto/language/authoring"
+reportUnnecessaryIsInstance = false
+
 [[tool.pyright.executionEnvironments]]
 root = "python/pypto/language/tracing"
 reportUnnecessaryIsInstance = false

@@ -133,7 +133,7 @@ def _logical_span(span: object | None) -> ir.Span:
 def _ambient_pre_emit_flush() -> None:
     """The builder's pre-emit hook: flush the *ambient* frame's deferred scopes.
 
-    A borrowing expansion frame shares the root's builder but owns its own
+    A borrowing splice frame shares the root's builder but owns its own
     deferred-scope list (the spmd for-form carrier its body opens). Routing
     the flush to the root frame alone would leave the child's carrier
     unopened: its body's first statement would land in the Spmd scope ahead
@@ -150,7 +150,13 @@ _FACADE_TYPES = FACADE_TYPES
 # Validated at import so bare name comparisons can never drift from the
 # registry (see .claude/rules/operator-identity-checks.md).
 _ALLREDUCE = ir.get_op("pld.tensor.allreduce").name
-_GET_BLOCK_IDX = ir.get_op("tile.get_block_idx").name
+#: Both spellings of the per-block-index read. The tile-scope op is the
+#: canonical one; the tensor-scope alias (``pl.get_block_idx`` /
+#: ``pl.tensor.get_block_idx``) lowers to it only in ``ConvertTensorToTileOps``
+#: — after the carrier decision runs — so the probe must recognize it by its
+#: own op name, exactly as the parser's static ``spmd_body_reads_block_idx``
+#: recognizes every spelling by name.
+_BLOCK_INDEX_OPS = frozenset(ir.get_op(name).name for name in ("tile.get_block_idx", "tensor.get_block_idx"))
 
 
 def _unwrap_facade(value: object) -> ir.Expr:
@@ -223,23 +229,35 @@ def _base_facade_class(cls: type[object]) -> type[Facade] | None:
 
 
 class _BlockIdxReadProbe(ir.IRVisitor):
-    """Expression-tree probe for a ``tile.get_block_idx`` call.
+    """Expression-tree probe for a per-block-index read.
 
+    Recognizes both spellings (``_BLOCK_INDEX_OPS``) so the carrier decision
+    is a fact about the *semantic* read, not about the frontend spelling.
     Only consulted while a deferred spmd carrier is pending, so the per-bind
-    walk never runs on the common path."""
+    walk never runs on the common path.
+
+    ``visit_expr`` is overridden (as a pass-through) for the binding's
+    dispatch quirk — without an override there, a nested ``Call`` argument
+    never reaches ``visit_call`` from Python (the same reason
+    ``pto_backend._CallCollector`` overrides it): a read buried in a load's
+    offsets would go unseen and the carrier would silently stay closed.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.found = False
 
+    def visit_expr(self, expr: ir.Expr) -> None:
+        super().visit_expr(expr)
+
     def visit_call(self, op: ir.Call) -> None:
-        if op.op.name == _GET_BLOCK_IDX:
+        if op.op.name in _BLOCK_INDEX_OPS:
             self.found = True
         super().visit_call(op)
 
 
 def _expr_reads_block_index(expr: ir.Expr) -> bool:
-    """Whether ``expr``'s tree contains a per-block-index read."""
+    """Whether ``expr``'s tree contains a per-block-index read (either spelling)."""
     probe = _BlockIdxReadProbe()
     probe.visit_expr(expr)
     return probe.found
@@ -359,9 +377,9 @@ class PtoSema:
         self._frame: PtoFrame | None = None
         self._frame_started = False
         self._result: ir.Function | None = None
-        # The borrowing expansion parent: ``None`` for a root Sema (the
-        # default), or the root Sema whose builder and function context an
-        # in-trace expansion borrows.
+        # The borrowing splice parent: ``None`` for a root Sema (the default),
+        # or the root Sema whose builder and function context an in-trace
+        # splice borrows.
         self._parent: PtoSema | None = None
         # The forward-sticky ``pl.dump_tag`` set (per function, reset at
         # trace): the tagged tensor Vars, merged into every *subsequent*
@@ -373,11 +391,17 @@ class PtoSema:
         # dyn-dims): the id of every shape-extent Var declared by the
         # function's own params — the only extents codegen materializes.
         self._param_dim_symbols: set[int] = set()
+        # The borrowing splice's scope-policy override (``None`` = follow the
+        # parent chain). Set only by ``_for_splice`` from
+        # ``body.splice(..., auto_scope=False)``: hand-placed scopes in the
+        # body stay legal, while the caller's own policy governs everything
+        # else.
+        self._splice_auto_scope: bool | None = None
 
-    # —— the borrowing expansion entrance ——
+    # —— the borrowing splice ——
     @classmethod
-    def _for_expansion(cls, parent: PtoSema, owner: str) -> PtoSema:
-        """The borrowing expansion Sema for one in-trace expansion.
+    def _for_splice(cls, parent: PtoSema, owner: str, *, auto_scope: bool | None = None) -> PtoSema:
+        """The borrowing splice Sema for one in-trace splice.
 
         Borrows the parent's IRBuilder and current insertion point; the
         frame creates no function, and finalization never ends one. Function
@@ -396,24 +420,25 @@ class PtoSema:
         sema._builder = parent._builder
         sema._parent = parent
         sema._param_dim_symbols = set(parent._param_dim_symbols)
+        sema._splice_auto_scope = auto_scope
         return sema
 
     @property
-    def expansion_parent(self) -> PtoSema | None:
+    def splice_parent(self) -> PtoSema | None:
         """The root Sema whose builder this Sema borrows, or ``None`` for a root Sema."""
         return self._parent
 
     @property
     def name(self) -> str:
-        """The display name of the function this Sema is building (an
-        expansion Sema carries the expanded body's name)."""
+        """The display name of the function this Sema is building (a splice
+        Sema carries the spliced body's name)."""
         return self._name
 
     # —— the ``pl.dump_tag`` marker (traced) ——
     def record_dump_tag(self, var: ir.Var) -> None:
         """Record ``var`` in the function's forward-sticky dump set."""
         if self._parent is not None:
-            # The borrowing expansion: the active function is the parent's.
+            # The borrowing splice: the active function is the parent's.
             return self._parent.record_dump_tag(var)
         if self._function_type not in (ir.FunctionType.Orchestration, ir.FunctionType.Inline):
             raise TypeError(
@@ -654,7 +679,16 @@ class PtoSema:
 
     # —— function-level facts the Frame delegates ——
     def auto_scope_enabled(self) -> bool:
-        """Whether the active function owns automatic runtime-scope placement."""
+        """Whether the active function owns automatic runtime-scope placement.
+
+        A splice may override the answer for its own body: a hand-scoped
+        body splices with ``auto_scope=False`` so its
+        explicit scopes stay legal, while automatic placement around the
+        spliced for/if bodies still follows the caller — the mixture the
+        inline splice produced.
+        """
+        if self._splice_auto_scope is not None:
+            return self._splice_auto_scope
         if self._parent is not None:
             return self._parent.auto_scope_enabled()
         return self._attrs is None or bool(self._attrs.get(AUTO_SCOPE_ATTR, True))
@@ -723,7 +757,7 @@ class PtoFrame:
         self._temp_seq = 0
         self._ctx = TraceContext(self)
         if sema._parent is not None:
-            # The borrowing expansion frame: no function, declaration, or call
+            # The borrowing splice frame: no function, declaration, or call
             # — it emits into the parent's builder at the current insertion
             # point, and its ``finish`` ends nothing.
             return
@@ -1319,6 +1353,41 @@ class PtoFrame:
             return FinalResultBinding(pending, facade)
         return PartialResultBinding(pending, facade)
 
+    def stage_scalar_conversion(self, value: object, target: object, *, name: str) -> Facade:
+        """Bind ``cast(value, target)`` to a fresh local and return it.
+
+        The declared-slot conversion is emitted as its own statement instead of
+        an inline ``Cast`` argument. The device task-argument path reads a
+        variable or a constant literal, and the temporary makes the traced
+        program identical to the hand-written spelling
+        (``t = pl.cast(i, pl.INT32); f(..., t, ...)``), so the printed form is
+        canonical and the parity gate can compare the two lanes structurally.
+
+        ``target`` is ``object`` because the ``Frame`` protocol is
+        PTO-agnostic and cannot name ``DataType``: the collector package
+        imports nothing from ``pypto``, which is what keeps it reusable and
+        independently testable. The one caller passes the lattice's
+        ``DataType``, and the guard states that here rather than trusting it.
+
+        The temporary's name comes from the shared naming rule
+        (:func:`pypto.language.scalar_conversion.conversion_temp_name`), which is
+        what keeps the parser lane's IR identical to this one's.
+        """
+        from pypto.language.scalar_conversion import conversion_temp_name  # noqa: PLC0415 — shared rule
+        from pypto.language.typing.scalar import Scalar  # noqa: PLC0415 — facade cycle
+        from pypto.pypto_core import DataType  # noqa: PLC0415 — protocol param is object
+
+        if not isinstance(target, DataType):
+            raise TypeError(
+                f"a declared-slot conversion needs a DataType target, got {type(target).__name__}"
+            )
+        span = current_pinned_span()
+        cast_expr = ir.cast(
+            _unwrap_facade(value), target, span=span if span is not None else ir.Span.unknown()
+        )
+        local = self._sema._builder.let(conversion_temp_name(name, target), cast_expr, span=span)
+        return Scalar(expr=local)
+
     def _default_bind(self, name: str, value: object, span: object | None = None) -> BindingResult[Facade]:
         """The ordinary staged binding path after trace-protocol hooks decline.
 
@@ -1364,7 +1433,11 @@ class PtoFrame:
             # silently-wrong state #642 rejected).
             local = self._sema._builder.let(name, expr, span=stmt_span)
             self._locals[name] = local
-        else:
+        elif expr is not local:
+            # A rebind of a name to the very same `ir.Var` writes nothing: the
+            # expansion path hands a caller value back to itself
+            # (``o = expand_into(x, o)``, the write-through idiom), and a
+            # self-assign would reach codegen as a redundant statement.
             self._sema._builder.assign(local, expr, span=stmt_span)
             # A rebind drops the forward-sticky dump tag; the tag applies
             # only to the original staged local definition.
@@ -1396,11 +1469,18 @@ class PtoFrame:
         from pypto.language.typing.type_utils import (  # noqa: PLC0415 — the shared seam (both frontends match identically)
             _tile_types_differ_only_by_unset_memory_space,
             _types_match,
+            storage_bindings_match,
         )
 
         existing, new = local.type, expr.type
         if isinstance(existing, ir.UnknownType) or isinstance(new, ir.UnknownType):
             return False
+        # Value-type compatibility intentionally ignores placement. A mutable
+        # local must nevertheless start a new definition when its producer
+        # selects another allocation or slot; retaining the old Var would make
+        # later consumers observe the previous value's storage.
+        if not storage_bindings_match(existing, new):
+            return True
         if _types_match(existing, new):
             return False
         # An unset memory_space is a wildcard, not a distinct type: a
@@ -1409,14 +1489,37 @@ class PtoFrame:
         # assign-through for exactly this shape.
         return not _tile_types_differ_only_by_unset_memory_space(existing, new)
 
+    def alias_argument(self, name: str, value: object) -> None:
+        """Bind one expansion argument to the caller's own `ir.Var`.
+
+        A splice's parameters are substitution, exactly like the inline
+        facility's spliced ones: the argument is already an in-place alias of
+        the caller's value, so a rebind inside the body must assign *through*
+        that Var rather than `let` a fresh one. The fresh Var was the bug: an
+        enclosing `pl.range` / `pl.pipeline` derives its carried channels from
+        the rebinding, so a body that rebound a caller value inside a loop
+        produced no channel, and `ConvertToSSA` then left an unversioned
+        `__FREE_VAR` placeholder that the verifier rejects.
+
+        Item-assignment already resolves to the parent frame (see
+        :meth:`borrowed_parent`); this is the same rule for the plain rebind.
+        A root frame does nothing: its parameters are declarations, not
+        aliases.
+        """
+        if self.borrowed_parent is None or not self.is_staged(value):
+            return
+        expr = _unwrap_facade(value)
+        if isinstance(expr, ir.Var):
+            self._locals[name] = expr
+
     @property
     def borrowed_parent(self) -> PtoFrame | None:
-        """The parent frame whose locals an expansion body may write through.
+        """The parent frame whose locals a spliced body may write through.
 
-        An expansion's parameters are substitution: an item-assignment
+        A splice's parameters are substitution: an item-assignment
         targeting one is the caller's own write, so the frame that owns the
         name (and whose interpreter must rebind it) is the parent's, not the
-        expansion's fresh lexical frame. ``None`` on a root frame.
+        splice's fresh lexical frame. ``None`` on a root frame.
         """
         parent_sema = self._sema._parent
         return parent_sema.frame if parent_sema is not None else None
@@ -1425,10 +1528,10 @@ class PtoFrame:
         """The frame owning ``expr`` as a staged local, and the local's name.
 
         A ``None`` owner means ``expr`` is no frame's staged local — the loud
-        item-assignment error. Under a borrowing expansion a substituted
+        item-assignment error. Under a borrowing splice a substituted
         caller value resolves to the parent frame (write-through semantics:
         the body behaves as text inlined at the call site), while the
-        expansion's own locals shadow first.
+        splice's own locals shadow first.
         """
         for name, local in self._locals.items():
             if local is expr:
@@ -1443,7 +1546,7 @@ class PtoFrame:
     def resolve_local_name(self, expr: object) -> str | None:
         """The name whose mutable `ir.Var` is ``expr``, or ``None`` when
         ``expr`` is not a staged local. The owning frame may be a borrowing
-        expansion's parent (see :meth:`resolve_staged_local`)."""
+        splice's parent (see :meth:`resolve_staged_local`)."""
         owner, name = self.resolve_staged_local(expr)
         return name if owner is not None else None
 
@@ -1516,15 +1619,15 @@ class PtoFrame:
                 "return is not allowed while a result-producing construct awaits its result bindings"
             )
         if self._sema._parent is not None:
-            # The borrowing expansion: the return is expansion-local — the
+            # The borrowing splice: the return is splice-local — the
             # native return (the in-host-mode guard) carries the value to the
             # parent, and no ReturnStmt is emitted into the borrowed builder.
             # An early return under staged control flow would need region
-            # merge semantics the expansion does not own; reject it loudly.
+            # merge semantics the splice does not own; reject it loudly.
             if rt is not None and rt.staged_control_flow_active():
                 raise TypeError(
-                    "an expansion body must end in one trailing return — an early "
-                    "return inside staged control flow has no expansion semantics"
+                    "a spliced body must end in one trailing return — an early "
+                    "return inside staged control flow has no splice semantics"
                 )
             return
         with self._statement_comments():
@@ -1540,24 +1643,42 @@ class PtoFrame:
         # The source rewriter's ``_return_row`` always does ``rt.return_(__pto_ret0)``
         # with a single temp. For ``return [y, z]`` or ``return y, z`` that temp
         # is a host list/tuple containing facades, so ``values`` is ``[[y,z]]``
-        # or ``[(y,z)]``. Expand a single host container of facades into the
-        # actual multi-value return. A ``pl.Tuple(y,z)`` facade is *not* a host
-        # list/tuple, so it stays as a single staged value. For a declared
-        # ``-> pl.Tuple[T1, T2]`` the printer emits ``return [y, z]`` as a
-        # single ``MakeTuple``; keep it as a single Tuple return.
+        # or ``[(y,z)]``. The two spellings are the parser's two return
+        # contracts (``parse_return``), and the Python kind preserves which one
+        # the source wrote even after routing: a **tuple** literal is the flat
+        # multi-result form — splice it into ``values`` so the derived
+        # signature is ``[T1, T2]``; a **list** literal is the one structural
+        # value — stage it as ``pl.Tuple(y, z)`` so the signature is a single
+        # ``TupleType``. A bound name cannot resurrect the distinction: the
+        # binding path already normalized an all-staged tuple into the
+        # ``pl.Tuple`` facade (``_stage_staged_tuple``), so only the literal
+        # forms arrive here. Mixed staged/host containers stay refused.
         if len(values) == 1 and _is_sequence(values[0]):
             inner = values[0]
-            if any(is_staged(v) for v in inner):
-                if isinstance(self._sema._return_type, ir.TupleType) and len(inner) == len(
-                    self._sema._return_type.types
-                ):
-                    from pypto.language.typing import Tuple as PlTuple  # noqa: PLC0415
+            staged_members = [v for v in inner if is_staged(v)]
+            if staged_members and len(staged_members) == len(inner):
+                if isinstance(inner, tuple):
+                    values = list(inner)
+                else:
+                    from pypto.language.typing import Tuple as PlTuple  # noqa: PLC0415 - import cycle
 
-                    tup = PlTuple(*inner)
-                    self._sema._builder.return_stmt(tup.unwrap(), span=stmt_span)
-                    return
-                values = list(inner)
-        staged = [_unwrap_facade(v) for v in values if is_staged(v)]
+                    values = [PlTuple(*inner)]
+            elif staged_members:
+                raise TypeError(
+                    f"kernel {self._sema.name!r}: a Python container in a return mixes "
+                    f"staged values with host value(s) "
+                    f"{[v for v in inner if not is_staged(v)]!r}. A staged multi-result is "
+                    "one pl.Tuple(a, b) or a flat ``return a, b``; host values cannot "
+                    "become part of either."
+                )
+        if any(not is_staged(v) for v in values):
+            raise TypeError(
+                f"kernel {self._sema.name!r}: return mixes staged values with host "
+                f"value(s) {[v for v in values if not is_staged(v)]!r}. A staged "
+                "multi-result is one pl.Tuple(a, b); host values cannot become part "
+                "of it."
+            )
+        staged = [_unwrap_facade(v) for v in values]
         if not staged:
             return
         if len(staged) == 1:
@@ -1862,7 +1983,7 @@ class PtoFrame:
             if pending is not None:
                 raise TypeError(
                     f"item-assignment write-through of {name!r} while the staged "
-                    f"{pending.kind} in the expansion body awaits result bindings — "
+                    f"{pending.kind} in the spliced body awaits result bindings — "
                     "complete the result bindings first"
                 )
         return self._require_rt().bind(name, value)
@@ -2012,7 +2133,7 @@ class PtoFrame:
         self._finished = True
         self._sema._reset_span_pin()
         if self._sema._parent is not None:
-            # The borrowing expansion: the parent owns the function context —
+            # The borrowing splice: the parent owns the function context —
             # there is nothing to end and no result to record.
             return None
         self._sema._result = self._sema._builder.end_function(self._sema._source_span)

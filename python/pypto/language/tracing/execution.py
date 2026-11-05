@@ -15,9 +15,9 @@ the Sema's frame is installed as the active trace frame, the instrumented
 body runs inside it, the previous frame is restored on every exit path, and
 the completed trace is checked against its declared returns before they are
 pinned onto the signature. This module is that lifecycle, stated once — the
-entrance foundation (:mod:`pypto.language.tracing.entry`) and the decorator
-tier (``function_trace`` and the jit envelope) call it instead of carrying
-private copies that drift.
+entrance foundation (:mod:`pypto.language.tracing.entry`), the decorator
+tier (``function_trace`` and the jit envelope), and the authoring session
+call it instead of carrying private copies that drift.
 
 The dependency direction is the layering: the policy tiers import this
 module, and this module imports only the tracer core — the collector

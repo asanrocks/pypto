@@ -775,8 +775,9 @@ def _types_match(lhs: _ir.Type | None, rhs: _ir.Type | None) -> bool:
     (``_ir._without_type_memref``): ``structural_equal`` compares it, but
     allocation identity is not part of frontend-level value-type matching —
     the parser's Var (not the Call) carries the authoritative memref via
-    ``override_type``, so a new producer must not retain the previous
-    value's allocation merely because shape and dtype agree.
+    ``override_type``, and the tracing Sema compares placement separately
+    with ``storage_bindings_match`` so a new producer cannot retain the
+    previous value's allocation merely because shape and dtype agree.
 
     Outer shape dimensions are simplified via a shared arithmetic analyzer
     before comparison so expressions like ``(k + C) - k`` match ``C``.  The
@@ -798,6 +799,29 @@ def _types_match(lhs: _ir.Type | None, rhs: _ir.Type | None) -> bool:
         lhs = _simplify_shape_dims(lhs, analyzer)
         rhs = _simplify_shape_dims(rhs, analyzer)
     return lhs == rhs
+
+
+def storage_bindings_match(lhs: _ir.Type, rhs: _ir.Type) -> bool:
+    """Compare placement separately from value-type compatibility for local rebinding."""
+    pending = [(lhs, rhs)]
+    visited: set[tuple[int, int]] = set()
+    while pending:
+        left_type, right_type = pending.pop()
+        key = (id(left_type), id(right_type))
+        if key in visited:
+            continue
+        visited.add(key)
+        if isinstance(left_type, _ir.TupleType) and isinstance(right_type, _ir.TupleType):
+            if len(left_type.types) == len(right_type.types):
+                pending.extend(zip(left_type.types, right_type.types))
+        elif isinstance(left_type, _ir.TileType) and isinstance(right_type, _ir.TileType):
+            left, right = left_type.memref, right_type.memref
+            if (left is None) != (right is None):
+                return False
+            if left is not None and right is not None:
+                if not _ir.MemRef.same_allocation(left, right) or not _ir.structural_equal(left, right):
+                    return False
+    return True
 
 
 def _tile_types_differ_only_by_unset_memory_space(lhs: _ir.Type | None, rhs: _ir.Type | None) -> bool:
