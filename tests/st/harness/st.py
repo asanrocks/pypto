@@ -14,7 +14,7 @@ body.  The pre-compile pool has to know every case before any test body runs,
 and the only way to hand pytest a value that early is to parametrize with it::
 
     from harness import st
-    from examples.beginner.abs import tile_abs   # @pl.jit.incore
+    from examples.beginner.abs import tile_abs   # @pl.jit_trace.incore
 
     @st.cases(
         st.case(tile_abs, a, out, golden=lambda t: torch.abs(t["a"])),
@@ -26,7 +26,7 @@ and the only way to hand pytest a value that early is to parametrize with it::
 object lands in ``item.callspec.params["_st_case"]`` and the harness reads it
 directly.  It replaces the previous discovery route, which parsed the test
 function's source and re-evaluated its constructor call with a miniature AST
-interpreter — a route that could not see a ``@pl.jit`` test at all, and that
+interpreter — a route that could not see a ``@pl.jit_trace`` test at all, and that
 fell back silently to per-case inline compilation whenever an argument would
 not resolve.
 
@@ -40,6 +40,7 @@ from typing import Any
 import pytest
 from pypto.ir.pass_manager import OptimizationStrategy
 from pypto.jit import JITFunction
+from pypto.language.tracing.decorators.jit_trace import _JitSpecializer
 from pypto.pypto_core import ir as _ir
 from pypto.pypto_core.passes import MemoryPlanner
 from pypto.runtime.runner import RunResult
@@ -47,7 +48,7 @@ from pypto.runtime.tensor_spec import ScalarSpec
 
 from harness.core.case import Case, from_legacy
 from harness.core.harness import TensorSpec
-from harness.core.kernel_source import IRKernel, JitKernel, ProgramKernel
+from harness.core.kernel_source import IRKernel, JitKernel, ProgramKernel, TracingJitKernel
 
 
 def case(  # noqa: PLR0913 — every knob mirrors one Case field; grouping them would only hide them
@@ -70,18 +71,28 @@ def case(  # noqa: PLR0913 — every knob mirrors one Case field; grouping them 
     """Build one :class:`~harness.core.case.Case`.
 
     The kernel source is chosen from what *kernel* is, so the test does not
-    name it: a ``@pl.jit`` function becomes a ``JitKernel``, an ``ir.Program``
-    an ``IRKernel``, anything else (a ``@pl.program`` class, or a factory
-    returning one) a ``ProgramKernel``.
+    name it: a tracing ``@pl.jit_trace`` function becomes a
+    ``TracingJitKernel`` in whichever mode its declaration left it — its
+    fully-shaped annotations baked the trace at first use (the samples then
+    specialize nothing and may be omitted entirely), or a bare or
+    unannotated parameter leaves the samples to specialize every call — a
+    parsing-lane ``pl.jit`` entry a ``JitKernel``,
+    an ``ir.Program`` an ``IRKernel``, anything else (a ``@pl.program`` class,
+    or a factory returning one) a ``ProgramKernel``.
 
     Args:
         kernel: The kernel under test.
-        *sample_args: Sample tensors, positionally, for a ``@pl.jit`` kernel.
+        *sample_args: Sample tensors, positionally, for a ``@pl.jit_trace`` kernel.
             They carry the shape/dtype contract and are the case's real inputs,
-            so the tensor list is derived from them.
+            so the tensor list is derived from them. A kernel whose every
+            parameter carries a fully-shaped annotation (a declaration-driven
+            tracing kernel) may omit them **entirely** and declare ``tensors=``
+            instead: the baked declaration already determined the trace, so the
+            case's specs state the buffers — the same annotation-only rule the
+            parsing lane's ``JitKernel`` follows.
         name: Case identity — the artifact cache key and the parametrize id.
             Defaults to a name derived from the kernel and its specialization.
-        inputs: Sample tensors by parameter name, for a ``@pl.jit`` kernel that
+        inputs: Sample tensors by parameter name, for a ``@pl.jit_trace`` kernel that
             reads better bound by keyword. Combines with *sample_args*.
         golden: Called once in the parent with every tensor by name; returns
             the output tensor, a dict of output name to tensor, or ``None``
@@ -116,8 +127,19 @@ def case(  # noqa: PLR0913 — every knob mirrors one Case field; grouping them 
     Returns:
         The case, ready to hand to :func:`cases`.
     """
-    if isinstance(kernel, JITFunction):
+    if isinstance(kernel, _JitSpecializer):
+        # One source for the one public jit object; the class itself probes
+        # which mode the declaration left (a decoration trace exists exactly
+        # when the annotations determined it).
+        source = TracingJitKernel(kernel, *sample_args, **(inputs or {}))
+    elif isinstance(kernel, JITFunction):
         source = JitKernel(kernel, *sample_args, **(inputs or {}))
+    elif isinstance(kernel, _ir.Function) and (sample_args or inputs):
+        # A bare ir.Function (a caller that already resolved ``.fn``, or a
+        # ``pl.function``-traced kernel): the signature is baked, the sample
+        # arguments specialize nothing. Without sample arguments an ir.Function
+        # keeps the legacy ProgramKernel fall-through below.
+        source = TracingJitKernel(kernel, *sample_args, **(inputs or {}))
     elif isinstance(kernel, _ir.Program):
         if name is None:
             raise ValueError("st.case(ir.Program) needs an explicit name= — a Program carries none")
@@ -125,7 +147,7 @@ def case(  # noqa: PLR0913 — every knob mirrors one Case field; grouping them 
     else:
         if sample_args or inputs:
             raise ValueError(
-                f"st.case({kernel!r}): sample arguments only apply to a @pl.jit kernel. "
+                f"st.case({kernel!r}): sample arguments only apply to a @pl.jit_trace kernel. "
                 "A @pl.program declares its shapes in its annotations; pass tensors=[...] "
                 "to say how they are filled."
             )
