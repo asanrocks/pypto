@@ -85,6 +85,20 @@ def test_alloc_window_buffer_returns_ptr_type():
     assert "dtype" not in call.kwargs
 
 
+def test_alloc_window_buffer_types_a_python_int_size_as_index():
+    """The shared builder's Python-``int`` branch reifies the size ``INDEX``.
+
+    The parsing frontend folds a computed size expression from the AST on the
+    index lattice, while the tracing frontend evaluates the same expression to
+    a Python ``int`` and hands the value here — the branch's dtype is what
+    keeps one kernel structurally equal on both lanes.
+    """
+    call = dist_tensor_ops.alloc_window_buffer(1024, name="buf")
+    assert isinstance(call.args[0], ir.ConstInt)
+    assert call.args[0].value == 1024
+    assert call.args[0].dtype == DataType.INDEX
+
+
 def test_alloc_window_buffer_requires_non_empty_name():
     span = ir.Span.unknown()
     size = ir.ConstInt(4, DataType.INT64, span)
@@ -1773,8 +1787,11 @@ def test_dsl_pipeline_requires_chunk():
 
     with pytest.raises(ValueError, match="must be non-negative"):
         _validate_chunk(-1, 0, "pld.tensor.put")
+    # bool is an int subclass, so the bool rejection is live validation,
+    # not an annotation-violating input (a float now fails in the underlying
+    # op — garbage input is a caller bug per the trust-annotations policy).
     with pytest.raises(TypeError, match="static"):
-        _validate_chunk(1.5, 0, "pld.tensor.put")  # type: ignore[arg-type]
+        _validate_chunk(True, 0, "pld.tensor.put")
 
 
 def test_tile_put_ir_builder_accepts_positional_atomic_compat():

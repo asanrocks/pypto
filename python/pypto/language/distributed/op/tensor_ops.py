@@ -41,7 +41,8 @@ site singular.
 """
 
 from collections.abc import Sequence
-from typing import overload
+from itertools import count
+from typing import Any, overload
 
 from pypto.ir.op.distributed import tensor_ops as _ir_tensor
 from pypto.language.typing import IntLike, Ptr
@@ -55,6 +56,17 @@ from ._utils import _normalize_intlike, _unwrap, _unwrap_distributed_tensors
 
 _ALLREDUCE_SIGNAL_MISSING = object()
 
+# The AST injects ``name=`` from the assignment LHS;
+# the executed facade cannot see the bind name (it arrives at the Frame's
+# bind hook — a frontend channel, out of scope here). Until then,
+# synthesize a unique placeholder so the call collects instead of
+# raising.
+_WINDOW_BUFFER_NAMES = count()
+
+
+def _next_window_buffer_name() -> str:
+    return f"_window_buf_{next(_WINDOW_BUFFER_NAMES)}"
+
 
 def _validate_chunk(chunk_rows: int, chunk_cols: int, op_name: str) -> None:
     """Validate the put/get staging-tile chunk dims (``0`` = full, else positive int).
@@ -65,9 +77,7 @@ def _validate_chunk(chunk_rows: int, chunk_cols: int, op_name: str) -> None:
     dims must be non-negative Python ints (``0`` meaning "full extent").
     """
     for name, value in (("chunk_rows", chunk_rows), ("chunk_cols", chunk_cols)):
-        # bool is an int subclass, so True/False must not pose as a static dim;
-        # the isinstance pair is a mistyped-input guard (the annotation is the contract).
-        if not isinstance(value, int) or isinstance(value, bool):  # pyright: ignore[reportUnnecessaryIsInstance]
+        if isinstance(value, bool):
             raise TypeError(f"{op_name} {name} must be an int (static), got {type(value).__name__}")
         if value < 0:
             raise ValueError(f"{op_name} {name} must be non-negative (0 = full), got {value}")
@@ -151,7 +161,7 @@ def _compute_window_buffer_bytes(shape: list[int | Expr], dtype: DataType) -> in
 
     # Dynamic path: at least one genuinely dynamic dim.
     span = _ir.Span.unknown()
-    # Seed from the first dim instead of ConstInt(1) to avoid a redundant
+    # Initialize from the first dim instead of ConstInt(1) to avoid a redundant
     # Mul(1, dim0) identity in the emitted IR.
     first = shape[0]
     if isinstance(first, int):
@@ -178,6 +188,35 @@ def alloc_window_buffer(size: IntLike, *, name: str = "") -> Ptr: ...
 
 @overload
 def alloc_window_buffer(shape: Sequence[IntLike], *, dtype: DataType, name: str = "") -> Ptr: ...
+
+
+def _make_alloc_name_bind(call_expr: _ir.Call) -> Any:
+    """The ``alloc_window_buffer`` LHS-name injection bind hook.
+
+    The executed facade cannot see the assignment LHS, so it synthesizes a
+    placeholder name; the bind's LHS name reaches this hook at the Frame's
+    bind dispatch, which rebuilds the call with it (the AST parser's
+    LHS-name injection, ``_parse_alloc_window_buffer_assignment``).
+    Returns a fresh ``Ptr`` facade over the rebuilt call (transform-and-
+    defer → the Sema's ``_default_bind`` creates the ``ir.Var``). Attached only
+    when the op synthesized the placeholder (``_awaiting_lhs_name``); the
+    ``window()`` back-reference is exact — ``window(buf, ...)`` references
+    the ``buf`` Var directly.
+    """
+
+    def _alloc_name_bind(ctx: Any, name: str) -> Any:
+        del ctx
+        return Ptr(
+            expr=_ir.Call(
+                call_expr.op,
+                call_expr.args,
+                {**call_expr.kwargs, "name": name},
+                call_expr.type,
+                call_expr.span,
+            )
+        )
+
+    return _alloc_name_bind
 
 
 def alloc_window_buffer(  # type: ignore[no-redef]
@@ -234,15 +273,19 @@ def alloc_window_buffer(  # type: ignore[no-redef]
        allocated buffer.
 
     Raises:
-        ValueError: If ``name`` is empty (the parser must have injected it).
         ValueError: If ``shape`` is a sequence but ``dtype`` is not provided.
         ValueError: If ``size`` is scalar but ``dtype`` is provided.
     """
     if not name:
-        raise ValueError(
-            "pld.tensor.alloc_window_buffer must appear as the RHS of a simple assignment "
-            "(its result must be bound to a named variable)"
-        )
+        # The parser injects name= from the LHS; the
+        # executed facade can't see it — synthesize a unique placeholder so
+        # the call collects instead of raising. The bind's LHS name
+        # reaches the Frame's bind hook, which re-injects it into
+        # the call's kwargs — the marker flag below is that channel.
+        name = _next_window_buffer_name()
+        _awaiting_lhs_name = True
+    else:
+        _awaiting_lhs_name = False
 
     if isinstance(size, (list, tuple)):
         if dtype is None:
@@ -253,7 +296,10 @@ def alloc_window_buffer(  # type: ignore[no-redef]
         shape_normalized: list[int | Expr] = _normalize_intlike(size)
         byte_size: int | Expr = _compute_window_buffer_bytes(shape_normalized, dtype)
         call = _ir_tensor.alloc_window_buffer(_unwrap(byte_size), name=name)
-        return Ptr(expr=call)
+        facade = Ptr(expr=call)
+        if _awaiting_lhs_name:
+            facade.__trace_bind__ = _make_alloc_name_bind(call)  # type: ignore[attr-defined]
+        return facade
 
     if dtype is not None:
         raise ValueError(
@@ -262,7 +308,10 @@ def alloc_window_buffer(  # type: ignore[no-redef]
         )
 
     call = _ir_tensor.alloc_window_buffer(_unwrap(size), name=name)
-    return Ptr(expr=call)
+    facade = Ptr(expr=call)
+    if _awaiting_lhs_name:
+        facade.__trace_bind__ = _make_alloc_name_bind(call)  # type: ignore[attr-defined]
+    return facade
 
 
 def window(
@@ -737,12 +786,7 @@ def allreduce(
         The rebound :class:`pld.DistributedTensor` view of ``target`` —
         identical shape / dtype / window-buffer binding, post-reduce content.
     """
-    # bool is an int subclass and must not pose as a core count; the isinstance
-    # pair is a mistyped-input guard (the annotation is the contract).
-    if (
-        not isinstance(core_num, int)  # pyright: ignore[reportUnnecessaryIsInstance]
-        or isinstance(core_num, bool)
-    ):
+    if not isinstance(core_num, int) or isinstance(core_num, bool):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise TypeError(
             "pld.tensor.allreduce core_num must be a positive compile-time int, "
             f"got {type(core_num).__name__}"
@@ -1192,3 +1236,24 @@ __all__ = [
     "reduce_scatter",
     "window",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Loud unknown-op error at the 3-segment dispatch surface.
+
+    The traced frontend resolves ``pld.tensor.<op>(...)`` by plain attribute
+    access (calls pass through); an unknown subop would otherwise
+    surface as a bare module AttributeError whose message lacks the
+    ``pld.tensor.`` namespace the AST parser's dispatch errors carry. Raising
+    a named AttributeError here keeps ``hasattr`` (the AST parser's own
+    dispatch probe) returning False while giving the traced path a message
+    the parser tests' ``match="pld..."`` pins accept.
+    """
+    raise AttributeError(f"pld.tensor.{name} is not a known distributed operation")
+
+
+# The op-call error boundary: classify user-facing (TypeError, ValueError)
+# as InvalidOperationError at the module surface (see language/op/_validation.py).
+from pypto.language.op._validation import wrap_module_ops  # noqa: E402
+
+wrap_module_ops(__name__)
