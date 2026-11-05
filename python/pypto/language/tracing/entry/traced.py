@@ -188,7 +188,7 @@ class TracedCallable:
 
     @property
     def decl(self) -> Decl | None:
-        """The paired declaration, or ``None`` for an expansion-only body."""
+        """The paired declaration, or ``None`` for a splice-only body."""
         return self._decl
 
     def invoke(
@@ -217,7 +217,7 @@ class TracedCallable:
         if decl is None:
             raise TypeError(
                 f"cannot invoke {self.__name__!r} without a declaration — a body "
-                "prepared without one is expansion-only; root invocation needs "
+                "prepared without one is splice-only; root invocation needs "
                 "the declaration's parameter and return contract"
             )
         sema = PtoSema(

@@ -592,6 +592,11 @@ class Interpreter(Generic[V]):
         # Installed once at frame entry so the Frame's named stdlib
         # operations can query the trace interpreter.
         sema_frame.note_interpreter(self)
+        # A spliced body's parameters are the caller's own values, so a
+        # rebind inside the body writes through them (a root frame ignores
+        # this — its parameters are declarations).
+        for param_name, param_value in params.items():
+            sema_frame.alias_argument(param_name, param_value)
         ns = dict(params)
         self._frames.append(_InvocationFrame(ns=ns, sema_frame=sema_frame))
 

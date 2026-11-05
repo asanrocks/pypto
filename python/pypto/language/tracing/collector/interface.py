@@ -154,6 +154,7 @@ class Frame(Protocol[V]):
     def note_interpreter(self, interpreter: "Interpreter[V]", /) -> None: ...
     def is_staged(self, value: object) -> bool: ...
     def add_leading_comments(self, comments: Sequence[str]) -> None: ...
+    def alias_argument(self, name: str, value: object) -> None: ...
 
     def bind(
         self, interpreter: "Interpreter[V]", /, name: str, value: object, span: object | None = None
@@ -193,6 +194,16 @@ class Frame(Protocol[V]):
     def logical_not(self, a: object, span: object | None = None) -> V: ...
 
     def resolve_local_name(self, expr: object) -> str | None: ...
+
+    def stage_scalar_conversion(self, value: object, target: object, *, name: str) -> V:
+        """Bind a declared-slot scalar conversion to a fresh local.
+
+        Called only for an argument inside the declared slot's integer lattice
+        (:mod:`pypto.language.scalar_conversion`). Returns the staged value that
+        carries the conversion, so the emitted call states the declared dtype
+        instead of the argument's.
+        """
+        ...
 
     def finish(self) -> object: ...
 
@@ -235,6 +246,11 @@ class NullFrame:
     def is_staged(self, value: object) -> bool:
         del value
         return False
+
+    def alias_argument(self, name: str, value: object) -> None:
+        """No alias: host execution binds nothing, and a root frame's
+        parameters are declarations rather than the caller's values."""
+        del name, value
 
     def add_leading_comments(self, comments: Sequence[str]) -> None:
         del comments
@@ -308,6 +324,12 @@ class NullFrame:
     def resolve_local_name(self, expr: object) -> str | None:
         del expr
         return None
+
+    def stage_scalar_conversion(self, value: object, target: object, *, name: str) -> object:
+        # Host execution has no trace to convert in: the argument's own value
+        # stands, and the call site never carries a staged conversion.
+        del target, name
+        return value
 
     def finish(self) -> None:
         return None

@@ -63,6 +63,7 @@ from pypto.pypto_core.ir import (
 )
 
 from . import _dump as _dump
+from . import authoring
 
 if TYPE_CHECKING:
     # The lazy shim below resolves these at runtime (first access), so the
@@ -364,6 +365,7 @@ TASK_ID = DataType.TASK_ID
 TaskId = Scalar[TASK_ID]
 
 __all__ = [
+    "authoring",
     "jit",
     "JITFunction",
     "function",
