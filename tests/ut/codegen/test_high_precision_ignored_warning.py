@@ -27,9 +27,6 @@ Ascend910 honours the request through its scratch overload, so it must stay
 silent even though that backend ignores the selector itself.
 """
 
-# DSL function bodies are parsed as AST, not executed — suppress pyright errors.
-# pyright: reportUndefinedVariable=false
-
 import re
 from pathlib import Path
 

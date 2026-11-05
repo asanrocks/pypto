@@ -26,7 +26,6 @@ the full ``@pl.jit`` lowering pipeline accepts such a kernel.
 # DSL function bodies are parsed as AST, not executed — suppress pyright errors
 # from annotations that reference module-level DynVar names and from DSL-only
 # subscript-assignment syntax.
-# pyright: reportUndefinedVariable=false, reportIndexIssue=false, reportUnusedVariable=false
 
 import pypto.language as pl
 import pytest

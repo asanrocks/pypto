@@ -240,7 +240,7 @@ def wrap_expr(expr: Expr, t: _ir.Type) -> _UnwrapsToExpr:
     if isinstance(t, _ir.TupleType):
         from pypto.language.typing.tuple import Tuple  # noqa: PLC0415
 
-        return Tuple._runtime(expr)  # pyright: ignore - the real Tuple facade lands with the value facades
+        return Tuple._runtime(expr)
     raise TypeError(
         f"cannot wrap an Expr of type {t} in a facade (expected Tensor/Tile/Scalar/Array/Ptr/Tuple)"
     )
@@ -546,7 +546,7 @@ def annotation_to_type(facade: object) -> _ir.Type:
         # Annotation mode: ``pl.Tuple[T1, T2, ...]`` → ``TupleType`` over
         # the element types (the return annotation is the inspection
         # contract). The element annotations are themselves facades.
-        return _ir.TupleType([annotation_to_type(t) for t in facade._types])  # pyright: ignore
+        return _ir.TupleType([annotation_to_type(t) for t in facade._types])
     if isinstance(facade, CommCtx):
         return _ir.CommCtxType()
     # The parameterless kinds have no subscript form — the bare class is the

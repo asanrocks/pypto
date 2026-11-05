@@ -24,9 +24,6 @@ The default (``MemoryPlanner.PYPTO``) preserves the pre-existing behaviour:
 both passes run and codegen bakes ``addr`` for ``--pto-level=level3``.
 """
 
-# DSL function bodies are parsed as AST, not executed — suppress pyright errors.
-# pyright: reportUndefinedVariable=false
-
 import re
 
 import pypto.language as pl

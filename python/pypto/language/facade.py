@@ -67,7 +67,7 @@ PARAMETERLESS_FACADES: tuple[type[object], ...] = (
 )
 
 
-def is_facade(v: object) -> TypeGuard[Facade]:  # pyright: ignore[reportUnknownParameterType] - Tuple is the bare-tuple checker alias until the value facades land
+def is_facade(v: object) -> TypeGuard[Facade]:
     """Narrow a value to the closed facade union.
 
     The bind-path half of the recognition query: facades are recognized

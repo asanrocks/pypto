@@ -61,18 +61,15 @@ class ArrayMeta(type):
         if len(item) != 2:
             raise TypeError("Array requires [extent, dtype] notation")
         extent, dtype = item
-        # The implicit ``cls`` is typed as the metaclass object — rebind to the
-        # Array-family class it actually is.
-        array_cls = cast("type[Array]", cls)
-        return array_cls(extent, dtype, _annotation_only=True)
+        return cls(extent, dtype, _annotation_only=True)
 
     def __call__(cls, *args: Any, **kwargs: Any) -> "Array":
         _validate_array_meta_call(args, kwargs)
 
-        extent: int | None = kwargs.get("extent", args[0] if len(args) > 0 else None)
-        dtype: DataType | None = kwargs.get("dtype", args[1] if len(args) > 1 else None)
-        expr: Expr | None = kwargs.get("expr", args[2] if len(args) > 2 else None)
-        annotation_only: bool = kwargs.get("_annotation_only", args[3] if len(args) > 3 else False)
+        extent = kwargs.get("extent", args[0] if len(args) > 0 else None)
+        dtype = kwargs.get("dtype", args[1] if len(args) > 1 else None)
+        expr = kwargs.get("expr", args[2] if len(args) > 2 else None)
+        annotation_only = kwargs.get("_annotation_only", args[3] if len(args) > 3 else False)
 
         # Bare `pl.Array(N, dtype)` is treated as annotation by default to mirror
         # Tensor/Tile DSL ergonomics.
@@ -144,12 +141,40 @@ class Array(metaclass=ArrayMeta):
 
         return _array_dsl.get_element(self, index)
 
-    def __setitem__(self, index: "int | Expr | Scalar", value: "int | Expr | Scalar") -> None:  # noqa: F821
-        # Note: this assigns the result back to self._expr so subsequent reads
-        # see the updated SSA value. The parser's surface-level sugar handles
-        # the variable-name rebinding for code inside @pl.function — this
-        # path is for direct DSL usage (tests, REPL-style construction).
+    def __setitem__(self, index: "int | Expr | Scalar | slice", value: "int | Expr | Scalar") -> None:
+        """``arr[i] = v`` → ``array.update_element(arr, i, v)`` (functional rebind).
+
+        The traced frontend's subscript-write sugar (the AST's
+        ``_parse_subscript_assignment`` surface). The source rewriter
+        leaves ``arr[i] = v`` as a plain Python item assignment on the
+        facade (``_route_target`` preserves Subscript targets), so this
+        hook fires during the trace, asks the active Frame
+        (``active_frame()``) to resolve the target IR variable, and routes
+        the resulting source-name bind through the trace interpreter
+        — no rewriter rewrite.
+
+        Outside a trace the upstream host behavior is kept: the wrapper
+        rebinds to the updated expression, which is what direct DSL use
+        (tests, REPL-style construction) relies on. A slice is rejected in
+        both modes — it has no ``update_element`` meaning.
+        """
+        from pypto.language.ambient import active_frame  # noqa: PLC0415
         from pypto.language.op import array as _array_dsl  # noqa: PLC0415
 
-        updated = _array_dsl.update_element(self, index, value)
-        self._expr = updated.unwrap()
+        if isinstance(index, slice):
+            raise TypeError(
+                "Array item assignment takes a scalar index, not a slice; "
+                "use pl.array.update_element for a whole-array update"
+            )
+        frame = active_frame()
+        if frame is None:
+            self._expr = _array_dsl.update_element(self, index, value).unwrap()
+            return
+        new = _array_dsl.update_element(self, index, value)
+        owner, name = frame.resolve_staged_local(self.unwrap())
+        if owner is None:
+            raise TypeError(
+                "Array item-assignment target must be a bound local name, "
+                f"got an expression-backed Array ({self!r})"
+            )
+        owner.rt_bind(name, new, via=frame)

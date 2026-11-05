@@ -27,6 +27,10 @@ A ``-> pl.Tuple[...]`` annotation is a *single* ``return_types_`` entry holding
 a ``TupleType``, so the check descends into tuple elements: a scalar hidden in
 one has no more of a carrier than a bare scalar return.
 """
+# Traced/DSL kernel bodies: the unified facade returns `Tensor | Scalar`
+# (and `Tuple` for multi-value returns), which a body cannot narrow; the
+# rules below are the resulting expression-shape noise, not a bug signal.
+# pyright: reportReturnType=false
 
 import pypto.language as pl
 import pytest

@@ -18,6 +18,7 @@ This module provides type annotation and runtime wrapper classes for PyPTO's lan
 
 from typing import TypeAlias
 
+from pypto.language.typing._runtime_scalar import RuntimeScalar, runtime
 from pypto.language.typing.array import Array
 from pypto.language.typing.constexpr import ConstexprMarker, constexpr
 from pypto.language.typing.direction import InOut, Out
@@ -36,6 +37,17 @@ from pypto.language.typing.scalar import (
 from pypto.language.typing.tensor import Tensor
 from pypto.language.typing.tile import Tile
 from pypto.language.typing.tuple import Tuple
+from pypto.language.typing.type_utils import (  # the facade-conversion funnel
+    annotation_to_return_slots,
+    annotation_to_return_types,
+    annotation_to_type,
+    as_int,
+    facade_class_for_type,
+    from_int,
+    to_expr,
+    to_int,
+    wrap_expr,
+)
 from pypto.pypto_core.ir import Expr
 
 IntLike: TypeAlias = int | Scalar | Expr
@@ -56,12 +68,23 @@ __all__ = [
     "PrefetchAsyncContext",
     "Ptr",
     "Reg",
+    "RuntimeScalar",
     "RuntimeScalarMarker",
     "Scalar",
     "Tensor",
     "Tile",
     "Tuple",
     "constexpr",
+    "annotation_to_return_slots",
+    "annotation_to_return_types",
+    "facade_class_for_type",
+    "annotation_to_type",
+    "as_int",
     "dynamic",
     "predicate_to_expr",
+    "runtime",
+    "from_int",
+    "to_expr",
+    "to_int",
+    "wrap_expr",
 ]

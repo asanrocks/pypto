@@ -8,6 +8,11 @@
 # -----------------------------------------------------------------------------------------------------------
 
 """Unit tests for distributed Python code generation."""
+# Traced/DSL test bodies and helpers: the unified facade returns
+# `Tensor | Scalar` (and `Tuple` for multi-value returns), which a body cannot
+# narrow, and the tracing decorators' attribute forms are untyped. The rules
+# below are the resulting test-shape noise, not a bug signal.
+# pyright: reportReturnType=false
 
 import re
 

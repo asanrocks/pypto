@@ -11,7 +11,6 @@
 
 # DSL function bodies are parsed as AST, not executed — suppress pyright errors
 # from type-checking annotations that reference module-level DynVar names.
-# pyright: reportUndefinedVariable=false, reportInvalidTypeForm=false
 
 import pypto.language as pl
 import pytest

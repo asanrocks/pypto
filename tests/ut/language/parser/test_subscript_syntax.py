@@ -9,6 +9,12 @@
 
 """Unit tests for subscript syntax on Tensor and Tile types."""
 
+# Traced/DSL test bodies and helpers: the unified facade returns
+# `Tensor | Scalar` (and `Tuple` for multi-value returns), which a body cannot
+# narrow, and the tracing decorators' attribute forms are untyped. The rules
+# below are the resulting test-shape noise, not a bug signal.
+# pyright: reportArgumentType=false, reportReturnType=false, reportIndexIssue=false
+
 import warnings
 from typing import cast
 

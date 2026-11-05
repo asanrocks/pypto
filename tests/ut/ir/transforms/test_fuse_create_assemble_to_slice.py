@@ -9,6 +9,11 @@
 
 """Unit tests for FuseCreateAssembleToSlice pass."""
 
+# TEMPORARY (deleted by the constructs staging commit): loop-carried values
+# surface the honest `Tensor | Scalar` union until the loop machinery's typing
+# lands; these rules are that transition's test-shape noise, not a bug signal.
+# pyright: reportArgumentType=false
+
 import pypto.language as pl
 import pytest
 from pypto import ir, passes

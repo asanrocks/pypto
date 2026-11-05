@@ -96,7 +96,7 @@ class SupportsTraceBind(Protocol):
     (decline and use the ordinary staged-binding path).
     """
 
-    def __trace_bind__(self, ctx: TraceContext, name: str) -> _TraceBindReturn: ...  # pyright: ignore[reportUnknownParameterType] - Tuple is the bare-tuple checker alias until the value facades land
+    def __trace_bind__(self, ctx: TraceContext, name: str) -> _TraceBindReturn: ...
 
 
 @runtime_checkable
