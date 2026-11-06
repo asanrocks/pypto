@@ -1730,6 +1730,30 @@ void BindIR(nb::module_& m) {
   ir.def("verify_structural_bindings", &verify_structural_bindings, nb::arg("node"),
          "Verify binding visibility and unique definitions; comparison itself does not validate IR.");
 
+  // Return-lineage queries: which parameter, if any, backs each returned value.
+  // The same walk the passes and orchestration codegen use, exposed so a
+  // frontend contract check cannot re-implement it and drift.
+  ir.def(
+      "returned_param_indices",
+      [](const FunctionPtr& func, const ProgramPtr& program) {
+        return return_lineage::ReturnedParamIndices(func, program);
+      },
+      nb::arg("func"), nb::arg("program"),
+      "Map each return position of `func` to the index of the parameter it writes back, or None "
+      "when the value is not a parameter writeback. Traces SSA rebinds, loop carries, builtin "
+      "writeback ops, TupleGetItem of a user-call result, and user calls (recursively through "
+      "`program`). Position-faithful: a single TupleType return keeps one entry.");
+  ir.def(
+      "delivered_param_indices",
+      [](const FunctionPtr& func, const ProgramPtr& program) {
+        return return_lineage::DeliveredParamIndices(func, program);
+      },
+      nb::arg("func"), nb::arg("program"),
+      "Map each value `func` delivers to the index of the parameter that backs it, or None when "
+      "no parameter does. Same walk as returned_param_indices, but value-faithful: a `pl.Tuple` "
+      "return (a literal MakeTuple, or a forwarded multi-result call) expands into its elements "
+      "even when the signature declares one TupleType slot.");
+
   // Serialization functions
   ir.def(
       "serialize",
@@ -2654,9 +2678,6 @@ void BindIR(nb::module_& m) {
       "(original_var, cloned_var) pairs for the definition sites freshly cloned by\n"
       "the traversal. Seeded entries from var_map are NOT included — use the\n"
       "caller's own substitution map for those.");
-
-  ir.def("returned_param_indices", &return_lineage::ReturnedParamIndices, nb::arg("func"), nb::arg("program"),
-         "Trace each return to its external parameter.");
 
   // Cross-function call return type deduction
   ir.def("deduce_call_return_type", &DeduceCallReturnType, nb::arg("callee_params"), nb::arg("args"),

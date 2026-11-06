@@ -76,6 +76,9 @@ def _lower(program, convert_to_ssa=False) -> str:
     if convert_to_ssa:
         program = passes.convert_to_ssa()(program)
     program = passes.synthesize_allreduce_signals()(program)
+    # The real pipeline normalizes param-writeback returns before
+    # MaterializeDistTensorCtx, which requires the ReturnParamsExplicit property.
+    program = passes.normalize_return_order()(program)
     program = passes.materialize_comm_domain_scopes()(program)
     program = passes.materialize_dist_tensor_ctx()(program)
     cg = codegen.DistributedCodegen()
@@ -84,6 +87,7 @@ def _lower(program, convert_to_ssa=False) -> str:
 
 def _lower_host_collectives(program):
     program = passes.synthesize_allreduce_signals()(program)
+    program = passes.normalize_return_order()(program)
     program = passes.materialize_comm_domain_scopes()(program)
     program = passes.lower_host_tensor_collectives()(program)
     program = passes.materialize_dist_tensor_ctx()(program)

@@ -3027,6 +3027,44 @@ def assert_structural_equal(
     Always use identical options for hashing and equality.
     """
 
+def returned_param_indices(func: Function, program: Program) -> list[int | None]:
+    """Map each return position of ``func`` to the parameter it writes back.
+
+    Position-faithful: a function whose signature declares one ``pl.Tuple[...]``
+    return keeps one entry (``len(result) == len(func.return_types)``). Traces SSA
+    rebinds, loop carries, builtin writeback ops (``tensor.assemble``,
+    ``tile.store``), ``TupleGetItem`` of a user-call result, and user calls
+    (recursing through ``program``).
+
+    Args:
+        func: Function whose return lineage is queried
+        program: Program the callees are looked up in
+
+    Returns:
+        One entry per return position: the parameter index it writes back, or
+        ``None`` when the value is not a parameter writeback. Empty when
+        ``func`` has no value-bearing top-level return.
+    """
+
+def delivered_param_indices(func: Function, program: Program) -> list[int | None]:
+    """Map each value ``func`` delivers to the parameter that backs it.
+
+    Value-faithful: a ``pl.Tuple`` return (a literal ``MakeTuple``, or a
+    forwarded multi-result call) expands into its elements even when the
+    signature declares a single ``TupleType`` slot, so this answers "does every
+    returned value live in a parameter?" — the question a write-through return
+    contract asks.
+
+    Args:
+        func: Function whose return lineage is queried
+        program: Program the callees are looked up in
+
+    Returns:
+        One entry per delivered value: the backing parameter index, or ``None``
+        when no parameter backs it. Empty when ``func`` has no value-bearing
+        top-level return.
+    """
+
 def attach_leading_comments(stmt: Stmt, comments: list[str]) -> Stmt:
     """Attach leading comments to an existing statement.
 
@@ -4524,10 +4562,6 @@ class IRMutator:
     def visit_break_stmt(self, op: BreakStmt) -> Stmt: ...
     def visit_continue_stmt(self, op: ContinueStmt) -> Stmt: ...
     def visit_inline_stmt(self, op: InlineStmt) -> Stmt: ...
-
-def returned_param_indices(func: Function, program: Program) -> list[int | None]:
-    """Trace each return to its external parameter."""
-    ...
 
 def get_reg_memory_effect(call: Call) -> dict[str, Any]:
     """Get load/store/gather/scatter effects; indexed begin/end are unknown."""
