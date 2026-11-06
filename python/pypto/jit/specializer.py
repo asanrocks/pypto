@@ -49,8 +49,6 @@ from typing import Any, cast, get_args, get_origin
 
 from pypto._external_source import EXTERNAL_INCLUDE_DIRS_ATTR, encode_external_include_dirs
 from pypto._function_attrs import DUAL_AIV_DISPATCH_ATTR, EXTERNAL_RETURN_PARAMS_ATTR
-from pypto.language.parser.expr_evaluator import ExprEvaluator
-from pypto.language.parser.type_resolver import TypeResolver
 from pypto.language.typing.array import Array as _LangArray
 from pypto.language.typing.dynamic import DynVar as _LangDynVar
 from pypto.language.typing.scalar import Scalar as _LangScalar
@@ -1571,6 +1569,11 @@ def _validate_extern_return_mapping(
     """
     if not ret_ann:
         return
+    # Imported here so ``pypto.language`` can pull in this module without
+    # dragging the parser package along (see tests/ut/language/test_dialect_isolation.py).
+    from pypto.language.parser.expr_evaluator import ExprEvaluator  # noqa: PLC0415
+    from pypto.language.parser.type_resolver import TypeResolver  # noqa: PLC0415
+
     namespace = {name: _LangDynVar(literal) for name, literal in ctx.dynvar_literals().items()}
     resolver = TypeResolver(ExprEvaluator(namespace))
     signature = ast.parse(f"def kernel({', '.join(params)}){ret_ann}: pass").body[0]

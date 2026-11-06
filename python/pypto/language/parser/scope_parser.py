@@ -17,7 +17,7 @@ from typing import Any, cast
 
 from pypto.ir import op as ir_op
 from pypto.ir.printer import python_print
-from pypto.language.optimizations import SPLIT_SLOT_NUM_DEPRECATION, CrossCoreSlot, cross_core_slot
+from pypto.language.constructs.optimizations import SPLIT_SLOT_NUM_DEPRECATION, CrossCoreSlot, cross_core_slot
 from pypto.pypto_core import DataType, ir
 
 from .attr_parser import AttrParser
