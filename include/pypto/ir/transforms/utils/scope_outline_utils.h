@@ -197,13 +197,20 @@ class ScopeOutliner : public IRMutator {
   /**
    * @brief Compute used_after when no explicit context is available.
    *
-   * Two regimes:
-   *   1. Scope is nested inside another (non-target) ScopeStmt — only store
-   *      targets escape, because scope boundaries confine locally-defined
-   *      variables.
-   *   2. Scope is at the top level or inside a control-flow body — retain the
-   *      original defensive fallback: all defined vars + store targets are
-   *      treated as outputs so the caller retains access.
+   * The fallback is reached only when nothing after the scope reads anything at
+   * any enclosing level (the ``SeqStmts`` visitor propagates real tail uses
+   * through ``required_outputs_``), so whatever escapes from here escapes on
+   * side-effect grounds alone. Two families qualify, and nothing else:
+   *
+   *   1. store targets — an external buffer the scope writes is caller-visible
+   *      state regardless of reads (a loop-carried accumulator rides this rule);
+   *   2. write-alias definitions — a binding whose value names the post-write
+   *      state of a buffer the scope wrote, as declared by the operator's
+   *      result-alias contract (see ``WriteAliasDefCollector``).
+   *
+   * Scope nesting does not change the rule: a nested scope is confined by its
+   * own boundary, and its outer-level outputs arrive through
+   * ``required_outputs_`` rather than through a wider fallback.
    */
   [[nodiscard]] std::unordered_set<const Var*> ComputeFallbackUsedAfter(const ScopeStmtPtr& scope) const;
 

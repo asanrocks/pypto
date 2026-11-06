@@ -4554,5 +4554,105 @@ class Before:
     assert calls[0].args[0].same_as(source_tensor_type.shape[0])
 
 
+def test_terminal_scope_exports_only_store_targets():
+    """A value-less entry's final scope exports only what it stores.
+
+    The no-context fallback used to export every non-scalar definition,
+    so a scope that computed tiles and stored into an ``Out`` parameter
+    declared tile-typed returns on the outlined function — which
+    ConvertTensorToTileOps rejects with an INTERNAL_CHECK, a bug-class
+    failure for a legal entry shape (a value-less entry whose final
+    statement is a scope). The intermediates are dead by construction:
+    the fallback is reached only when nothing after the scope reads
+    anything, at any enclosing level.
+    """
+
+    @pl.program
+    class Valueless:
+        @pl.function
+        def main(
+            self,
+            a: pl.Tensor[[128, 128], pl.FP32],
+            b: pl.Tensor[[128, 128], pl.FP32],
+            out: pl.Out[pl.Tensor[[128, 128], pl.FP32]],
+        ):
+            with pl.at(level=pl.Level.CORE_GROUP):
+                left = pl.load(a, [0, 0], [128, 128])
+                right = pl.load(b, [0, 0], [128, 128])
+                pl.store(pl.add(left, right), [0, 0], out)
+
+    after = passes.outline_incore_scopes()(passes.convert_to_ssa()(Valueless))
+    outlined = next(fn for fn in after.functions.values() if fn.func_type == ir.FunctionType.InCore)
+    # Only the store target escapes: one tensor-typed return, no dead loads.
+    assert len(outlined.return_types) == 1, [str(t) for t in outlined.return_types]
+    assert isinstance(outlined.return_types[0], ir.TensorType)
+
+
+def test_terminal_scope_exports_write_alias_definitions():
+    """A binding naming a buffer's post-write state escapes; dead loads do not.
+
+    ``work = pl.store(value, [0, 0], work)`` binds ``work`` to the post-write
+    alias of the buffer it stores into — side-effect state in the same family
+    as a store target, which the no-context fallback exports. The loaded
+    ``value`` is an ordinary dead definition: nothing after the scope reads it,
+    so exporting it would recreate the tile-typed dead return the fallback
+    exists to avoid.
+    """
+
+    @pl.program
+    class AliasExport:
+        @pl.function
+        def main(self, a: pl.Tensor[[128, 128], pl.FP32]):
+            work: pl.Tensor[[128, 128], pl.FP32] = pl.create_tensor([128, 128], dtype=pl.FP32)
+            with pl.at(level=pl.Level.CORE_GROUP):
+                value = pl.load(a, [0, 0], [128, 128])
+                work = pl.store(value, [0, 0], work)
+
+    after = passes.outline_incore_scopes()(passes.convert_to_ssa()(AliasExport))
+    outlined = next(fn for fn in after.functions.values() if fn.func_type == ir.FunctionType.InCore)
+    # One tensor-typed return: the write-alias binding for the stored buffer.
+    # The pre-fix behavior exported the dead ``value`` load as a second
+    # tile-typed return.
+    assert len(outlined.return_types) == 1, [str(t) for t in outlined.return_types]
+    assert isinstance(outlined.return_types[0], ir.TensorType)
+
+
+def test_terminal_scope_does_not_export_workspace_writer_results():
+    """A write effect does not make the result a name for the written buffer.
+
+    ``tile.gather`` stages its output through a ``tmp`` workspace operand and
+    returns a *fresh* tile. Keying the fallback on the argument-effect registry
+    alone exported the dead ``gathered`` binding, so the outlined function
+    declared a tile-typed return — the exact bug-class failure the fallback was
+    narrowed to avoid, reached from the other direction. Only the store target
+    may escape.
+    """
+
+    @pl.program
+    class WorkspaceWriter:
+        @pl.function
+        def main(
+            self,
+            a: pl.Tensor[[1, 128], pl.FP16],
+            src: pl.Tile[[1, 128], pl.FP16, pl.Mem.Vec],
+            idx: pl.Tile[[1, 16], pl.INT32, pl.Mem.Vec],
+            tmp: pl.Tile[[1, 16], pl.INT32, pl.Mem.Vec],
+            out: pl.Out[pl.Tensor[[1, 16], pl.FP16]],
+        ):
+            with pl.at(level=pl.Level.CORE_GROUP):
+                # Read inside the scope, dead outside it: nothing after the scope
+                # reads anything, so the no-context fallback decides whether it
+                # escapes. Its write-only ``tmp`` operand made the pre-fix
+                # collector bind it as a post-write alias.
+                gathered = pl.tile.gather(src, idx, tmp)
+                value = pl.load(a, [0, 0], [1, 16])
+                pl.store(pl.add(value, gathered), [0, 0], out)
+
+    after = passes.outline_incore_scopes()(passes.convert_to_ssa()(WorkspaceWriter))
+    outlined = next(fn for fn in after.functions.values() if fn.func_type == ir.FunctionType.InCore)
+    assert len(outlined.return_types) == 1, [str(t) for t in outlined.return_types]
+    assert isinstance(outlined.return_types[0], ir.TensorType)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
