@@ -359,6 +359,47 @@ void CheckSlotCount(uint64_t slots) {
   CHECK(slots >= 1) << "A declared allocation must have at least one slot, got slots=" << slots;
 }
 
+/// Normalize a shape sequence that may mix constant extents with IR expressions.
+///
+/// ``shape: Sequence[Expr | int]`` is the declared contract of ``TensorType`` and
+/// ``TileType`` (see the stubs): a symbolic extent next to a literal one is
+/// ordinary, e.g. ``ir.TensorType([n, 16], dtype)``. The Python-side normalizer in
+/// ``pypto.ir.type`` cannot bridge that — nanobind builds instances through the
+/// type's vectorcall and never consults a monkey-patched ``__init__`` — so the two
+/// homogeneous overloads reject the mix. Normalize here instead, so the raw
+/// constructor accepts exactly what the annotation path (``pl.Tensor[[n, 16], ...]``)
+/// already accepts. Elements that are neither ``Expr`` nor ``int`` — ``bool``
+/// included, since ``PyNumber_Index`` would silently convert it — are rejected
+/// with a ``TypeError`` naming the offending index.
+std::vector<ExprPtr> NormalizeShapeSequence(const nb::sequence& shape) {
+  std::vector<ExprPtr> exprs;
+  exprs.reserve(static_cast<size_t>(nb::len(shape)));
+  size_t index = 0;
+  for (nb::handle dim : shape) {
+    if (nb::isinstance<Expr>(dim)) {
+      exprs.push_back(nb::cast<ExprPtr>(dim));
+    } else if (!nb::isinstance<nb::bool_>(dim) && nb::isinstance<nb::int_>(dim)) {
+      // Validate before casting: PyNumber_Index() converts a bool to 0/1, so a bare
+      // nb::cast<int64_t> would silently accept True/False as an extent, and any
+      // non-int would surface as a context-free `std::bad_cast` RuntimeError. The
+      // same holds for an int outside the int64 range: try_cast reports it so the
+      // diagnostic can name the offending dimension instead.
+      int64_t extent = 0;
+      if (!nb::try_cast<int64_t>(dim, extent)) {
+        throw pypto::ValueError("Shape extent at index " + std::to_string(index) +
+                                " is outside the int64 range (expected Expr | int)");
+      }
+      exprs.push_back(std::make_shared<ConstInt>(extent, DataType::INDEX, Span::unknown()));
+    } else {
+      const nb::str dim_type(nb::getattr(dim.type(), "__name__"));
+      throw pypto::TypeError("Unsupported shape element at index " + std::to_string(index) + ": " +
+                             dim_type.c_str() + " (expected Expr | int)");
+    }
+    ++index;
+  }
+  return exprs;
+}
+
 void BindIR(nb::module_& m) {
   nb::module_ ir = m.def_submodule("ir", "PyPTO IR (Intermediate Representation) module");
 
@@ -617,6 +658,14 @@ void BindIR(nb::module_& m) {
       nb::init<const std::vector<int64_t>&, DataType, std::optional<MemRefPtr>, std::optional<TensorView>>(),
       nb::arg("shape"), nb::arg("dtype"), nb::arg("memref") = nb::none(), nb::arg("tensor_view") = nb::none(),
       "Create a tensor type with constant shape, optional memory reference and tensor view");
+  tensor_type_class.def(
+      "__init__",
+      [](TensorType* self, const nb::sequence& shape, DataType dtype, std::optional<MemRefPtr> memref,
+         std::optional<TensorView> tensor_view) {
+        new (self) TensorType(NormalizeShapeSequence(shape), dtype, memref, tensor_view);
+      },
+      nb::arg("shape"), nb::arg("dtype"), nb::arg("memref") = nb::none(), nb::arg("tensor_view") = nb::none(),
+      "Create a tensor type from a shape mixing constant extents and IR expressions");
   BindFields<TensorType>(tensor_type_class);
 
   // DistributedTensorType - subclass of TensorType used as the param type for
@@ -672,6 +721,15 @@ void BindIR(nb::module_& m) {
       nb::arg("shape"), nb::arg("dtype"), nb::arg("memref") = nb::none(), nb::arg("tile_view") = nb::none(),
       nb::arg("memory_space") = nb::none(),
       "Create a tile type (supports multi-dimensional tensors; code generation has constraints)");
+  tile_type_class.def(
+      "__init__",
+      [](TileType* self, const nb::sequence& shape, DataType dtype, std::optional<MemRefPtr> memref,
+         std::optional<TileView> tile_view, std::optional<MemorySpace> memory_space) {
+        new (self) TileType(NormalizeShapeSequence(shape), dtype, memref, tile_view, memory_space);
+      },
+      nb::arg("shape"), nb::arg("dtype"), nb::arg("memref") = nb::none(), nb::arg("tile_view") = nb::none(),
+      nb::arg("memory_space") = nb::none(),
+      "Create a tile type from a shape mixing constant extents and IR expressions");
   tile_type_class.def(
       "get_effective_tile_view",
       [](const TileType& self) { return tile_view_semantics::GetEffectiveTileView(self); },
