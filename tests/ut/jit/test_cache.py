@@ -7,7 +7,16 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Tests for python/pypto/jit/cache.py."""
+"""Tests for python/pypto/jit/cache.py — the specializer-owned cache halves.
+
+The compile-identity semantics (platform, strategy, distributed config,
+analyzer, planner, dbC, runtime ABI, Buffer IR, source locations) and the
+resolution helpers moved to ``pypto/runtime/jit_cache.py`` and are covered
+lane-neutrally by ``tests/ut/runtime/test_jit_cache.py``. What stays here:
+the ``source_hash`` provenance contract (``TestGlobalDependencies``), the
+specializer's key composition (``TestMakeCacheKey``), and the scalar /
+constexpr parameter mechanics.
+"""
 
 import ast
 import importlib
@@ -20,24 +29,14 @@ from typing import Any
 
 import pypto.language as pl
 import pytest
-from pypto.ir import DistributedConfig, OptimizationStrategy
 from pypto.jit._source import capture_namespaces, function_namespace
 from pypto.jit.cache import (
     SCALAR_SEMANTICS,
     compute_source_hash,
     make_cache_key,
 )
-from pypto.jit.decorator import (
-    _resolve_enable_buffer_ir,
-    _resolve_enable_pypto_l0c_double_buffer,
-    _resolve_enable_software_pipeline,
-    _resolve_memory_planner,
-    _resolve_runtime,
-)
 from pypto.language.diagnostics import ParserSyntaxError
-from pypto.pypto_core import DataType, ir, passes
-from pypto.pypto_core.passes import MemoryPlanner
-from pypto.runtime import RunConfig
+from pypto.pypto_core import DataType, ir
 
 
 class TestComputeSourceHash:
@@ -68,43 +67,41 @@ class TestComputeSourceHash:
 
 
 class TestMakeCacheKey:
-    def _make_key(  # noqa: PLR0913 — mirrors make_cache_key's per-dimension args
+    def _make_key(
         self,
         source_hash="abc",
         param_names=None,
         tensor_shapes=None,
         tensor_dtypes=None,
         dynamic_dims=None,
-        platform=None,
-        strategy=None,
-        distributed_config=None,
-        analyze_auto_scopes_for_deps=False,
-        memory_planner=None,
-        enable_pypto_l0c_double_buffer=False,
         tensor_layouts=None,
         dep_layouts=(),
-        runtime=passes.RuntimeKind.TENSORMAP_AND_RINGBUFFER,
-        enable_buffer_ir=False,
-        enable_software_pipeline=False,
     ):
+        # The compile-identity dimensions (platform, strategy, distributed
+        # config, analyzer, planner, dbC, runtime ABI, Buffer IR, source
+        # locations) are pinned lane-neutrally by tests/ut/runtime/
+        # test_jit_cache.py against the shared core; this helper covers the
+        # specializer-owned composition only.
         return make_cache_key(
             source_hash=source_hash,
             param_names=param_names or [],
             tensor_shapes=tensor_shapes or {},
             tensor_dtypes=tensor_dtypes or {},
             dynamic_dims=dynamic_dims or set(),
-            platform=platform,
-            strategy=strategy,
-            distributed_config=distributed_config,
-            analyze_auto_scopes_for_deps=analyze_auto_scopes_for_deps,
-            memory_planner=memory_planner,
-            enable_pypto_l0c_double_buffer=enable_pypto_l0c_double_buffer,
             tensor_layouts=tensor_layouts,
             dep_layouts=dep_layouts,
-            runtime=runtime,
-            enable_buffer_ir=enable_buffer_ir,
-            enable_software_pipeline=enable_software_pipeline,
         )
+
+    def test_software_pipeline_splits_key(self):
+        """The opt-in lowers Tile IR, so its key must split from unrolled kernels."""
+        kwargs: dict[str, Any] = {
+            "source_hash": "abc",
+            "param_names": ["a"],
+            "tensor_shapes": {"a": (8, 8)},
+            "tensor_dtypes": {"a": DataType.FP32},
+            "dynamic_dims": set(),
+        }
+        assert make_cache_key(**kwargs) != make_cache_key(enable_software_pipeline=True, **kwargs)
 
     def test_basic_key_structure(self):
         key = self._make_key(
@@ -122,14 +119,14 @@ class TestMakeCacheKey:
         assert dist_part is None  # single-chip default
         assert compile_opts == (
             ("scalar_semantics", 2),
+            ("dep_layouts", ()),
             ("analyze_auto_scopes_for_deps", False),
-            ("emit_source_loc", True),
             ("memory_planner", None),
             ("enable_pypto_l0c_double_buffer", False),
-            ("dep_layouts", ()),
             ("runtime", "tensormap_and_ringbuffer"),
-            ("enable_buffer_ir", False),
-            ("buffer_ir_version", 0),
+            ("enable_buffer_ir", True),
+            ("buffer_ir_version", 10),
+            ("emit_source_loc", True),
             ("enable_software_pipeline", False),
         )
 
@@ -264,300 +261,6 @@ class TestMakeCacheKey:
         k1 = self._make_key(**common, dep_layouts=(("dep", "x", "TensorLayout.MX_A_ZZ"),))
         k2 = self._make_key(**common, dep_layouts=(("dep", "x", "TensorLayout.MX_B_NN"),))
         assert k1 != k2
-
-    def test_different_platforms_cause_miss(self):
-        """Same shapes/dtypes compiled for different platforms must not collide."""
-        k1 = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            platform="a2a3sim",
-        )
-        k2 = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            platform="a3",
-        )
-        assert k1 != k2
-
-    def test_same_platform_is_cache_hit(self):
-        k1 = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            platform="a2a3sim",
-        )
-        k2 = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            platform="a2a3sim",
-        )
-        assert k1 == k2
-
-    def test_distributed_config_in_key(self):
-        """distributed_config is baked into the artifact, so it must split the key.
-
-        Different ``device_ids`` (and the single-chip ``None`` default) produce
-        distinct keys; equal configs collide so a genuine re-call still hits the
-        cache.
-        """
-
-        def key_for(distributed_config):
-            return self._make_key(
-                param_names=["a"],
-                tensor_shapes={"a": (8, 8)},
-                tensor_dtypes={"a": DataType.FP32},
-                distributed_config=distributed_config,
-            )
-
-        k_none = key_for(None)
-        k_01 = key_for(DistributedConfig(device_ids=[0, 1]))
-        k_23 = key_for(DistributedConfig(device_ids=[2, 3]))
-        k_01_again = key_for(DistributedConfig(device_ids=[0, 1]))
-
-        assert len({k_none, k_01, k_23}) == 3  # all distinct, and key stays hashable
-        assert k_01 == k_01_again  # equal config → cache hit
-
-    def test_none_platform_differs_from_named_platform(self):
-        """platform=None and platform='a2a3sim' must not collide."""
-        k_none = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            platform=None,
-        )
-        k_named = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            platform="a2a3sim",
-        )
-        assert k_none != k_named
-
-    def test_same_strategy_is_cache_hit(self):
-        k1 = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            strategy=OptimizationStrategy.Default,
-        )
-        k2 = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            strategy=OptimizationStrategy.Default,
-        )
-        assert k1 == k2
-
-    def test_none_strategy_differs_from_named_strategy(self):
-        """strategy=None (JIT default) and an explicit strategy must not collide."""
-        k_none = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            strategy=None,
-        )
-        k_named = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            strategy=OptimizationStrategy.Default,
-        )
-        assert k_none != k_named
-
-    def test_key_with_strategy_is_hashable(self):
-        key = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.INT32},
-            strategy=OptimizationStrategy.Default,
-        )
-        d = {key: "value"}
-        assert d[key] == "value"
-
-    def test_analyze_auto_scopes_for_deps_splits_key(self):
-        """AUTO-scope auto-deps changes generated code, so it must split cache."""
-        k_off = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            analyze_auto_scopes_for_deps=False,
-        )
-        k_on = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            analyze_auto_scopes_for_deps=True,
-        )
-        assert k_off != k_on
-
-    def test_memory_planner_splits_key(self):
-        """The planner changes both placement and address ownership, so it must
-        split the cache even when two modes both use ptoas level3."""
-        keys = [
-            self._make_key(
-                param_names=["a"],
-                tensor_shapes={"a": (8, 8)},
-                tensor_dtypes={"a": DataType.FP32},
-                memory_planner=planner,
-            )
-            for planner in (
-                None,
-                MemoryPlanner.PYPTO,
-                MemoryPlanner.DSA_RP,
-                MemoryPlanner.PTOAS,
-            )
-        ]
-        assert len(set(keys)) == len(keys), f"planner must split the cache key, got {keys}"
-
-    def test_dbc_double_buffer_flag_splits_legacy_pypto_key(self):
-        """Preserve the historical PYPTO key split for the compatibility flag.
-
-        Automatic dbC is disabled regardless of this value; distinct keys
-        preserve the legacy cache contract, not different AutoTile output.
-        """
-        key_off = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            memory_planner=MemoryPlanner.PYPTO,
-            enable_pypto_l0c_double_buffer=False,
-        )
-        key_on = self._make_key(
-            param_names=["a"],
-            tensor_shapes={"a": (8, 8)},
-            tensor_dtypes={"a": DataType.FP32},
-            memory_planner=MemoryPlanner.PYPTO,
-            enable_pypto_l0c_double_buffer=True,
-        )
-        assert key_off != key_on, "legacy PYPTO flag values must retain distinct compatibility keys"
-
-    @pytest.mark.parametrize("planner", [MemoryPlanner.DSA_RP, MemoryPlanner.PTOAS])
-    def test_dbc_double_buffer_flag_does_not_split_non_pypto_key(self, planner):
-        """Non-PYPTO keys omit the legacy flag; their dbC policy is planner-owned."""
-        kwargs: dict[str, Any] = {
-            "param_names": ["a"],
-            "tensor_shapes": {"a": (8, 8)},
-            "tensor_dtypes": {"a": DataType.FP32},
-            "memory_planner": planner,
-        }
-        key_off = self._make_key(**kwargs, enable_pypto_l0c_double_buffer=False)
-        key_on = self._make_key(**kwargs, enable_pypto_l0c_double_buffer=True)
-        assert key_off == key_on
-
-    @pytest.mark.parametrize("planner", [MemoryPlanner.PYPTO, MemoryPlanner.DSA_RP, MemoryPlanner.PTOAS])
-    def test_buffer_ir_splits_key_for_every_planner(self, planner):
-        off = self._make_key(memory_planner=planner)
-        on = self._make_key(memory_planner=planner, enable_buffer_ir=True)
-        assert off != on
-        assert off.compile_opts is not None and on.compile_opts is not None
-        assert ("buffer_ir_version", 0) in off.compile_opts
-        assert ("buffer_ir_version", 10) in on.compile_opts
-
-    def test_software_pipeline_splits_key(self):
-        assert self._make_key() != self._make_key(enable_software_pipeline=True)
-
-    def test_runtime_splits_key(self):
-        """The runtime is baked into the artifact's ``kernel_config.py`` and decides
-        which worker can bind it, so a ``host_build_graph`` call must not reuse a
-        ``tensormap_and_ringbuffer`` artifact."""
-        kwargs: dict[str, Any] = {
-            "param_names": ["a"],
-            "tensor_shapes": {"a": (8, 8)},
-            "tensor_dtypes": {"a": DataType.FP32},
-        }
-        key_tmrb = self._make_key(**kwargs, runtime=passes.RuntimeKind.TENSORMAP_AND_RINGBUFFER)
-        key_hbg = self._make_key(**kwargs, runtime=passes.RuntimeKind.HOST_BUILD_GRAPH)
-        assert key_tmrb != key_hbg, "runtime must split the cache key"
-
-
-class TestResolveRuntime:
-    """The runtime the JIT keys on must match the one ``ir.compile()`` will use."""
-
-    def test_defaults_to_tensormap_and_ringbuffer(self):
-        assert _resolve_runtime() == passes.RuntimeKind.TENSORMAP_AND_RINGBUFFER
-
-    def test_reads_the_active_pass_context(self):
-        # The runtime is PassContext-only — RunConfig does not carry it — so the
-        # context is the sole source the cache key can consult.
-        with passes.PassContext([], runtime=passes.RuntimeKind.HOST_BUILD_GRAPH):
-            assert _resolve_runtime() == passes.RuntimeKind.HOST_BUILD_GRAPH
-
-
-class TestResolveMemoryPlanner:
-    """The planner the JIT keys on must match the one ``ir.compile()`` will use."""
-
-    def test_defaults_to_pypto(self):
-        assert _resolve_memory_planner(None) == MemoryPlanner.PYPTO
-
-    @pytest.mark.parametrize("planner", [MemoryPlanner.DSA_RP, MemoryPlanner.PTOAS])
-    def test_reads_the_active_pass_context(self, planner):
-        """The planner is usually selected by wrapping the call in a PassContext,
-        which never reaches RunConfig. Keying only on RunConfig would let such a
-        call reuse a PYPTO-compiled artifact."""
-        with passes.PassContext([], memory_planner=planner):
-            assert _resolve_memory_planner(None) == planner
-        assert _resolve_memory_planner(None) == MemoryPlanner.PYPTO
-
-
-def test_buffer_ir_cache_option_follows_active_context():
-    assert _resolve_enable_buffer_ir() is True
-    with passes.PassContext([], enable_buffer_ir=False):
-        assert _resolve_enable_buffer_ir() is False
-        with passes.PassContext([]):
-            assert _resolve_enable_buffer_ir() is True
-        assert _resolve_enable_buffer_ir() is False
-    assert _resolve_enable_buffer_ir() is True
-
-
-def test_software_pipeline_cache_option_follows_active_context():
-    assert _resolve_enable_software_pipeline() is False
-    with passes.PassContext([], enable_buffer_ir=False, enable_software_pipeline=True):
-        assert _resolve_enable_software_pipeline() is True
-        with passes.PassContext([]):
-            assert _resolve_enable_software_pipeline() is False
-        assert _resolve_enable_software_pipeline() is True
-    assert _resolve_enable_software_pipeline() is False
-
-
-@pytest.mark.parametrize("enabled", [False, True])
-def test_software_pipeline_cache_option_uses_explicit_value(enabled):
-    assert _resolve_enable_software_pipeline(enabled) == enabled
-
-
-@pytest.mark.parametrize("software", [None, False, True])
-def test_explicit_software_pipeline_selects_tile_ir_in_cache_key(software):
-    """Caching must mirror compile's effective default storage representation."""
-    assert _resolve_enable_buffer_ir(software) is (not software)
-
-
-class TestResolveEnablePyptoL0cDoubleBuffer:
-    """Preserve the legacy compatibility state inherited by ``ir.compile()``."""
-
-    def test_defaults_to_off(self):
-        assert _resolve_enable_pypto_l0c_double_buffer() is False
-
-    def test_reads_the_active_pass_context(self):
-        """A PassContext-only value must survive even without a RunConfig field.
-
-        This preserves the historical PYPTO cache-key distinction, although
-        neither value enables automatic dbC.
-        """
-        with passes.PassContext([], enable_pypto_l0c_double_buffer=True):
-            assert _resolve_enable_pypto_l0c_double_buffer() is True
-        assert _resolve_enable_pypto_l0c_double_buffer() is False
-
-    def test_run_config_field_wins_over_default(self):
-        cfg = RunConfig(platform="a2a3", memory_planner=MemoryPlanner.PTOAS)
-        assert _resolve_memory_planner(cfg) == MemoryPlanner.PTOAS
-
-    def test_unset_run_config_field_defers_to_context(self):
-        cfg = RunConfig(platform="a2a3")
-        assert cfg.memory_planner is None
-        with passes.PassContext([], memory_planner=MemoryPlanner.PTOAS):
-            assert _resolve_memory_planner(cfg) == MemoryPlanner.PTOAS
 
 
 _CACHE_BLOCK = 32

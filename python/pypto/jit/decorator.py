@@ -68,18 +68,13 @@ from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 from pypto._cache_config import capture_cache_config, record_stats, time_stage
-from pypto._environment import explicit_env_request
 from pypto._external_source import external_source_digest
 from pypto._identity import digest_record
 from pypto._target import _platform_string
 from pypto.backend._ptoas_locate import find_ptoas_binary
-from pypto.backend.pto_backend import emit_source_loc_default
-from pypto.compile_profiling import get_active_profiler
-from pypto.ir.compile import _validate_pass_context_conflicts, make_default_output_dir
-from pypto.ir.pass_manager import PassDumpLevel, coerce_dump_level
+from pypto.ir.compile import make_default_output_dir
 from pypto.pypto_core import DataType
 from pypto.pypto_core import ir as _ir
-from pypto.pypto_core import passes as _passes
 from pypto.pypto_core.passes import runtime_kind_to_name
 
 from . import _arguments, _ast_analysis, _call_binding, _tensor_meta
@@ -206,120 +201,33 @@ def _run_config_lower_kwargs(run_config: Any) -> dict[str, Any]:
     return kwargs
 
 
-def _resolve_memory_planner(run_config: Any) -> _passes.MemoryPlanner:
-    """Resolve the planner a compile would actually use, for the cache key.
+# ---------------------------------------------------------------------------
+# RunConfig -> ir.compile() keyword forwarding
+#
+# The implementations live in the shared cache core
+# (``pypto.runtime.jit_cache``: the compile-request resolver and the
+# Buffer-IR/runtime lookups) and ``pypto.runtime.runner`` next to
+# ``RunConfig`` (the planner/dbC lookups); the private aliases below keep
+# this module's import surface stable for its unit tests.
 
-    Mirrors ``ir.compile()``'s own precedence — explicit argument, then the
-    active ``PassContext``, then ``PYPTO``. Reading the context matters: the
-    planner is most often selected by wrapping a call in
-    ``with PassContext([], memory_planner=...)``, which never reaches
-    ``RunConfig`` at all. Keying only on the ``RunConfig`` field would let a
-    PTOAS-wrapped call reuse a PYPTO-compiled artifact.
-    """
-    if run_config is not None and run_config.memory_planner is not None:
-        return run_config.memory_planner
-    ctx = _passes.PassContext.current()
-    if ctx is not None:
-        return ctx.get_memory_planner()
-    return _passes.MemoryPlanner.PYPTO
-
-
-def _resolve_enable_buffer_ir(software_pipeline: bool | None = None) -> bool:
-    """Mirror compile's Tile IR selection for an explicit software pipeline."""
-    ctx = _passes.PassContext.current()
-    return (
-        ctx.get_enable_buffer_ir()
-        if ctx is not None
-        else not _resolve_enable_software_pipeline(software_pipeline)
-    )
-
-
-def _resolve_enable_software_pipeline(explicit: bool | None = None) -> bool:
-    """Resolve the explicit option, active context, then the default for caching."""
-    if explicit is not None:
-        return explicit
-    ctx = _passes.PassContext.current()
-    return ctx.get_enable_software_pipeline() if ctx is not None else False
-
-
-def _resolve_enable_pypto_l0c_double_buffer() -> bool:
-    """Resolve the stored legacy dbC flag for the compatibility cache key.
-
-    Like ``_resolve_memory_planner``, this flag is most often set by wrapping a
-    call in ``with PassContext([], enable_pypto_l0c_double_buffer=True)``, which
-    ``ir.compile()`` inherits. ``RunConfig`` does not carry this PassContext-only
-    flag, so the active context is the only source. Automatic dbC is disabled
-    for PYPTO and DSA_RP; PTOAS retains it independently of this value.
-    Existing cache-key handling is retained for compatibility.
-    """
-    ctx = _passes.PassContext.current()
-    return ctx.get_enable_pypto_l0c_double_buffer() if ctx is not None else False
-
-
-def _resolve_runtime() -> _passes.RuntimeKind:
-    """Resolve the target Simpler runtime ABI for the cache key.
-
-    Like ``_resolve_enable_pypto_l0c_double_buffer``, the runtime is selected by
-    wrapping a call in ``with PassContext([], runtime=...)``, which
-    ``ir.compile()`` inherits. ``RunConfig`` does not carry it, so the active
-    context is the only source. Keying on it stops a ``host_build_graph`` call
-    from reusing an artifact compiled for ``tensormap_and_ringbuffer``, whose
-    ``kernel_config.py`` names a runtime no matching worker would bind.
-    """
-    ctx = _passes.PassContext.current()
-    return ctx.get_runtime() if ctx is not None else _passes.RuntimeKind.TENSORMAP_AND_RINGBUFFER
-
-
-def _resolve_compile_request(run_config: Any) -> tuple[dict[str, Any], bool]:
-    """Resolve compiler arguments and whether this call requires fresh compilation.
-
-    RunConfig's compile mapping is the source for both codegen and cache keys.
-    Diagnostics are requests to run the compiler, so decide bypass before any
-    cache lookup (including source-key construction). With persistence disabled,
-    tool discovery remains on the compile path; persistent hits additionally
-    require a verified installation identity.
-    """
-    if run_config is None:
-        from pypto.runtime import CompileOptions  # noqa: PLC0415
-
-        kwargs = CompileOptions().as_compile_kwargs()
-    else:
-        kwargs = run_config.compile_kwargs()
-    kwargs["dump_passes"] = coerce_dump_level(kwargs["dump_passes"])
-    kwargs["emit_source_loc"] = emit_source_loc_default()
-    outer = _validate_pass_context_conflicts(
-        operation="compile",
-        verification_level=kwargs.get("verification_level"),
-        diagnostic_phase=kwargs.get("diagnostic_phase"),
-        memory_planner=kwargs.get("memory_planner"),
-        runtime=kwargs.get("runtime"),
-        enable_software_pipeline=kwargs.get("enable_software_pipeline"),
-    )
-    bypass = (
-        kwargs["dump_passes"] is not PassDumpLevel.NONE
-        or kwargs["dump_ptoas_passes"]
-        or kwargs["profiling"]
-        or get_active_profiler() is not None
-        or kwargs.get("output_dir") is not None
-        or explicit_env_request(os.environ.get("PYPTO_EMIT_DEBUG_RUNNER"))
-        or explicit_env_request(os.environ.get("PYPTO_REBUILD_FROM_PTO"))
-        or kwargs.get("verification_level") is not None
-        or kwargs["diagnostic_phase"] is not None
-        or kwargs["disabled_diagnostics"] is not None
-    )
-    if not bypass and outer is not None:
-        # Match the pipeline defaults: ordinary planner/runtime contexts can
-        # reuse artifacts, but instruments and custom checks must actually run.
-        default_disabled = _passes.DiagnosticCheckSet()
-        default_disabled.insert(_passes.DiagnosticCheck.UnusedControlFlowResult)
-        bypass = (
-            bool(outer.get_instruments())
-            or outer.get_verification_level() != _passes.get_default_verification_level()
-            or outer.get_diagnostic_phase() != _passes.get_default_diagnostic_phase()
-            or outer.get_disabled_diagnostics() != default_disabled
-        )
-    return kwargs, bypass
-
+from pypto.runtime.jit_cache import (  # noqa: E402
+    resolve_compile_request as _resolve_compile_request,
+)
+from pypto.runtime.jit_cache import (  # noqa: E402
+    resolve_enable_buffer_ir as _resolve_enable_buffer_ir,
+)
+from pypto.runtime.jit_cache import (  # noqa: E402
+    resolve_enable_software_pipeline as _resolve_enable_software_pipeline,
+)
+from pypto.runtime.jit_cache import (  # noqa: E402
+    resolve_runtime_kind as _resolve_runtime,
+)
+from pypto.runtime.runner import (  # noqa: E402
+    resolve_enable_pypto_l0c_double_buffer as _resolve_enable_pypto_l0c_double_buffer,
+)
+from pypto.runtime.runner import (  # noqa: E402
+    resolve_memory_planner as _resolve_memory_planner,
+)
 
 # ---------------------------------------------------------------------------
 
@@ -1157,7 +1065,9 @@ class JITFunction:
             emit_source_loc=compile_kwargs["emit_source_loc"],
             memory_planner=compile_kwargs.get("memory_planner", _resolve_memory_planner(None)),
             enable_pypto_l0c_double_buffer=_resolve_enable_pypto_l0c_double_buffer(),
-            enable_buffer_ir=_resolve_enable_buffer_ir(compile_kwargs.get("enable_software_pipeline")),
+            enable_buffer_ir=_resolve_enable_buffer_ir(
+                _resolve_enable_software_pipeline(compile_kwargs.get("enable_software_pipeline"))
+            ),
             enable_software_pipeline=_resolve_enable_software_pipeline(
                 compile_kwargs.get("enable_software_pipeline")
             ),
